@@ -7,17 +7,51 @@ import {
 import './styles.css'
 
 /* ─── API helper ──────────────────────────────────────────────────── */
-const api = async (path, token, options = {}) => {
-  const base = import.meta.env.VITE_API_URL ?? ''
-  const res = await fetch(`${base}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {})
+const RENDER_BACKEND_URL = 'https://studymate-res1.onrender.com'
+
+const getApiBase = () => {
+  if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname
+    if (host !== 'localhost' && host !== '127.0.0.1') {
+      return RENDER_BACKEND_URL
     }
-  })
-  const body = await res.json()
-  if (!res.ok) throw new Error(body.detail || 'Request failed')
+  }
+  return ''
+}
+
+const api = async (path, token, options = {}) => {
+  const base = getApiBase()
+  let res
+  try {
+    res = await fetch(`${base}${path}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      }
+    })
+  } catch (err) {
+    throw new Error('Unable to connect to server. Please wait a few seconds while backend wakes up.')
+  }
+
+  if (res.status === 401 && token) {
+    try { localStorage.removeItem('session') } catch {}
+    window.dispatchEvent(new CustomEvent('auth:expired'))
+    throw new Error('Session expired. Please sign in again.')
+  }
+
+  const rawText = await res.text()
+  let body = {}
+  if (rawText) {
+    try {
+      body = JSON.parse(rawText)
+    } catch {
+      body = { detail: rawText.slice(0, 120) }
+    }
+  }
+
+  if (!res.ok) throw new Error(body.detail || `Request failed (${res.status})`)
   return body
 }
 
@@ -1108,6 +1142,12 @@ function App() {
   })
   const login  = s => { localStorage.setItem('session', JSON.stringify(s)); setSession(s) }
   const logout = ()  => { localStorage.removeItem('session'); setSession(null) }
+
+  useEffect(() => {
+    const onAuthExpired = () => setSession(null)
+    window.addEventListener('auth:expired', onAuthExpired)
+    return () => window.removeEventListener('auth:expired', onAuthExpired)
+  }, [])
 
   if (!session) return <Login onLogin={login} />
 
