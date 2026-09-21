@@ -5,6 +5,7 @@ import hmac
 import json
 import os
 import sqlite3
+import time
 from pathlib import Path
 
 
@@ -52,6 +53,37 @@ class SQLiteRepository:
                     semester TEXT NOT NULL REFERENCES semesters(id), course TEXT NOT NULL, code TEXT NOT NULL,
                     credits INTEGER NOT NULL, components_json TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS login_attempts (
+                    identifier TEXT NOT NULL,
+                    attempted_at REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS attendance_sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    student_id TEXT NOT NULL REFERENCES students(id),
+                    course_code TEXT NOT NULL,
+                    session_date TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('present','excused','absent'))
+                );
+                CREATE TABLE IF NOT EXISTS assessment_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    grade_id INTEGER NOT NULL REFERENCES grades(id),
+                    name TEXT NOT NULL,
+                    score REAL,
+                    max_score REAL NOT NULL,
+                    weight REAL NOT NULL,
+                    feedback TEXT,
+                    posted_at TEXT
+                );
+                CREATE TABLE IF NOT EXISTS notifications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    student_id TEXT NOT NULL REFERENCES students(id),
+                    type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    detail TEXT NOT NULL,
+                    course TEXT,
+                    read INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                );
                 """
             )
             if db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
@@ -85,6 +117,44 @@ class SQLiteRepository:
             ("s3", "spring-2026", "Algorithms", "CS301", 4, [{"name":"Coursework","score":91,"weight":1.0}]),
         ]
         db.executemany("INSERT INTO grades (student_id, semester, course, code, credits, components_json) VALUES (?, ?, ?, ?, ?, ?)", [(*row[:5], json.dumps(row[5])) for row in grades])
+        
+        # Seed attendance_sessions for s1
+        s1_att = []
+        for i in range(20):
+            status = 'present' if i < 18 else ('excused' if i == 18 else 'absent')
+            s1_att.append(("s1", "CS301", f"2026-01-{i+1:02d}", status))
+        for i in range(18):
+            status = 'present' if i < 14 else 'absent'
+            s1_att.append(("s1", "MATH210", f"2026-01-{i+1:02d}", status))
+        for i in range(19):
+            s1_att.append(("s1", "CS240", f"2026-01-{i+1:02d}", "present"))
+            
+        s2_att = [("s2", "CS301", "2026-01-01", "present"), ("s2", "CS301", "2026-01-02", "absent")]
+        s3_att = [("s3", "CS301", "2026-01-01", "present")]
+        db.executemany("INSERT INTO attendance_sessions (student_id, course_code, session_date, status) VALUES (?, ?, ?, ?)", s1_att + s2_att + s3_att)
+
+        # Seed assessment_items
+        items = [
+            (1, "HW1", 92, 100, 0.25/3, None),
+            (1, "HW2", 80, 100, 0.25/3, None),
+            (1, "HW3", 86, 100, 0.25/3, None),
+            (1, "Midterm", 78, 100, 0.35, "Good understanding of dynamic programming"),
+            (1, "Project", 92, 100, 0.40, "Excellent implementation"),
+            (2, "Problems", 68, 100, 0.30, None),
+            (2, "Midterm", 61, 100, 0.30, "Review matrix operations"),
+            (2, "Final", 74, 100, 0.40, None),
+            (3, "Labs", 94, 100, 0.35, None),
+            (3, "Midterm", 88, 100, 0.30, None),
+            (3, "Project", 91, 100, 0.35, "Very clean schema design")
+        ]
+        db.executemany("INSERT INTO assessment_items (grade_id, name, score, max_score, weight, feedback) VALUES (?, ?, ?, ?, ?, ?)", items)
+
+        # Seed notifications
+        notifs = [
+            ("s1", "low_grade", "Low Grade Warning", "Your MATH210 midterm score is 61%. Review recommended.", "Linear Algebra", 0, "2026-03-01T10:00:00Z"),
+            ("s1", "low_attendance", "Attendance Alert", "Your MATH210 attendance has fallen to 77.8% - approaching the 75% threshold.", "Linear Algebra", 0, "2026-03-02T10:00:00Z")
+        ]
+        db.executemany("INSERT INTO notifications (student_id, type, title, detail, course, read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", notifs)
 
     def authenticate(self, identifier: str, password: str):
         with self.connect() as db:
@@ -129,3 +199,38 @@ class SQLiteRepository:
         with self.connect() as db:
             return {row["id"]: row["missing_assignments"] for row in db.execute("SELECT id, missing_assignments FROM students")}
 
+    def get_attendance_sessions(self, student_id: str, course_codes: list[str] = None):
+        with self.connect() as db:
+            if course_codes:
+                placeholders = ','.join('?' for _ in course_codes)
+                return [dict(r) for r in db.execute(f"SELECT * FROM attendance_sessions WHERE student_id = ? AND course_code IN ({placeholders})", [student_id] + course_codes)]
+            return [dict(r) for r in db.execute("SELECT * FROM attendance_sessions WHERE student_id = ?", (student_id,))]
+
+    def get_assessment_items(self, grade_id: int):
+        with self.connect() as db:
+            return [dict(r) for r in db.execute("SELECT * FROM assessment_items WHERE grade_id = ?", (grade_id,))]
+
+    def get_notifications(self, student_id: str):
+        with self.connect() as db:
+            return [dict(r) for r in db.execute("SELECT * FROM notifications WHERE student_id = ? ORDER BY id DESC", (student_id,))]
+
+    def mark_notification_read(self, notification_id: int, student_id: str):
+        with self.connect() as db:
+            db.execute("UPDATE notifications SET read = 1 WHERE id = ? AND student_id = ?", (notification_id, student_id))
+            db.commit()
+
+    def check_brute_force(self, identifier: str) -> bool:
+        with self.connect() as db:
+            fifteen_mins_ago = time.time() - 900
+            count = db.execute("SELECT COUNT(*) FROM login_attempts WHERE identifier = ? COLLATE NOCASE AND attempted_at >= ?", (identifier, fifteen_mins_ago)).fetchone()[0]
+            return count >= 5
+
+    def record_attempt(self, identifier: str):
+        with self.connect() as db:
+            db.execute("INSERT INTO login_attempts (identifier, attempted_at) VALUES (?, ?)", (identifier, time.time()))
+            db.commit()
+
+    def clear_attempts(self, identifier: str):
+        with self.connect() as db:
+            db.execute("DELETE FROM login_attempts WHERE identifier = ? COLLATE NOCASE", (identifier,))
+            db.commit()

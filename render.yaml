@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: studymate-api
+    runtime: python
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    rootDir: backend
+    envVars:
+      - key: AUTH_SECRET
+        generateValue: true
+      - key: SQLITE_PATH
+        value: /data/student_monitoring.db
+    disk:
+      name: studymate-db
+      mountPath: /data
+      sizeGB: 1
