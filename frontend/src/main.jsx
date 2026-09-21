@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
   Bar, BarChart, CartesianGrid, ResponsiveContainer,
@@ -21,18 +21,49 @@ const api = async (path, token, options = {}) => {
   return body
 }
 
-/* ─── Shared tiny components ─────────────────────────────────────── */
-const Metric = ({ label, value, detail, tone = '' }) => (
-  <article className={`metric ${tone}`}>
-    <span>{label}</span>
-    <strong>{value ?? 'Unavailable'}</strong>
-    <small>{detail}</small>
-  </article>
-)
+/* ─── Utility ─────────────────────────────────────────────────────── */
+function timeOfDay() {
+  const h = new Date().getHours()
+  if (h < 12) return 'morning'
+  if (h < 18) return 'afternoon'
+  return 'evening'
+}
 
+function fmtDate() {
+  return new Intl.DateTimeFormat('en', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(new Date())
+}
+
+function initials(name = '') {
+  return name.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase() || 'U'
+}
+
+/* ─── Loading Skeleton ───────────────────────────────────────────── */
+function SkeletonDashboard() {
+  return (
+    <div className="page-fade">
+      <div style={{ marginBottom: 28 }}>
+        <div className="skeleton skeleton-text" style={{ width: 120, marginBottom: 14 }} />
+        <div className="skeleton skeleton-title" style={{ width: '40%' }} />
+        <div className="skeleton skeleton-text" style={{ width: '25%' }} />
+      </div>
+      <div className="skeleton-metrics">
+        {[0,1,2,3].map(i => (
+          <div key={i} className="skeleton-metric">
+            <div className="skeleton" style={{ width: 40, height: 40, borderRadius: 10 }} />
+            <div className="skeleton skeleton-title" style={{ width: '70%' }} />
+            <div className="skeleton skeleton-text" style={{ width: '55%' }} />
+          </div>
+        ))}
+      </div>
+      <div className="skeleton skeleton-chart" style={{ marginTop: 4 }} />
+    </div>
+  )
+}
+
+/* ─── StatusBadge ────────────────────────────────────────────────── */
 const StatusBadge = ({ status }) => {
   const map = {
-    satisfactory: { label: 'Satisfactory', cls: 'badge-ok' },
+    satisfactory: { label: 'Satisfactory', cls: 'badge-ok'   },
     warning:      { label: 'Warning',       cls: 'badge-warn' },
     critical:     { label: 'Critical',      cls: 'badge-crit' },
   }
@@ -41,24 +72,54 @@ const StatusBadge = ({ status }) => {
 }
 
 /* ─── SVG Progress Ring ──────────────────────────────────────────── */
-const ProgressRing = ({ pct, size = 90, stroke = 8, color = '#6657e8' }) => {
+const ProgressRing = ({ pct, size = 90, stroke = 8, color = '#5B4FCF' }) => {
   const r = (size - stroke) / 2
   const circ = 2 * Math.PI * r
   const offset = circ - (Math.min(Math.max(pct, 0), 100) / 100) * circ
   return (
     <svg className="progress-ring" width={size} height={size}>
       <circle cx={size / 2} cy={size / 2} r={r} fill="none"
-        stroke="#e7e8ee" strokeWidth={stroke} />
+        stroke="#F3F4F6" strokeWidth={stroke} />
       <circle cx={size / 2} cy={size / 2} r={r} fill="none"
         stroke={color} strokeWidth={stroke}
         strokeDasharray={circ} strokeDashoffset={offset}
         strokeLinecap="round"
-        style={{ transform: 'rotate(-90deg)', transformOrigin: '50% 50%', transition: 'stroke-dashoffset .5s ease' }} />
+        style={{ transform: 'rotate(-90deg)', transformOrigin: '50% 50%', transition: 'stroke-dashoffset .6s cubic-bezier(.4,0,.2,1)' }} />
       <text x="50%" y="50%" textAnchor="middle" dominantBaseline="central"
-        style={{ fontSize: 15, fontWeight: 700, fontFamily: 'Manrope, sans-serif', fill: '#202136' }}>
+        style={{ fontSize: size * .17, fontWeight: 800, fontFamily: 'Manrope, sans-serif', fill: '#111827' }}>
         {pct}%
       </text>
     </svg>
+  )
+}
+
+/* ─── Stat Metric Card ───────────────────────────────────────────── */
+const Metric = ({ label, value, detail, icon, tone = '', colorClass = 'metric-purple' }) => (
+  <article className={`metric ${colorClass} ${tone}`}>
+    <div className={`metric-icon metric-icon-${colorClass.replace('metric-', '')}`}>{icon}</div>
+    <span>{label}</span>
+    <strong>{value ?? '—'}</strong>
+    <small>{detail}</small>
+  </article>
+)
+
+/* ─── Custom Recharts Tooltip ────────────────────────────────────── */
+const CustomTooltip = ({ active, payload, label }) => {
+  if (!active || !payload?.length) return null
+  return (
+    <div style={{
+      background: '#fff', border: '1px solid #E5E7EB',
+      borderRadius: 10, padding: '10px 14px',
+      boxShadow: '0 8px 24px rgba(0,0,0,.1)',
+      fontSize: '.85rem'
+    }}>
+      <div style={{ fontWeight: 700, marginBottom: 4, color: '#111827' }}>{label}</div>
+      {payload.map((p, i) => (
+        <div key={i} style={{ color: '#6B7280' }}>
+          Score: <b style={{ color: '#5B4FCF' }}>{p.value}%</b>
+        </div>
+      ))}
+    </div>
   )
 }
 
@@ -66,6 +127,7 @@ const ProgressRing = ({ pct, size = 90, stroke = 8, color = '#6657e8' }) => {
 function Login({ onLogin }) {
   const [identifier, setIdentifier] = useState('student@univ.edu')
   const [password, setPassword]     = useState('student123')
+  const [showPw, setShowPw]         = useState(false)
   const [error, setError]           = useState('')
   const [busy, setBusy]             = useState(false)
 
@@ -78,52 +140,119 @@ function Login({ onLogin }) {
 
   return (
     <main className="login-page">
+      {/* Left brand panel */}
       <section className="login-copy">
-        <span className="eyebrow">STUDYMATE</span>
-        <h1>See the signal.<br />Shape the outcome.</h1>
-        <p>One clear view of grades, attendance, deadlines, and academic risk.</p>
-        <div className="signal">
-          <i /><span>Explainable insights</span>
-          <i /><span>Private by design</span>
+        <div className="login-eyebrow">
+          <span className="login-eyebrow-dot" />
+          StudyMate · Academic Intelligence
+        </div>
+        <h1>See the signal.<br /><span>Shape the outcome.</span></h1>
+        <p>One clear view of grades, attendance, deadlines, and academic risk — built for students who care about their future.</p>
+        <div className="login-features">
+          <div className="login-feature">
+            <div className="login-feature-icon">📊</div>
+            <span>Live grade breakdown with weighted components</span>
+          </div>
+          <div className="login-feature">
+            <div className="login-feature-icon">📅</div>
+            <span>Per-course attendance tracking with history</span>
+          </div>
+          <div className="login-feature">
+            <div className="login-feature-icon">⚗️</div>
+            <span>What-If calculator to plan your target scores</span>
+          </div>
+          <div className="login-feature">
+            <div className="login-feature-icon">🔔</div>
+            <span>Smart alerts for risk factors before it's too late</span>
+          </div>
         </div>
       </section>
-      <form className="login-card" onSubmit={submit}>
-        <div className="brand-mark">S</div>
-        <h2>Welcome back</h2>
-        <p>Sign in with your university account.</p>
-        <label>
-          University email or Student ID
-          <input value={identifier} onChange={e => setIdentifier(e.target.value)}
-            placeholder="e.g. STU-001 or student@univ.edu" />
-          <small style={{ color: '#9697a5', fontWeight: 400, marginTop: 2 }}>
-            Demo Student ID: <b>STU-001</b> · password: <b>student123</b>
-          </small>
-        </label>
-        <label>
-          Password
-          <input type="password" value={password} onChange={e => setPassword(e.target.value)} />
-        </label>
-        {error && <div className="error">{error}</div>}
-        <button disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
-        <div className="demo">
-          <button type="button" onClick={() => { setIdentifier('student@univ.edu'); setPassword('student123') }}>Student demo</button>
-          <button type="button" onClick={() => { setIdentifier('teacher@univ.edu'); setPassword('teacher123') }}>Teacher demo</button>
-        </div>
-      </form>
+
+      {/* Right form panel */}
+      <div className="login-right">
+        <form className="login-card" onSubmit={submit}>
+          <div className="login-logo">S</div>
+          <h2>Welcome back</h2>
+          <p>Sign in with your university account.</p>
+
+          <div className="login-field">
+            <label htmlFor="identifier">University email or Student ID</label>
+            <div className="login-input-wrap">
+              <input
+                id="identifier"
+                value={identifier}
+                onChange={e => setIdentifier(e.target.value)}
+                placeholder="e.g. STU-001 or student@univ.edu"
+                autoComplete="username"
+              />
+            </div>
+            <span className="login-hint">
+              Demo Student ID: <b>STU-001</b> · password: <b>student123</b>
+            </span>
+          </div>
+
+          <div className="login-field">
+            <label htmlFor="password">Password</label>
+            <div className="login-input-wrap">
+              <input
+                id="password"
+                type={showPw ? 'text' : 'password'}
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder="Enter your password"
+                autoComplete="current-password"
+                style={{ paddingRight: 44 }}
+              />
+              <button
+                type="button"
+                className="pw-toggle"
+                onClick={() => setShowPw(v => !v)}
+                tabIndex={-1}
+                aria-label={showPw ? 'Hide password' : 'Show password'}
+              >
+                {showPw ? '🙈' : '👁️'}
+              </button>
+            </div>
+          </div>
+
+          {error && <div className="error">{error}</div>}
+
+          <button className="login-submit" disabled={busy}>
+            {busy ? 'Signing in…' : 'Sign in →'}
+          </button>
+
+          <div className="demo-row">
+            <button
+              type="button"
+              className="demo-btn"
+              onClick={() => { setIdentifier('student@univ.edu'); setPassword('student123') }}
+            >
+              👤 Student demo
+            </button>
+            <button
+              type="button"
+              className="demo-btn"
+              onClick={() => { setIdentifier('teacher@univ.edu'); setPassword('teacher123') }}
+            >
+              🎓 Teacher demo
+            </button>
+          </div>
+        </form>
+      </div>
     </main>
   )
 }
 
 /* ─── WHAT-IF CALCULATOR MODAL ───────────────────────────────────── */
 function WhatIfModal({ token, courses, onClose }) {
-  const [courseCode, setCourseCode]     = useState(courses[0]?.code ?? '')
-  const [component, setComponent]      = useState('')
-  const [target, setTarget]            = useState(80)
-  const [components, setComponents]    = useState([])
-  const [result, setResult]            = useState(null)
-  const [loading, setLoading]          = useState(false)
-  const [loadingComp, setLoadingComp]  = useState(false)
-  const [err, setErr]                  = useState('')
+  const [courseCode, setCourseCode]    = useState(courses[0]?.code ?? '')
+  const [component, setComponent]     = useState('')
+  const [target, setTarget]           = useState(80)
+  const [components, setComponents]   = useState([])
+  const [result, setResult]           = useState(null)
+  const [loading, setLoading]         = useState(false)
+  const [loadingComp, setLoadingComp] = useState(false)
+  const [err, setErr]                 = useState('')
 
   // Load components when course changes
   useEffect(() => {
@@ -152,10 +281,10 @@ function WhatIfModal({ token, courses, onClose }) {
       <div className="whatif-modal">
         <div className="whatif-header">
           <div>
-            <span className="eyebrow">GRADE PLANNER</span>
-            <h2 style={{ margin: '4px 0 0', fontFamily: 'Manrope', fontSize: '1.3rem' }}>What-If Calculator</h2>
+            <span className="eyebrow">Grade Planner</span>
+            <h2>What-If Calculator</h2>
           </div>
-          <button className="close-btn" onClick={onClose}>✕</button>
+          <button className="close-btn" onClick={onClose} aria-label="Close">✕</button>
         </div>
 
         <div className="whatif-body">
@@ -190,10 +319,10 @@ function WhatIfModal({ token, courses, onClose }) {
               <span className="whatif-icon">{result.feasible ? '✅' : '⚠️'}</span>
               <div>
                 <b>{result.message}</b>
-                <p style={{ margin: '4px 0 0', fontSize: '.85rem' }}>
+                <p>
                   {result.feasible
-                    ? `This is achievable (≤ 100%). Keep it up!`
-                    : `This score exceeds 100% — the target may not be reachable.`}
+                    ? 'This is achievable (≤ 100%). Keep it up!'
+                    : 'This score exceeds 100% — the target may not be reachable.'}
                 </p>
               </div>
             </div>
@@ -203,7 +332,7 @@ function WhatIfModal({ token, courses, onClose }) {
         <div className="whatif-footer">
           <button className="btn-ghost" onClick={onClose}>Cancel</button>
           <button className="btn-primary" onClick={calculate} disabled={loading || !component}>
-            {loading ? 'Calculating…' : 'Calculate'}
+            {loading ? 'Calculating…' : '⚗️ Calculate'}
           </button>
         </div>
       </div>
@@ -224,86 +353,117 @@ function DashboardTab({ token, user }) {
       .then(setData).catch(e => setError(e.message))
   }, [semester, token])
 
-  if (error) return <div className="error">{error}</div>
-  if (!data)  return <div className="loading">Loading your academic view…</div>
+  if (error) return <div className="error" style={{ margin: '40px 0' }}>{error}</div>
+  if (!data) return <SkeletonDashboard />
 
   const gpa = data.gpa.value
   const standingGood = gpa !== null && gpa >= 2.0
 
   return (
     <>
-      <header className="page-head">
+      {/* Hero greeting */}
+      <header className="page-head page-fade">
         <div>
-          <span className="eyebrow">STUDENT OVERVIEW</span>
-          <h1>Good {timeOfDay()}, {user.name.split(' ')[0]}.</h1>
-          <p>Your current semester, distilled into what needs attention.</p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+            {gpa !== null && (
+              <span className={`standing-badge ${standingGood ? 'standing-good' : 'standing-warn'}`}>
+                {standingGood ? '✓ Good Standing' : '⚠ Academic Warning'}
+              </span>
+            )}
+          </div>
+          <h1>Good {timeOfDay()}, {user.name.split(' ')[0]} 👋</h1>
+          <p>{fmtDate()} · Your current semester, distilled into what needs attention.</p>
         </div>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-          {gpa !== null && (
-            <span className={`standing-badge ${standingGood ? 'standing-good' : 'standing-warn'}`}>
-              {standingGood ? '✓ Good Standing' : '⚠ Academic Warning'}
-            </span>
-          )}
-          <select value={semester} onChange={e => setSemester(e.target.value)}>
-            <option value="spring-2026">Spring 2026</option>
-            <option value="fall-2025">Fall 2025</option>
-          </select>
-        </div>
+        <select value={semester} onChange={e => setSemester(e.target.value)}>
+          <option value="spring-2026">Spring 2026</option>
+          <option value="fall-2025">Fall 2025</option>
+        </select>
       </header>
 
-      <section className="metrics">
-        <Metric label="Current GPA"        value={gpa?.toFixed(2)}                    detail="Demo 4-point scale · policy pending" />
-        <Metric label="Attendance"          value={`${data.attendance.value}%`}         detail="Across eligible sessions" />
-        <Metric label="Completed credits"   value={data.credits}                        detail={`${data.courses.length} active courses`} />
-        <Metric label="Active alerts"       value={data.alerts.length}                  detail={data.alerts.length ? 'Review recommended' : 'Nothing urgent'} tone={data.alerts.length ? 'warn' : ''} />
+      {/* Stat cards */}
+      <section className="metrics page-fade">
+        <Metric
+          label="Current GPA"
+          value={gpa?.toFixed(2)}
+          detail="Demo 4-point scale · policy pending"
+          icon="🎯"
+          colorClass="metric-purple"
+        />
+        <Metric
+          label="Attendance"
+          value={`${data.attendance.value}%`}
+          detail="Across eligible sessions"
+          icon="📅"
+          colorClass="metric-blue"
+        />
+        <Metric
+          label="Completed Credits"
+          value={data.credits}
+          detail={`${data.courses.length} active courses`}
+          icon="📚"
+          colorClass="metric-green"
+        />
+        <Metric
+          label="Active Alerts"
+          value={data.alerts.length}
+          detail={data.alerts.length ? 'Review recommended' : 'Nothing urgent'}
+          icon={data.alerts.length ? '⚠️' : '✅'}
+          tone={data.alerts.length ? 'warn' : ''}
+          colorClass={data.alerts.length ? 'metric-warn' : 'metric-green'}
+        />
       </section>
 
-      <section className="grid">
+      {/* Main grid */}
+      <section className="grid page-fade">
+        {/* Course performance panel */}
         <article className="panel wide">
           <div className="panel-title">
             <div>
-              <span className="eyebrow">COURSE PERFORMANCE</span>
+              <span className="eyebrow">Course Performance</span>
               <h2>Weighted grade overview</h2>
             </div>
             <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-              <button className="btn-whatif" onClick={() => setShowWhatIf(true)}>⚗ What-If</button>
+              <button className="btn-whatif" onClick={() => setShowWhatIf(true)}>⚗️ What-If</button>
               <span className="muted">{semester.replace('-', ' ')}</span>
             </div>
           </div>
 
           <ResponsiveContainer width="100%" height={240}>
-            <BarChart data={data.courses}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="code" />
-              <YAxis domain={[0, 100]} />
-              <Tooltip />
-              <Bar dataKey="score" fill="#6657E8" radius={[8, 8, 0, 0]} />
+            <BarChart data={data.courses} barCategoryGap="32%">
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F3F4F6" />
+              <XAxis dataKey="code" tick={{ fontSize: 12, fill: '#9CA3AF', fontWeight: 600 }} axisLine={false} tickLine={false} />
+              <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: '#9CA3AF' }} axisLine={false} tickLine={false} />
+              <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(91,79,207,.06)' }} />
+              <Bar dataKey="score" fill="#5B4FCF" radius={[6, 6, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
 
-          {/* Course list with progress bars */}
+          {/* Course rows */}
           <div className="course-list">
             {data.courses.map(c => (
               <div key={c.code} className="course-row">
                 <span>
                   <b>{c.course}</b>
-                  <small>{c.code} · {c.credits} credits</small>
+                  <small>{c.code} · {c.credits} cr</small>
                 </span>
                 <div className="course-progress-wrap">
                   <div className="progress-bar-track">
                     <div className="progress-bar-fill" style={{ width: `${c.progress ?? 0}%` }} title={`Attendance: ${c.progress ?? 0}%`} />
                   </div>
-                  <small className="progress-label">Att. {c.progress ?? 0}%</small>
+                  <span className="progress-label">Att. {c.progress ?? 0}%</span>
                 </div>
-                <strong>{c.score == null ? 'Insufficient data' : `${c.score}%`}</strong>
+                <span className={`score-chip-inline ${c.score == null ? 'chip-none' : c.score >= 75 ? 'chip-good' : 'chip-warn'}`}>
+                  {c.score == null ? 'N/A' : `${c.score}%`}
+                </span>
               </div>
             ))}
           </div>
         </article>
 
+        {/* Right column */}
         <aside>
           <article className="panel">
-            <span className="eyebrow">ACTION CENTER</span>
+            <span className="eyebrow">Action Center</span>
             <h2>What to focus on</h2>
             {data.alerts.length
               ? data.alerts.map((a, i) => (
@@ -312,11 +472,12 @@ function DashboardTab({ token, user }) {
                     <span>{a.detail}</span>
                   </div>
                 ))
-              : <p className="empty">No active risk signals.</p>
+              : <p className="empty">🎉 No active risk signals.</p>
             }
           </article>
+
           <article className="panel">
-            <span className="eyebrow">STUDY PLAN</span>
+            <span className="eyebrow">Study Plan</span>
             <h2>Recommendations</h2>
             {data.recommendations.length
               ? data.recommendations.map((r, i) => (
@@ -326,7 +487,7 @@ function DashboardTab({ token, user }) {
                     <small>{r.reason}</small>
                   </div>
                 ))
-              : <p className="empty">No targeted recommendations for this period.</p>
+              : <p className="empty">✨ No targeted recommendations for this period.</p>
             }
           </article>
         </aside>
@@ -345,12 +506,12 @@ function DashboardTab({ token, user }) {
 
 /* ─── GRADES TAB ─────────────────────────────────────────────────── */
 function GradesTab({ token }) {
-  const [courses, setCourses]         = useState(null)
-  const [expanded, setExpanded]       = useState(null)
-  const [breakdown, setBreakdown]     = useState({})
-  const [loadingBD, setLoadingBD]     = useState(null)
-  const [error, setError]             = useState('')
-  const [showWhatIf, setShowWhatIf]   = useState(false)
+  const [courses, setCourses]       = useState(null)
+  const [expanded, setExpanded]     = useState(null)
+  const [breakdown, setBreakdown]   = useState({})
+  const [loadingBD, setLoadingBD]   = useState(null)
+  const [error, setError]           = useState('')
+  const [showWhatIf, setShowWhatIf] = useState(false)
 
   useEffect(() => {
     api('/api/student/grades?semester=spring-2026', token)
@@ -370,21 +531,26 @@ function GradesTab({ token }) {
     finally { setLoadingBD(null) }
   }
 
-  if (error)   return <div className="error">{error}</div>
-  if (!courses) return <div className="loading">Loading grades…</div>
+  if (error)   return <div className="error" style={{ margin: '40px 0' }}>{error}</div>
+  if (!courses) return (
+    <div className="loading">
+      <div className="loading-spinner" />
+      Loading grades…
+    </div>
+  )
 
   return (
     <>
-      <header className="page-head">
+      <header className="page-head page-fade">
         <div>
-          <span className="eyebrow">ACADEMIC RECORD</span>
+          <span className="eyebrow">Academic Record</span>
           <h1>Grades breakdown</h1>
           <p>Click a course row to expand assessment components.</p>
         </div>
-        <button className="btn-whatif" onClick={() => setShowWhatIf(true)}>⚗ What-If Calculator</button>
+        <button className="btn-whatif" onClick={() => setShowWhatIf(true)}>⚗️ What-If Calculator</button>
       </header>
 
-      <article className="panel" style={{ marginTop: 0 }}>
+      <article className="panel page-fade" style={{ marginTop: 0 }}>
         <table className="grades-table">
           <thead>
             <tr>
@@ -392,17 +558,19 @@ function GradesTab({ token }) {
               <th>Code</th>
               <th>Credits</th>
               <th>Score</th>
-              <th></th>
+              <th style={{ width: 40 }} />
             </tr>
           </thead>
           <tbody>
             {courses.map(c => (
               <React.Fragment key={c.code}>
-                <tr className={`breakdown-row ${expanded === c.code ? 'expanded' : ''}`}
-                    onClick={() => toggleRow(c.code)}>
+                <tr
+                  className={`breakdown-row ${expanded === c.code ? 'expanded' : ''}`}
+                  onClick={() => toggleRow(c.code)}
+                >
                   <td><b>{c.course}</b></td>
                   <td><code>{c.code}</code></td>
-                  <td>{c.credits}</td>
+                  <td style={{ color: 'var(--text-secondary)', fontWeight: 500 }}>{c.credits}</td>
                   <td>
                     <span className={`score-chip ${c.score == null ? '' : c.score >= 75 ? 'chip-good' : 'chip-warn'}`}>
                       {c.score == null ? '—' : `${c.score}%`}
@@ -440,9 +608,17 @@ function BreakdownPanel({ data }) {
   return (
     <div className="breakdown-panel">
       <div className="breakdown-summary">
-        <span className="eyebrow">WEIGHTED TOTAL</span>
-        <strong className="bd-score">{data.weighted_score != null ? `${data.weighted_score}%` : '—'}</strong>
+        <div>
+          <span className="eyebrow">Weighted Total</span>
+          <div className="bd-score">{data.weighted_score != null ? `${data.weighted_score}%` : '—'}</div>
+        </div>
+        {data.weighted_score != null && (
+          <span className={`score-chip ${data.weighted_score >= 75 ? 'chip-good' : 'chip-warn'}`} style={{ alignSelf: 'flex-end' }}>
+            {data.weighted_score >= 75 ? '✓ Passing' : '⚠ Below threshold'}
+          </span>
+        )}
       </div>
+
       <div className="bd-components">
         {data.components.map((comp, i) => (
           <div className="bd-comp-row" key={i}>
@@ -451,9 +627,9 @@ function BreakdownPanel({ data }) {
               <span className="bd-weight">Weight: {Math.round(comp.weight * 100)}%</span>
             </div>
             <div className="bd-comp-bar-wrap">
-              <div className="progress-bar-track">
-                <div className="progress-bar-fill bd-fill"
-                  style={{ width: `${comp.percentage ?? 0}%`, background: '#6657e8' }} />
+              <div className="progress-bar-track" style={{ flex: 1 }}>
+                <div className="progress-bar-fill"
+                  style={{ width: `${comp.percentage ?? 0}%` }} />
               </div>
               <span className="bd-pct">{comp.percentage != null ? `${comp.percentage}%` : '—'}</span>
             </div>
@@ -470,8 +646,8 @@ function BreakdownPanel({ data }) {
 
 /* ─── ATTENDANCE TAB ─────────────────────────────────────────────── */
 function AttendanceTab({ token }) {
-  const [data, setData]       = useState(null)
-  const [error, setError]     = useState('')
+  const [data, setData]           = useState(null)
+  const [error, setError]         = useState('')
   const [openSessions, setOpenSessions] = useState({})
 
   useEffect(() => {
@@ -483,28 +659,34 @@ function AttendanceTab({ token }) {
   const toggleSessions = code =>
     setOpenSessions(prev => ({ ...prev, [code]: !prev[code] }))
 
-  if (error) return <div className="error">{error}</div>
-  if (!data)  return <div className="loading">Loading attendance…</div>
+  if (error) return <div className="error" style={{ margin: '40px 0' }}>{error}</div>
+  if (!data) return (
+    <div className="loading">
+      <div className="loading-spinner" />
+      Loading attendance…
+    </div>
+  )
 
   const ringColor = status =>
-    status === 'critical' ? '#e74c3c' : status === 'warning' ? '#f07b52' : '#22c55e'
+    status === 'critical' ? '#EF4444' : status === 'warning' ? '#F97316' : '#22C55E'
 
   const sessionIcon = s =>
     s === 'present' ? '✅' : s === 'excused' ? '🔵' : '❌'
 
   return (
     <>
-      <header className="page-head">
+      <header className="page-head page-fade">
         <div>
-          <span className="eyebrow">ATTENDANCE RECORD</span>
+          <span className="eyebrow">Attendance Record</span>
           <h1>Course attendance</h1>
           <p>Per-course breakdown with session history. You have 4 unexcused absences allowed.</p>
         </div>
       </header>
 
-      <div className="att-grid">
+      <div className="att-grid page-fade">
         {data.map(item => (
           <article key={item.code} className={`course-card att-card-${item.status}`}>
+            {/* Card header */}
             <div className="card-top">
               <div>
                 <b className="card-course-name">{item.course}</b>
@@ -513,17 +695,24 @@ function AttendanceTab({ token }) {
               <StatusBadge status={item.status} />
             </div>
 
+            {/* Ring + counts */}
             <div className="card-ring-row">
               <ProgressRing
                 pct={item.attendance_pct}
                 color={ringColor(item.status)}
-                size={100}
-                stroke={9}
+                size={110}
+                stroke={10}
               />
               <div className="card-counts">
-                <div className="count-row"><span className="dot dot-present" />Present <b>{item.present}</b></div>
-                <div className="count-row"><span className="dot dot-excused" />Excused <b>{item.excused}</b></div>
-                <div className="count-row"><span className="dot dot-absent"  />Absent  <b>{item.absent}</b></div>
+                <div className="count-row">
+                  <span className="dot dot-present" />Present <b>{item.present}</b>
+                </div>
+                <div className="count-row">
+                  <span className="dot dot-excused" />Excused <b>{item.excused}</b>
+                </div>
+                <div className="count-row">
+                  <span className="dot dot-absent"  />Absent  <b>{item.absent}</b>
+                </div>
                 <div className="count-row unexcused-row">
                   Remaining unexcused: <b className={item.remaining_unexcused <= 1 ? 'text-danger' : ''}>{item.remaining_unexcused}</b>
                   <small> / {item.unexcused_limit}</small>
@@ -531,8 +720,21 @@ function AttendanceTab({ token }) {
               </div>
             </div>
 
+            {/* Warning strip */}
+            {item.remaining_unexcused <= 2 && (
+              <div className={`warning-strip ${item.remaining_unexcused <= 0 ? 'danger' : ''}`}>
+                {item.remaining_unexcused <= 0
+                  ? '🚨 No unexcused absences remaining!'
+                  : `⚠️ Only ${item.remaining_unexcused} unexcused absence${item.remaining_unexcused === 1 ? '' : 's'} remaining`
+                }
+              </div>
+            )}
+
+            {/* Session toggle */}
             <button className="session-toggle" onClick={() => toggleSessions(item.code)}>
-              {openSessions[item.code] ? '▲ Hide sessions' : `▼ Show ${item.sessions.length} sessions`}
+              {openSessions[item.code]
+                ? '▲ Hide sessions'
+                : `▼ Show ${item.sessions.length} sessions`}
             </button>
 
             {openSessions[item.code] && (
@@ -540,7 +742,7 @@ function AttendanceTab({ token }) {
                 {item.sessions.map((s, i) => (
                   <li key={i} className={`session-item session-${s.status}`}>
                     <span>{sessionIcon(s.status)}</span>
-                    <span>{s.date}</span>
+                    <span style={{ fontWeight: 500 }}>{s.date}</span>
                     <span className="session-label">{s.status}</span>
                   </li>
                 ))}
@@ -586,24 +788,41 @@ function AlertsTab({ token, onUnreadChange }) {
     finally { setMarking(false) }
   }
 
-  if (error)   return <div className="error">{error}</div>
-  if (!notifs)  return <div className="loading">Loading notifications…</div>
+  if (error)  return <div className="error" style={{ margin: '40px 0' }}>{error}</div>
+  if (!notifs) return (
+    <div className="loading">
+      <div className="loading-spinner" />
+      Loading notifications…
+    </div>
+  )
 
   const unreadCount = notifs.filter(n => !n.read).length
-  const typeIcon = t => t === 'low_grade' ? '⚠️' : t === 'low_attendance' ? '📅' : '🔔'
+
+  const typeIcon = t =>
+    t === 'low_grade' ? '⚠️' : t === 'low_attendance' ? '📅' : '🔔'
+
+  const typeIconClass = t =>
+    t === 'low_grade' ? 'notif-icon-warn' : t === 'low_attendance' ? 'notif-icon-att' : 'notif-icon-bell'
 
   const fmt = iso => {
-    try { return new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(iso)) }
-    catch { return iso }
+    try {
+      return new Intl.DateTimeFormat('en', {
+        month: 'short', day: 'numeric',
+        hour: '2-digit', minute: '2-digit'
+      }).format(new Date(iso))
+    } catch { return iso }
   }
 
   return (
     <>
-      <header className="page-head">
+      <header className="page-head page-fade">
         <div>
-          <span className="eyebrow">ALERTS & NOTIFICATIONS</span>
+          <span className="eyebrow">Alerts &amp; Notifications</span>
           <h1>Notifications</h1>
-          <p>{unreadCount > 0 ? `${unreadCount} unread notification${unreadCount > 1 ? 's' : ''}` : 'All caught up!'}</p>
+          <p>{unreadCount > 0
+            ? `${unreadCount} unread notification${unreadCount > 1 ? 's' : ''}`
+            : 'All caught up! 🎉'
+          }</p>
         </div>
         {unreadCount > 0 && (
           <button className="btn-markall" onClick={markAll} disabled={marking}>
@@ -612,16 +831,23 @@ function AlertsTab({ token, onUnreadChange }) {
         )}
       </header>
 
-      <article className="panel">
+      <div className="notif-list page-fade">
         {notifs.length === 0
-          ? <p className="empty">No notifications yet.</p>
+          ? (
+            <article className="panel">
+              <p className="empty" style={{ padding: '40px 0' }}>🔕 No notifications yet.</p>
+            </article>
+          )
           : notifs.map(n => (
-              <div key={n.id}
+              <div
+                key={n.id}
                 className={`notif-item ${n.read ? 'notif-read' : 'notif-unread'}`}
                 onClick={() => !n.read && markRead(n.id)}
                 title={n.read ? '' : 'Click to mark as read'}
               >
-                <span className="notif-icon">{typeIcon(n.type)}</span>
+                <div className={`notif-icon-circle ${typeIconClass(n.type)}`}>
+                  {typeIcon(n.type)}
+                </div>
                 <div className="notif-body">
                   <div className="notif-title">{n.title}</div>
                   <div className="notif-detail">{n.detail}</div>
@@ -634,15 +860,54 @@ function AlertsTab({ token, onUnreadChange }) {
               </div>
             ))
         }
-      </article>
+      </div>
     </>
+  )
+}
+
+/* ─── AVATAR DROPDOWN ─────────────────────────────────────────────── */
+function AvatarMenu({ user, logout }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    const handler = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  return (
+    <div style={{ position: 'relative' }} ref={ref}>
+      <button
+        className="avatar-btn"
+        onClick={() => setOpen(v => !v)}
+        aria-label="User menu"
+        aria-expanded={open}
+      >
+        {initials(user?.name)}
+      </button>
+      {open && (
+        <div className="avatar-dropdown">
+          <div className="avatar-dropdown-header">
+            <b>{user?.name ?? 'User'}</b>
+            <span>{user?.email ?? user?.id ?? ''}</span>
+          </div>
+          <button
+            className="dropdown-item danger"
+            onClick={() => { setOpen(false); logout() }}
+          >
+            🚪 Sign out
+          </button>
+        </div>
+      )}
+    </div>
   )
 }
 
 /* ─── STUDENT SHELL (tabs + nav) ─────────────────────────────────── */
 function Student({ token, user, logout }) {
-  const [tab, setTab]           = useState('dashboard')
-  const [unread, setUnread]     = useState(0)
+  const [tab, setTab]       = useState('dashboard')
+  const [unread, setUnread] = useState(0)
 
   // Eagerly fetch unread count for bell badge
   useEffect(() => {
@@ -661,28 +926,46 @@ function Student({ token, user, logout }) {
   return (
     <div className="app">
       <nav className="topnav">
-        <div className="logo">S</div>
-        <div className="brand-text"><b>StudyMate</b><span>Performance monitor</span></div>
-
-        <div className="tabs-nav">
-          {tabs.map(t => (
-            <button key={t.id}
-              className={`tab-btn ${tab === t.id ? 'tab-active' : ''}`}
-              onClick={() => setTab(t.id)}>
-              {t.label}
-              {t.id === 'alerts' && unread > 0 && (
-                <span className="tab-badge">{unread}</span>
-              )}
-            </button>
-          ))}
+        {/* Left: logo + brand */}
+        <div className="nav-left">
+          <div className="logo">S</div>
+          <div className="brand-text">
+            <b>StudyMate</b>
+            <span>Performance monitor</span>
+          </div>
         </div>
 
-        <button className="notification-bell" onClick={() => setTab('alerts')} title="Notifications">
-          🔔
-          {unread > 0 && <span className="bell-badge">{unread}</span>}
-        </button>
+        {/* Center: tabs */}
+        <div className="nav-center">
+          <div className="tabs-nav">
+            {tabs.map(t => (
+              <button
+                key={t.id}
+                className={`tab-btn ${tab === t.id ? 'tab-active' : ''}`}
+                onClick={() => setTab(t.id)}
+              >
+                {t.label}
+                {t.id === 'alerts' && unread > 0 && (
+                  <span className="tab-badge">{unread}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
 
-        <button className="signout-btn" onClick={logout}>Sign out</button>
+        {/* Right: bell + avatar */}
+        <div className="nav-right">
+          <button
+            className="notification-bell"
+            onClick={() => setTab('alerts')}
+            title="Notifications"
+            aria-label={`Notifications${unread > 0 ? `, ${unread} unread` : ''}`}
+          >
+            🔔
+            {unread > 0 && <span className="bell-badge">{unread}</span>}
+          </button>
+          <AvatarMenu user={user} logout={logout} />
+        </div>
       </nav>
 
       <main className="content">
@@ -695,10 +978,11 @@ function Student({ token, user, logout }) {
   )
 }
 
-/* ─── TEACHER VIEW (unchanged) ───────────────────────────────────── */
-function Teacher({ token, user }) {
+/* ─── TEACHER VIEW ───────────────────────────────────────────────── */
+function Teacher({ token, user, logout }) {
   const [students, setStudents]   = useState()
   const [analytics, setAnalytics] = useState()
+
   useEffect(() => {
     Promise.all([
       api('/api/teacher/students', token),
@@ -706,56 +990,107 @@ function Teacher({ token, user }) {
     ]).then(([s, a]) => { setStudents(s.items); setAnalytics(a) })
   }, [token])
 
-  if (!students || !analytics) return <div className="loading">Loading authorized class data…</div>
+  if (!students || !analytics) return (
+    <div className="loading">
+      <div className="loading-spinner" />
+      Loading authorized class data…
+    </div>
+  )
+
   const atRisk = students.filter(s => s.risk_factors.length)
+
+  const avgAtt = (students.reduce((a, s) => a + s.attendance, 0) / students.length).toFixed(1)
 
   return (
     <>
-      <header className="page-head">
+      <header className="page-head page-fade">
         <div>
-          <span className="eyebrow">TEACHER OVERVIEW</span>
+          <span className="eyebrow">Teacher Overview</span>
           <h1>Your class signals.</h1>
           <p>Authorized CS-2026 student performance and explainable risk factors.</p>
         </div>
       </header>
-      <section className="metrics">
-        <Metric label="Students in scope"   value={students.length} detail="Current authorized cohort" />
-        <Metric label="At-risk students"    value={atRisk.length}   detail="Based on configured demo rules" tone={atRisk.length ? 'warn' : ''} />
-        <Metric label="Average attendance"  value={`${(students.reduce((a, s) => a + s.attendance, 0) / students.length).toFixed(1)}%`} detail="Across students in scope" />
-        <Metric label="Correlation"         value={analytics.correlation} detail="Association, not causation" />
+
+      <section className="metrics page-fade">
+        <Metric
+          label="Students in Scope"
+          value={students.length}
+          detail="Current authorized cohort"
+          icon="👥"
+          colorClass="metric-purple"
+        />
+        <Metric
+          label="At-Risk Students"
+          value={atRisk.length}
+          detail="Based on configured demo rules"
+          icon="⚠️"
+          tone={atRisk.length ? 'warn' : ''}
+          colorClass={atRisk.length ? 'metric-warn' : 'metric-green'}
+        />
+        <Metric
+          label="Avg. Attendance"
+          value={`${avgAtt}%`}
+          detail="Across students in scope"
+          icon="📊"
+          colorClass="metric-blue"
+        />
+        <Metric
+          label="Correlation"
+          value={analytics.correlation}
+          detail="Association, not causation"
+          icon="📈"
+          colorClass="metric-green"
+        />
       </section>
-      <section className="grid">
+
+      <section className="grid page-fade">
         <article className="panel wide">
           <div className="panel-title">
-            <div><span className="eyebrow">AUTHORIZED STUDENTS</span><h2>Risk watchlist</h2></div>
+            <div>
+              <span className="eyebrow">Authorized Students</span>
+              <h2>Risk watchlist</h2>
+            </div>
           </div>
           <div className="student-table">
-            <div className="thead"><span>Student</span><span>Attendance</span><span>Risk status</span></div>
+            <div className="thead">
+              <span>Student</span>
+              <span>Attendance</span>
+              <span>Risk status</span>
+            </div>
             {students.map(s => (
               <div className="trow" key={s.id}>
-                <span><b>{s.name}</b><small>{s.cohort}</small></span>
-                <strong>{s.attendance}%</strong>
+                <div className="student-info">
+                  <div className="student-avatar">{initials(s.name)}</div>
+                  <div className="student-info-text">
+                    <b>{s.name}</b>
+                    <small>{s.cohort}</small>
+                  </div>
+                </div>
+                <strong style={{ color: s.attendance < 75 ? 'var(--danger)' : 'var(--success)', fontWeight: 700 }}>
+                  {s.attendance}%
+                </strong>
                 <span>
                   {s.risk_factors.length
                     ? s.risk_factors.map((r, i) => <em key={i}>{r.detail}</em>)
-                    : <em className="good">No active signals</em>
+                    : <em className="good">✓ No active signals</em>
                   }
                 </span>
               </div>
             ))}
           </div>
         </article>
+
         <aside>
           <article className="panel">
-            <span className="eyebrow">ATTENDANCE × GRADE</span>
+            <span className="eyebrow">Attendance × Grade</span>
             <h2>Class relationship</h2>
             <ResponsiveContainer width="100%" height={220}>
               <ScatterChart>
-                <CartesianGrid />
-                <XAxis dataKey="attendance"    name="Attendance" unit="%" domain={[50, 100]} />
-                <YAxis dataKey="average_grade" name="Grade"      unit="%" domain={[40, 100]} />
+                <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" />
+                <XAxis dataKey="attendance"    name="Attendance" unit="%" domain={[50, 100]} tick={{ fontSize: 11, fill: '#9CA3AF' }} axisLine={false} tickLine={false} />
+                <YAxis dataKey="average_grade" name="Grade"      unit="%" domain={[40, 100]} tick={{ fontSize: 11, fill: '#9CA3AF' }} axisLine={false} tickLine={false} />
                 <Tooltip cursor={{ strokeDasharray: '3 3' }} />
-                <Scatter data={analytics.points} fill="#F07B52" />
+                <Scatter data={analytics.points} fill="#F97316" />
               </ScatterChart>
             </ResponsiveContainer>
             <p className="footnote">r = {analytics.correlation}. {analytics.note}</p>
@@ -780,26 +1115,26 @@ function App() {
     return (
       <div className="app">
         <nav className="topnav">
-          <div className="logo">S</div>
-          <div className="brand-text"><b>StudyMate</b><span>Performance monitor</span></div>
-          <button className="signout-btn" onClick={logout}>Sign out</button>
+          <div className="nav-left">
+            <div className="logo">S</div>
+            <div className="brand-text">
+              <b>StudyMate</b>
+              <span>Performance monitor</span>
+            </div>
+          </div>
+          <div className="nav-center" />
+          <div className="nav-right">
+            <AvatarMenu user={session.user} logout={logout} />
+          </div>
         </nav>
         <main className="content">
-          <Teacher token={session.access_token} user={session.user} />
+          <Teacher token={session.access_token} user={session.user} logout={logout} />
         </main>
       </div>
     )
   }
 
   return <Student token={session.access_token} user={session.user} logout={logout} />
-}
-
-/* ─── Utility ────────────────────────────────────────────────────── */
-function timeOfDay() {
-  const h = new Date().getHours()
-  if (h < 12) return 'morning'
-  if (h < 18) return 'afternoon'
-  return 'evening'
 }
 
 createRoot(document.getElementById('root')).render(<App />)
