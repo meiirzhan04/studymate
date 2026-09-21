@@ -98,7 +98,7 @@ class SQLiteRepository:
 
     def _seed(self, db):
         users = [
-            ("u-student", "Amina Sadyk", "student", "s1", None, "student-salt", "student123"),
+            ("u-student", "Meirzhan", "student", "s1", None, "student-salt", "student123"),
             ("u-teacher", "Dr. Nurlan Bek", "teacher", None, "t1", "teacher-salt", "teacher123"),
         ]
         db.executemany(
@@ -109,7 +109,7 @@ class SQLiteRepository:
             ("student@univ.edu", "u-student"), ("STU-001", "u-student"), ("teacher@univ.edu", "u-teacher")
         ])
         db.executemany("INSERT INTO students VALUES (?, ?, ?, ?, ?)", [
-            ("s1", "Amina Sadyk", "CS-2026", 87.5, 1),
+            ("s1", "Meirzhan", "CS-2026", 87.5, 1),
             ("s2", "Dias Omar", "CS-2026", 68.0, 3),
             ("s3", "Sara Kim", "CS-2026", 96.0, 0),
         ])
