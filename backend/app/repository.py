@@ -18,8 +18,15 @@ class SQLiteRepository:
 
     def __init__(self, database_path: str | None = None):
         default_path = Path(__file__).resolve().parents[1] / "data" / "student_monitoring.db"
-        self.path = Path(database_path or os.getenv("SQLITE_PATH", default_path))
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        candidate = Path(database_path or os.getenv("SQLITE_PATH", str(default_path)))
+        try:
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+            self.path = candidate
+        except PermissionError:
+            # Fallback to /tmp if the configured path is not writable (e.g. Render without disk)
+            fallback = Path("/tmp/student_monitoring.db")
+            fallback.parent.mkdir(parents=True, exist_ok=True)
+            self.path = fallback
         self._initialize()
 
     def connect(self):
