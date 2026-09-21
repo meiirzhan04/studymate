@@ -1,3 +1,16 @@
 {
-  "rewrites": [{"source": "/(.*)", "destination": "/index.html"}]
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://studymate-res1.onrender.com/api/:path*"
+    },
+    {
+      "source": "/health",
+      "destination": "https://studymate-res1.onrender.com/health"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
 }

@@ -122,8 +122,10 @@ def risks(student_id: str) -> list[dict]:
 app = FastAPI(title="Student Performance API", version="0.1.0")
 _allowed_origins = [
     "http://localhost:5173",
+    "https://studymate-mu-smoky.vercel.app",
     "https://*.vercel.app",
     "https://*.onrender.com",
+    "https://studymate-res1.onrender.com",
 ]
 if os.getenv("FRONTEND_URL"):
     _allowed_origins.append(os.getenv("FRONTEND_URL"))
