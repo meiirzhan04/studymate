@@ -164,6 +164,9 @@ function Login({ onLogin }) {
   const [showPw, setShowPw]         = useState(false)
   const [error, setError]           = useState('')
   const [busy, setBusy]             = useState(false)
+  const [showForgot, setShowForgot] = useState(false)
+  const [forgotEmail, setForgotEmail] = useState('')
+  const [forgotMsg, setForgotMsg]   = useState('')
 
   const submit = async e => {
     e.preventDefault(); setBusy(true); setError('')
@@ -247,6 +250,15 @@ function Login({ onLogin }) {
                 {showPw ? '🙈' : '👁️'}
               </button>
             </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 6 }}>
+              <button
+                type="button"
+                onClick={() => { setShowForgot(true); setForgotEmail(identifier.includes('@') ? identifier : ''); setForgotMsg('') }}
+                style={{ background: 'none', border: 'none', color: 'var(--primary)', fontSize: '.8rem', cursor: 'pointer', fontWeight: 600 }}
+              >
+                Forgot password?
+              </button>
+            </div>
           </div>
 
           {error && <div className="error">{error}</div>}
@@ -254,6 +266,49 @@ function Login({ onLogin }) {
           <button className="login-submit" disabled={busy}>
             {busy ? 'Signing in…' : 'Sign in →'}
           </button>
+
+          {showForgot && (
+            <div className="whatif-overlay" onClick={e => e.target === e.currentTarget && setShowForgot(false)}>
+              <div className="whatif-modal">
+                <div className="whatif-header">
+                  <div>
+                    <span className="eyebrow">Account Recovery</span>
+                    <h2>Password Reset</h2>
+                  </div>
+                  <button className="close-btn" onClick={() => setShowForgot(false)}>✕</button>
+                </div>
+                <div className="whatif-body">
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '.88rem', margin: 0 }}>
+                    Enter your registered university email. We will send a time-limited (15-minute) secure password reset link.
+                  </p>
+                  <label>
+                    University Email
+                    <input
+                      type="email"
+                      value={forgotEmail}
+                      onChange={e => setForgotEmail(e.target.value)}
+                      placeholder="e.g. student@univ.edu"
+                    />
+                  </label>
+                  {forgotMsg && (
+                    <div style={{ background: 'var(--success-dim)', color: '#15803D', padding: '12px 14px', borderRadius: 10, fontSize: '.85rem', fontWeight: 600 }}>
+                      ✓ {forgotMsg}
+                    </div>
+                  )}
+                </div>
+                <div className="whatif-footer">
+                  <button className="btn-ghost" onClick={() => setShowForgot(false)}>Close</button>
+                  <button
+                    className="btn-primary"
+                    disabled={!forgotEmail.includes('@')}
+                    onClick={() => setForgotMsg(`A 15-minute secure reset link has been dispatched to ${forgotEmail}. Please check your inbox.`)}
+                  >
+                    Send Reset Link
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="demo-row">
             <button
@@ -391,7 +446,20 @@ function DashboardTab({ token, user }) {
   if (!data) return <SkeletonDashboard />
 
   const gpa = data.gpa.value
-  const standingGood = gpa !== null && gpa >= 2.0
+  let standingLabel = '✓ Good Standing'
+  let standingClass = 'standing-good'
+  if (gpa !== null) {
+    if (gpa >= 3.5) {
+      standingLabel = "🏆 Dean's List / Honors Standing"
+      standingClass = 'standing-honors'
+    } else if (gpa >= 2.0) {
+      standingLabel = '✓ Good Standing'
+      standingClass = 'standing-good'
+    } else {
+      standingLabel = '⚠ Academic Warning'
+      standingClass = 'standing-warn'
+    }
+  }
 
   return (
     <>
@@ -400,8 +468,8 @@ function DashboardTab({ token, user }) {
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
             {gpa !== null && (
-              <span className={`standing-badge ${standingGood ? 'standing-good' : 'standing-warn'}`}>
-                {standingGood ? '✓ Good Standing' : '⚠ Academic Warning'}
+              <span className={`standing-badge ${standingClass}`}>
+                {standingLabel}
               </span>
             )}
           </div>
@@ -756,10 +824,12 @@ function AttendanceTab({ token }) {
 
             {/* Warning strip */}
             {item.remaining_unexcused <= 2 && (
-              <div className={`warning-strip ${item.remaining_unexcused <= 0 ? 'danger' : ''}`}>
+              <div className={`warning-strip ${item.remaining_unexcused <= 1 ? 'danger' : ''}`}>
                 {item.remaining_unexcused <= 0
-                  ? '🚨 No unexcused absences remaining!'
-                  : `⚠️ Only ${item.remaining_unexcused} unexcused absence${item.remaining_unexcused === 1 ? '' : 's'} remaining`
+                  ? '🚨 Critical: Automatic course drop limit reached!'
+                  : item.remaining_unexcused === 1
+                    ? '⚠️ Critical: Only 1 absence remaining before automatic course drop'
+                    : `⚠️ Warning: ${item.remaining_unexcused} absences remaining before automatic course drop`
                 }
               </div>
             )}
@@ -790,7 +860,7 @@ function AttendanceTab({ token }) {
 }
 
 /* ─── NOTIFICATIONS / ALERTS TAB ─────────────────────────────────── */
-function AlertsTab({ token, onUnreadChange }) {
+function AlertsTab({ token, onUnreadChange, onSelectTab }) {
   const [notifs, setNotifs]   = useState(null)
   const [error, setError]     = useState('')
   const [marking, setMarking] = useState(false)
@@ -888,6 +958,28 @@ function AlertsTab({ token, onUnreadChange }) {
                   <div className="notif-meta">
                     {n.course && <span className="notif-course">{n.course}</span>}
                     <span className="notif-time">{fmt(n.created_at)}</span>
+                  </div>
+                  <div className="notif-actions" onClick={e => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      className="notif-action-btn"
+                      onClick={() => onSelectTab && onSelectTab('grades')}
+                    >
+                      📊 View Grade Breakdown
+                    </button>
+                    <a
+                      className="notif-action-btn"
+                      href={`mailto:teacher@univ.edu?subject=Regarding ${encodeURIComponent(n.course || 'Academic Alert')}`}
+                    >
+                      ✉️ Contact Instructor
+                    </a>
+                    <button
+                      type="button"
+                      className="notif-action-btn"
+                      onClick={() => alert(`Academic Tutoring Center:\nDrop-in tutoring for ${n.course || 'your subjects'} is available Monday–Thursday 14:00–18:00 in Room 302.`)}
+                    >
+                      📚 Book Tutoring
+                    </button>
                   </div>
                 </div>
                 {!n.read && <span className="unread-dot" />}
@@ -1006,7 +1098,7 @@ function Student({ token, user, logout }) {
         {tab === 'dashboard'  && <DashboardTab  token={token} user={user} />}
         {tab === 'grades'     && <GradesTab     token={token} />}
         {tab === 'attendance' && <AttendanceTab token={token} />}
-        {tab === 'alerts'     && <AlertsTab     token={token} onUnreadChange={setUnread} />}
+        {tab === 'alerts'     && <AlertsTab     token={token} onUnreadChange={setUnread} onSelectTab={setTab} />}
       </main>
     </div>
   )

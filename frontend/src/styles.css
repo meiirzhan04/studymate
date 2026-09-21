@@ -671,6 +671,34 @@ a { text-decoration: none; color: inherit; }
 }
 .standing-good { background: var(--success-dim); color: #15803D; border: 1px solid #BBF7D0; }
 .standing-warn { background: var(--warning-dim); color: #B45309; border: 1px solid #FDE68A; }
+.standing-honors { background: #FEF3C7; color: #92400E; border: 1px solid #FCD34D; }
+
+.notif-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.notif-action-btn {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 5px 12px;
+  font-size: .76rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all .15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  text-decoration: none;
+}
+.notif-action-btn:hover {
+  background: var(--primary-dim);
+  border-color: #C4B5FD;
+  color: var(--primary);
+}
 
 /* ═══════════════════════════════════════════════════════════
    METRIC / STAT CARDS
