@@ -21,15 +21,15 @@ def test_invalid_login_is_generic():
 
 
 def test_student_dashboard_is_scoped_and_calculated():
-    response = client.get("/api/student/dashboard", headers=auth(token()))
+    response = client.get("/api/student/dashboard", headers=auth(token("240103118", "student123")))
     assert response.status_code == 200
     body = response.json()
     assert body["gpa"]["data_status"] == "available"
-    assert all(row["student_id"] == "s1" for row in body["courses"])
+    assert all(row["student_id"] == "240103118" for row in body["courses"])
 
 
 def test_student_cannot_open_teacher_area():
-    assert client.get("/api/teacher/students", headers=auth(token())).status_code == 403
+    assert client.get("/api/teacher/students", headers=auth(token("240103118", "student123"))).status_code == 403
 
 
 def test_teacher_scope_hides_unknown_student():
@@ -42,4 +42,23 @@ def test_teacher_analytics_explains_correlation():
     body = client.get("/api/teacher/analytics/attendance-performance", headers=auth(teacher)).json()
     assert len(body["points"]) == 3
     assert "does not prove causation" in body["note"]
+
+
+def test_sdu_student_240103120_login():
+    t = token("240103120", "student123")
+    res = client.get("/api/student/dashboard", headers=auth(t))
+    assert res.status_code == 200
+    body = res.json()
+    assert all(row["student_id"] == "240103120" for row in body["courses"])
+
+
+def test_direct_reset_password():
+    res = client.post("/api/auth/direct-reset", json={"email": "240103118", "new_password": "testNewPassword456"})
+    assert res.status_code == 200
+    # verify login with new password
+    t = token("240103118", "testNewPassword456")
+    assert t is not None
+    # reset back
+    res2 = client.post("/api/auth/direct-reset", json={"email": "240103118", "new_password": "student123"})
+    assert res2.status_code == 200
 

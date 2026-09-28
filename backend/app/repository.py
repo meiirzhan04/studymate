@@ -105,7 +105,8 @@ class SQLiteRepository:
 
     def _seed(self, db):
         users = [
-            ("u-student", "Meirzhan", "student", "s1", None, "student-salt", "student123"),
+            ("u-240103118", "Meirzhan", "student", "240103118", None, "student1-salt", "student123"),
+            ("u-240103120", "Dias Omar", "student", "240103120", None, "student2-salt", "student123"),
             ("u-teacher", "Dr. Nurlan Bek", "teacher", None, "t1", "teacher-salt", "teacher123"),
         ]
         db.executemany(
@@ -113,60 +114,100 @@ class SQLiteRepository:
             [(uid, name, role, sid, tid, salt, hash_password(password, salt)) for uid, name, role, sid, tid, salt, password in users],
         )
         db.executemany("INSERT INTO login_identifiers VALUES (?, ?)", [
-            ("student@univ.edu", "u-student"), ("STU-001", "u-student"), ("teacher@univ.edu", "u-teacher")
+            ("240103118", "u-240103118"),
+            ("240103118@sdu.edu.kz", "u-240103118"),
+            ("student@univ.edu", "u-240103118"),
+            ("STU-001", "u-240103118"),
+            ("240103120", "u-240103120"),
+            ("240103120@sdu.edu.kz", "u-240103120"),
+            ("STU-002", "u-240103120"),
+            ("teacher@univ.edu", "u-teacher"),
         ])
         db.executemany("INSERT INTO students VALUES (?, ?, ?, ?, ?)", [
-            ("s1", "Meirzhan", "CS-2026", 87.5, 1),
-            ("s2", "Dias Omar", "CS-2026", 68.0, 3),
-            ("s3", "Sara Kim", "CS-2026", 96.0, 0),
+            ("240103118", "Meirzhan", "CS-2024 (SDU)", 88.5, 1),
+            ("240103120", "Dias Omar", "CS-2024 (SDU)", 71.0, 2),
+            ("s3", "Sara Kim", "CS-2024 (SDU)", 96.0, 0),
         ])
-        db.executemany("INSERT INTO teacher_scope VALUES (?, ?)", [("t1", "s1"), ("t1", "s2"), ("t1", "s3")])
-        db.executemany("INSERT INTO semesters VALUES (?, ?)", [("spring-2026", "Spring 2026"), ("fall-2025", "Fall 2025")])
+        db.executemany("INSERT INTO teacher_scope VALUES (?, ?)", [
+            ("t1", "240103118"),
+            ("t1", "240103120"),
+            ("t1", "s3")
+        ])
+        db.executemany("INSERT INTO semesters VALUES (?, ?)", [
+            ("spring-2026", "Spring 2026"),
+            ("fall-2025", "Fall 2025")
+        ])
         grades = [
-            ("s1", "spring-2026", "Algorithms", "CS301", 4, [{"name":"Homework","score":86,"weight":.25},{"name":"Midterm","score":78,"weight":.35},{"name":"Project","score":92,"weight":.40}]),
-            ("s1", "spring-2026", "Linear Algebra", "MATH210", 3, [{"name":"Problems","score":68,"weight":.30},{"name":"Midterm","score":61,"weight":.30},{"name":"Final","score":74,"weight":.40}]),
-            ("s1", "spring-2026", "Databases", "CS240", 4, [{"name":"Labs","score":94,"weight":.35},{"name":"Midterm","score":88,"weight":.30},{"name":"Project","score":91,"weight":.35}]),
-            ("s1", "fall-2025", "Programming II", "CS202", 4, [{"name":"Coursework","score":79,"weight":1.0}]),
-            ("s2", "spring-2026", "Algorithms", "CS301", 4, [{"name":"Coursework","score":48,"weight":1.0}]),
-            ("s3", "spring-2026", "Algorithms", "CS301", 4, [{"name":"Coursework","score":91,"weight":1.0}]),
+            ("240103118", "spring-2026", "Algorithms & Data Structures", "CSS 301", 4, [{"name":"Homework","score":88,"weight":.25},{"name":"Midterm","score":82,"weight":.35},{"name":"Project","score":92,"weight":.40}]),
+            ("240103118", "spring-2026", "Linear Algebra", "MAT 210", 3, [{"name":"Problems","score":70,"weight":.30},{"name":"Midterm","score":64,"weight":.30},{"name":"Final","score":75,"weight":.40}]),
+            ("240103118", "spring-2026", "Database Systems", "CSS 240", 4, [{"name":"Labs","score":95,"weight":.35},{"name":"Midterm","score":90,"weight":.30},{"name":"Project","score":93,"weight":.35}]),
+            ("240103118", "spring-2026", "Web Development", "CSS 260", 3, [{"name":"Practice","score":92,"weight":.30},{"name":"Midterm","score":86,"weight":.30},{"name":"Project","score":94,"weight":.40}]),
+            ("240103118", "fall-2025", "Object-Oriented Programming (Java)", "CSS 202", 4, [{"name":"Coursework","score":84,"weight":1.0}]),
+            ("240103120", "spring-2026", "Algorithms & Data Structures", "CSS 301", 4, [{"name":"Homework","score":62,"weight":.25},{"name":"Midterm","score":54,"weight":.35},{"name":"Project","score":68,"weight":.40}]),
+            ("240103120", "spring-2026", "Linear Algebra", "MAT 210", 3, [{"name":"Problems","score":74,"weight":.30},{"name":"Midterm","score":70,"weight":.30},{"name":"Final","score":78,"weight":.40}]),
+            ("240103120", "spring-2026", "Database Systems", "CSS 240", 4, [{"name":"Labs","score":82,"weight":.35},{"name":"Midterm","score":76,"weight":.30},{"name":"Project","score":80,"weight":.35}]),
+            ("240103120", "fall-2025", "Object-Oriented Programming (Java)", "CSS 202", 4, [{"name":"Coursework","score":72,"weight":1.0}]),
+            ("s3", "spring-2026", "Algorithms & Data Structures", "CSS 301", 4, [{"name":"Coursework","score":94,"weight":1.0}]),
         ]
         db.executemany("INSERT INTO grades (student_id, semester, course, code, credits, components_json) VALUES (?, ?, ?, ?, ?, ?)", [(*row[:5], json.dumps(row[5])) for row in grades])
         
-        # Seed attendance_sessions for s1
+        # Seed attendance_sessions
         s1_att = []
         for i in range(20):
-            status = 'present' if i < 18 else ('excused' if i == 18 else 'absent')
-            s1_att.append(("s1", "CS301", f"2026-01-{i+1:02d}", status))
+            status = 'present' if i < 19 else 'excused'
+            s1_att.append(("240103118", "CSS 301", f"2026-01-{i+1:02d}", status))
         for i in range(18):
-            status = 'present' if i < 14 else 'absent'
-            s1_att.append(("s1", "MATH210", f"2026-01-{i+1:02d}", status))
+            status = 'present' if i < 15 else 'absent'
+            s1_att.append(("240103118", "MAT 210", f"2026-01-{i+1:02d}", status))
         for i in range(19):
-            s1_att.append(("s1", "CS240", f"2026-01-{i+1:02d}", "present"))
+            s1_att.append(("240103118", "CSS 240", f"2026-01-{i+1:02d}", "present"))
+        for i in range(16):
+            status = 'present' if i < 15 else 'absent'
+            s1_att.append(("240103118", "CSS 260", f"2026-01-{i+1:02d}", status))
+
+        s2_att = []
+        for i in range(20):
+            status = 'present' if i < 16 else 'absent'
+            s2_att.append(("240103120", "CSS 301", f"2026-01-{i+1:02d}", status))
+        for i in range(18):
+            status = 'present' if i < 16 else 'absent'
+            s2_att.append(("240103120", "MAT 210", f"2026-01-{i+1:02d}", status))
+        for i in range(19):
+            status = 'present' if i < 17 else 'absent'
+            s2_att.append(("240103120", "CSS 240", f"2026-01-{i+1:02d}", status))
             
-        s2_att = [("s2", "CS301", "2026-01-01", "present"), ("s2", "CS301", "2026-01-02", "absent")]
-        s3_att = [("s3", "CS301", "2026-01-01", "present")]
+        s3_att = [("s3", "CSS 301", "2026-01-01", "present")]
         db.executemany("INSERT INTO attendance_sessions (student_id, course_code, session_date, status) VALUES (?, ?, ?, ?)", s1_att + s2_att + s3_att)
 
-        # Seed assessment_items
+        # Seed assessment_items for 240103118 (grades 1, 2, 3, 4)
         items = [
-            (1, "HW1", 92, 100, 0.25/3, None),
-            (1, "HW2", 80, 100, 0.25/3, None),
-            (1, "HW3", 86, 100, 0.25/3, None),
-            (1, "Midterm", 78, 100, 0.35, "Good understanding of dynamic programming"),
-            (1, "Project", 92, 100, 0.40, "Excellent implementation"),
-            (2, "Problems", 68, 100, 0.30, None),
-            (2, "Midterm", 61, 100, 0.30, "Review matrix operations"),
-            (2, "Final", 74, 100, 0.40, None),
-            (3, "Labs", 94, 100, 0.35, None),
-            (3, "Midterm", 88, 100, 0.30, None),
-            (3, "Project", 91, 100, 0.35, "Very clean schema design")
+            (1, "HW1", 90, 100, 0.25/3, None),
+            (1, "HW2", 84, 100, 0.25/3, None),
+            (1, "HW3", 90, 100, 0.25/3, None),
+            (1, "Midterm", 82, 100, 0.35, "Great dynamic programming solutions"),
+            (1, "Project", 92, 100, 0.40, "Full graph algorithms implementation"),
+            (2, "Problems", 70, 100, 0.30, None),
+            (2, "Midterm", 64, 100, 0.30, "Review matrix operations and eigenvectors"),
+            (2, "Final", 75, 100, 0.40, None),
+            (3, "Labs", 95, 100, 0.35, None),
+            (3, "Midterm", 90, 100, 0.30, None),
+            (3, "Project", 93, 100, 0.35, "Very clean 3NF database schema"),
+            (4, "Practice", 92, 100, 0.30, None),
+            (4, "Midterm", 86, 100, 0.30, None),
+            (4, "Project", 94, 100, 0.40, "Responsive frontend and REST integration"),
+            # Seed items for 240103120 (grade 6)
+            (6, "Homework", 62, 100, 0.25, None),
+            (6, "Midterm", 54, 100, 0.35, "Review tree traversals and recursion"),
+            (6, "Project", 68, 100, 0.40, "Good attempt, improve time complexity"),
         ]
         db.executemany("INSERT INTO assessment_items (grade_id, name, score, max_score, weight, feedback) VALUES (?, ?, ?, ?, ?, ?)", items)
 
         # Seed notifications
         notifs = [
-            ("s1", "low_grade", "Low Grade Warning", "Your MATH210 midterm score is 61%. Review recommended.", "Linear Algebra", 0, "2026-03-01T10:00:00Z"),
-            ("s1", "low_attendance", "Attendance Alert", "Your MATH210 attendance has fallen to 77.8% - approaching the 75% threshold.", "Linear Algebra", 0, "2026-03-02T10:00:00Z")
+            ("240103118", "low_grade", "Low Grade Alert", "Your MAT 210 midterm score is 64%. Tutoring recommended.", "Linear Algebra", 0, "2026-03-01T10:00:00Z"),
+            ("240103118", "low_attendance", "Attendance Alert", "Your MAT 210 attendance has 3 unexcused absences. 1 remaining before course drop limit!", "Linear Algebra", 0, "2026-03-05T12:00:00Z"),
+            ("240103120", "low_grade", "Academic Warning", "Your CSS 301 midterm score is 54% (below the 60% threshold).", "Algorithms & Data Structures", 0, "2026-03-02T10:00:00Z"),
+            ("240103120", "low_attendance", "Attendance Warning", "Your CSS 301 attendance has 4 unexcused absences. Automatic drop risk!", "Algorithms & Data Structures", 0, "2026-03-10T09:00:00Z"),
         ]
         db.executemany("INSERT INTO notifications (student_id, type, title, detail, course, read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", notifs)
 

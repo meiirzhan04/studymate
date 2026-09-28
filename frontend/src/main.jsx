@@ -159,7 +159,7 @@ const CustomTooltip = ({ active, payload, label }) => {
 
 /* ─── LOGIN ──────────────────────────────────────────────────────── */
 function Login({ onLogin }) {
-  const [identifier, setIdentifier] = useState('student@univ.edu')
+  const [identifier, setIdentifier] = useState('240103118')
   const [password, setPassword]     = useState('student123')
   const [showPw, setShowPw]         = useState(false)
   const [error, setError]           = useState('')
@@ -204,7 +204,7 @@ function Login({ onLogin }) {
       })
       setForgotMsg(res.message || 'Password updated successfully!')
       setPassword(newPw)
-      if (forgotEmail.includes('@') || forgotEmail.toUpperCase().startsWith('STU')) {
+      if (forgotEmail.includes('@') || forgotEmail.toUpperCase().startsWith('STU') || /^\d+$/.test(forgotEmail.trim())) {
         setIdentifier(forgotEmail.trim())
       }
       setTimeout(() => {
@@ -273,12 +273,12 @@ function Login({ onLogin }) {
                 id="identifier"
                 value={identifier}
                 onChange={e => setIdentifier(e.target.value)}
-                placeholder="e.g. STU-001 or student@univ.edu"
+                placeholder="e.g. 240103118 or student@univ.edu"
                 autoComplete="username"
               />
             </div>
             <span className="login-hint">
-              Demo Student ID: <b>STU-001</b> · password: <b>student123</b>
+              SDU Student ID: <b>240103118</b> · password: <b>student123</b>
             </span>
           </div>
 
@@ -403,9 +403,16 @@ function Login({ onLogin }) {
             <button
               type="button"
               className="demo-btn"
-              onClick={() => { setIdentifier('student@univ.edu'); setPassword('student123') }}
+              onClick={() => { setIdentifier('240103118'); setPassword('student123') }}
             >
-              👤 Student demo
+              👤 240103118 (Meirzhan)
+            </button>
+            <button
+              type="button"
+              className="demo-btn"
+              onClick={() => { setIdentifier('240103120'); setPassword('student123') }}
+            >
+              👤 240103120 (Dias)
             </button>
             <button
               type="button"
