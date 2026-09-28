@@ -100,7 +100,11 @@ class SQLiteRepository:
                 );
                 """
             )
-            if db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
+            has_sdu = db.execute("SELECT COUNT(*) FROM users WHERE student_id = '240103118'").fetchone()[0]
+            if has_sdu == 0:
+                db.execute("PRAGMA foreign_keys = OFF;")
+                for table in ['notifications', 'assessment_items', 'attendance_sessions', 'login_attempts', 'grades', 'teacher_scope', 'students', 'login_identifiers', 'users', 'semesters', 'password_reset_tokens']:
+                    db.execute(f"DELETE FROM {table}")
                 self._seed(db)
 
     def _seed(self, db):
