@@ -62,3 +62,25 @@ def test_direct_reset_password():
     res2 = client.post("/api/auth/direct-reset", json={"email": "240103118", "new_password": "Student2028"})
     assert res2.status_code == 200
 
+
+def test_teacher_intervention_flow():
+    t = token("teacher@univ.edu", "teacher123")
+    res = client.post(
+        "/api/teacher/students/240103120/interventions",
+        headers=auth(t),
+        json={"action_type": "Tutoring Recommendation", "notes": "Please attend lab sessions on Wednesdays."}
+    )
+    assert res.status_code == 200
+    assert res.json()["ok"] is True
+
+    # Check that interventions can be listed
+    list_res = client.get("/api/teacher/students/240103120/interventions", headers=auth(t))
+    assert list_res.status_code == 200
+    items = list_res.json()["items"]
+    assert any(i["action_type"] == "Tutoring Recommendation" for i in items)
+
+    # Check student receives notification
+    st = token("240103120", "student123")
+    notifs = client.get("/api/student/notifications", headers=auth(st)).json()["items"]
+    assert any("Academic Advisory" in n["title"] for n in notifs)
+

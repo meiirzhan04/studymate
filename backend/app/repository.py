@@ -6,6 +6,7 @@ import json
 import os
 import sqlite3
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -97,6 +98,14 @@ class SQLiteRepository:
                     token TEXT NOT NULL UNIQUE,
                     expires_at REAL NOT NULL,
                     used INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS interventions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    student_id TEXT NOT NULL REFERENCES students(id),
+                    teacher_id TEXT NOT NULL,
+                    action_type TEXT NOT NULL,
+                    notes TEXT NOT NULL,
+                    created_at TEXT NOT NULL
                 );
                 """
             )
@@ -359,3 +368,21 @@ class SQLiteRepository:
             db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_hash, user["id"]))
             db.commit()
             return True
+
+    def add_intervention(self, student_id: str, teacher_id: str, action_type: str, notes: str):
+        with self.connect() as db:
+            now = datetime.now(timezone.utc).isoformat()
+            db.execute(
+                "INSERT INTO interventions (student_id, teacher_id, action_type, notes, created_at) VALUES (?, ?, ?, ?, ?)",
+                (student_id, teacher_id, action_type, notes, now)
+            )
+            db.execute(
+                "INSERT INTO notifications (student_id, type, title, detail, course, read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (student_id, "teacher_intervention", f"Academic Advisory: {action_type}", notes, "Academic Advising", 0, now)
+            )
+            db.commit()
+            return True
+
+    def get_interventions(self, student_id: str):
+        with self.connect() as db:
+            return [dict(r) for r in db.execute("SELECT * FROM interventions WHERE student_id = ? ORDER BY id DESC", (student_id,)).fetchall()]

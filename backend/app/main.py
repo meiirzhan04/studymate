@@ -49,6 +49,11 @@ class DirectResetRequest(BaseModel):
     new_password: str = Field(min_length=6, max_length=200)
 
 
+class InterventionRequest(BaseModel):
+    action_type: str = Field(min_length=2, max_length=50)
+    notes: str = Field(min_length=3, max_length=500)
+
+
 class User(BaseModel):
     id: str
     name: str
@@ -423,6 +428,21 @@ def teacher_student(student_id: str, user: Annotated[User, Depends(require_role(
     if student_id not in repo.teacher_scope.get(user.teacher_id, set()):
         raise HTTPException(status_code=404, detail="Student not found in teacher scope")
     return {"student": repo.students[student_id], "attendance": repo.attendance.get(student_id), "courses": student_courses(student_id, "spring-2026"), "risk_factors": risks(student_id)}
+
+
+@app.post("/api/teacher/students/{student_id}/interventions")
+def create_intervention(student_id: str, req: InterventionRequest, user: Annotated[User, Depends(require_role("teacher"))]):
+    if student_id not in repo.teacher_scope.get(user.teacher_id, set()):
+        raise HTTPException(status_code=404, detail="Student not found in teacher scope")
+    repo.add_intervention(student_id, user.teacher_id, req.action_type, req.notes)
+    return {"ok": True, "message": "Advisory note sent to student."}
+
+
+@app.get("/api/teacher/students/{student_id}/interventions")
+def get_interventions(student_id: str, user: Annotated[User, Depends(require_role("teacher"))]):
+    if student_id not in repo.teacher_scope.get(user.teacher_id, set()):
+        raise HTTPException(status_code=404, detail="Student not found in teacher scope")
+    return {"items": repo.get_interventions(student_id)}
 
 
 @app.get("/api/teacher/analytics/attendance-performance")

@@ -731,6 +731,26 @@ function GradesTab({ token }) {
     finally { setLoadingBD(null) }
   }
 
+  const exportGradesCSV = () => {
+    if (!courses) return
+    const headers = ['Course Name', 'Course Code', 'Credits', 'Weighted Score (%)', 'Status']
+    const rows = courses.map(c => [
+      `"${c.course}"`,
+      `"${c.code}"`,
+      c.credits,
+      c.score !== null ? `${c.score}%` : 'N/A',
+      `"${c.data_status}"`
+    ])
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n')
+    const encodedUri = encodeURI(csvContent)
+    const link = document.createElement('a')
+    link.setAttribute('href', encodedUri)
+    link.setAttribute('download', 'Academic_Transcript_Spring_2026.csv')
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+
   if (error)   return <div className="error" style={{ margin: '40px 0' }}>{error}</div>
   if (!courses) return (
     <div className="loading">
@@ -747,7 +767,12 @@ function GradesTab({ token }) {
           <h1>Grades breakdown</h1>
           <p>Click a course row to expand assessment components.</p>
         </div>
-        <button className="btn-whatif" onClick={() => setShowWhatIf(true)}>⚗️ What-If Calculator</button>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <button className="btn-ghost" onClick={exportGradesCSV} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            📥 Export CSV
+          </button>
+          <button className="btn-whatif" onClick={() => setShowWhatIf(true)}>⚗️ What-If Calculator</button>
+        </div>
       </header>
 
       <article className="panel page-fade" style={{ marginTop: 0 }}>
@@ -1202,10 +1227,166 @@ function Student({ token, user, logout }) {
   )
 }
 
+/* ─── TEACHER STUDENT DETAIL & INTERVENTION MODAL ────────────────── */
+function TeacherStudentModal({ studentId, token, onClose }) {
+  const [data, setData] = useState(null)
+  const [interventions, setInterventions] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [actionType, setActionType] = useState('Consultation Request')
+  const [notes, setNotes] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [msg, setMsg] = useState('')
+  const [err, setErr] = useState('')
+
+  const loadData = useCallback(() => {
+    Promise.all([
+      api(`/api/teacher/students/${studentId}`, token),
+      api(`/api/teacher/students/${studentId}/interventions`, token)
+    ]).then(([d, inv]) => {
+      setData(d)
+      setInterventions(inv.items || [])
+    }).catch(e => setErr(e.message))
+    .finally(() => setLoading(false))
+  }, [studentId, token])
+
+  useEffect(() => { loadData() }, [loadData])
+
+  const submitIntervention = async (e) => {
+    e?.preventDefault()
+    if (!notes.trim()) return
+    setSubmitting(true); setErr(''); setMsg('')
+    try {
+      const res = await api(`/api/teacher/students/${studentId}/interventions`, token, {
+        method: 'POST',
+        body: JSON.stringify({ action_type: actionType, notes: notes.trim() })
+      })
+      setMsg(res.message || 'Advisory note recorded.')
+      setNotes('')
+      loadData()
+    } catch (e) {
+      setErr(e.message)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="whatif-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="whatif-modal" style={{ maxWidth: 640 }}>
+        <div className="whatif-header">
+          <div>
+            <span className="eyebrow">Academic Intervention & Profile</span>
+            <h2>{data?.student?.name ?? 'Student Profile'}</h2>
+            <small style={{ color: 'var(--text-secondary)' }}>ID: {studentId} · {data?.student?.cohort}</small>
+          </div>
+          <button type="button" className="close-btn" onClick={onClose}>✕</button>
+        </div>
+        <div className="whatif-body" style={{ maxHeight: '70vh', overflowY: 'auto' }}>
+          {loading ? (
+            <div className="loading" style={{ minHeight: 180 }}>
+              <div className="loading-spinner" />
+              Loading student details…
+            </div>
+          ) : data ? (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12, marginBottom: 16 }}>
+                <div style={{ background: 'var(--paper)', padding: '12px 14px', borderRadius: 'var(--radius-sm)' }}>
+                  <small style={{ color: 'var(--text-secondary)', display: 'block' }}>Attendance</small>
+                  <strong style={{ fontSize: '1.25rem', color: data.attendance < 75 ? 'var(--danger)' : 'var(--success)' }}>
+                    {data.attendance}%
+                  </strong>
+                </div>
+                <div style={{ background: 'var(--paper)', padding: '12px 14px', borderRadius: 'var(--radius-sm)' }}>
+                  <small style={{ color: 'var(--text-secondary)', display: 'block' }}>Risk Status</small>
+                  <strong style={{ fontSize: '.9rem', color: data.risk_factors.length ? 'var(--danger)' : 'var(--success)' }}>
+                    {data.risk_factors.length ? `⚠️ ${data.risk_factors.length} active risk signal(s)` : '✓ Good standing'}
+                  </strong>
+                </div>
+              </div>
+
+              {data.risk_factors.length > 0 && (
+                <div style={{ background: '#FFF1F2', border: '1px solid #FECDD3', padding: '10px 14px', borderRadius: 'var(--radius-sm)', marginBottom: 16 }}>
+                  <b style={{ color: '#BE123C', fontSize: '.82rem', display: 'block', marginBottom: 4 }}>Active Risk Signals:</b>
+                  <ul style={{ margin: 0, paddingLeft: 18, fontSize: '.8rem', color: '#9F1239' }}>
+                    {data.risk_factors.map((r, i) => (
+                      <li key={i}>{r.detail} {r.courses?.length ? `(${r.courses.join(', ')})` : ''}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <h3 style={{ fontSize: '.95rem', margin: '14px 0 8px' }}>Enrolled Courses (Spring 2026)</h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
+                {data.courses.map((c, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--paper)', padding: '8px 12px', borderRadius: 6, fontSize: '.82rem' }}>
+                    <div>
+                      <b>{c.course}</b> <span style={{ color: 'var(--text-muted)' }}>({c.code})</span>
+                    </div>
+                    <strong>{c.score !== null ? `${c.score}%` : 'In Progress'}</strong>
+                  </div>
+                ))}
+              </div>
+
+              <h3 style={{ fontSize: '.95rem', margin: '14px 0 8px' }}>Record Teacher Advisory / Intervention</h3>
+              <form onSubmit={submitIntervention} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <label style={{ fontSize: '.82rem' }}>
+                  Action Type
+                  <select value={actionType} onChange={e => setActionType(e.target.value)} style={{ width: '100%', marginTop: 4 }}>
+                    <option value="Consultation Request">Academic Consultation Request</option>
+                    <option value="Tutoring Referral">Tutoring Center Referral</option>
+                    <option value="Attendance Warning">Formal Attendance Warning</option>
+                    <option value="Commendation">Academic Commendation</option>
+                  </select>
+                </label>
+                <label style={{ fontSize: '.82rem' }}>
+                  Advisory Notes & Instructions
+                  <textarea
+                    rows={3}
+                    value={notes}
+                    onChange={e => setNotes(e.target.value)}
+                    placeholder="Enter actionable guidance or notes for this student..."
+                    style={{ width: '100%', padding: '8px 10px', fontSize: '.82rem', borderRadius: 6, border: '1px solid var(--border)', marginTop: 4, fontFamily: 'inherit' }}
+                  />
+                </label>
+                {msg && <div style={{ background: 'var(--success-dim)', color: '#15803D', padding: '8px 12px', borderRadius: 6, fontSize: '.8rem', fontWeight: 600 }}>✓ {msg}</div>}
+                {err && <div className="error">{err}</div>}
+                <button type="submit" className="btn-primary" disabled={!notes.trim() || submitting} style={{ alignSelf: 'flex-start', marginTop: 4 }}>
+                  {submitting ? 'Sending…' : '📨 Send Advisory Note'}
+                </button>
+              </form>
+
+              {interventions.length > 0 && (
+                <div style={{ marginTop: 20 }}>
+                  <h4 style={{ fontSize: '.85rem', color: 'var(--text-secondary)', marginBottom: 8 }}>Past Advisory History ({interventions.length})</h4>
+                  {interventions.map((inv, i) => (
+                    <div className="intervention-item" key={i}>
+                      <div className="intervention-head">
+                        <span>{inv.action_type}</span>
+                        <span>{new Date(inv.created_at).toLocaleDateString()}</span>
+                      </div>
+                      <p className="intervention-notes">{inv.notes}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : null}
+        </div>
+        <div className="whatif-footer">
+          <button type="button" className="btn-ghost" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /* ─── TEACHER VIEW ───────────────────────────────────────────────── */
 function Teacher({ token, user, logout }) {
   const [students, setStudents]   = useState()
   const [analytics, setAnalytics] = useState()
+  const [selectedStudent, setSelectedStudent] = useState(null)
+  const [filter, setFilter] = useState('all') // 'all' | 'risk' | 'good'
+  const [search, setSearch] = useState('')
 
   useEffect(() => {
     Promise.all([
@@ -1222,31 +1403,68 @@ function Teacher({ token, user, logout }) {
   )
 
   const atRisk = students.filter(s => s.risk_factors.length)
-
   const avgAtt = (students.reduce((a, s) => a + s.attendance, 0) / students.length).toFixed(1)
+
+  const exportClassRosterCSV = () => {
+    if (!students) return
+    const headers = ['Student Name', 'Student ID', 'Cohort', 'Attendance (%)', 'Risk Count', 'Risk Signals']
+    const rows = students.map(s => [
+      `"${s.name}"`,
+      `"${s.id}"`,
+      `"${s.cohort}"`,
+      `${s.attendance}%`,
+      s.risk_factors.length,
+      `"${s.risk_factors.map(r => r.detail).join('; ')}"`
+    ])
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n')
+    const encodedUri = encodeURI(csvContent)
+    const link = document.createElement('a')
+    link.setAttribute('href', encodedUri)
+    link.setAttribute('download', 'Class_Watchlist_Roster.csv')
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+
+  const filteredStudents = students.filter(s => {
+    if (filter === 'risk' && s.risk_factors.length === 0) return false
+    if (filter === 'good' && s.risk_factors.length > 0) return false
+    if (search.trim()) {
+      const q = search.toLowerCase()
+      return s.name.toLowerCase().includes(q) || s.id.toLowerCase().includes(q) || s.cohort.toLowerCase().includes(q)
+    }
+    return true
+  })
 
   return (
     <>
       <header className="page-head page-fade">
         <div>
-          <span className="eyebrow">Teacher Overview</span>
-          <h1>Your class signals.</h1>
-          <p>Authorized CS-2026 student performance and explainable risk factors.</p>
+          <span className="eyebrow">Faculty Overview</span>
+          <h1>Class Performance Monitor</h1>
+          <p>Authorized cohort academic intelligence, explainable risk factors, and interventions.</p>
         </div>
+        <button
+          className="btn-ghost"
+          onClick={exportClassRosterCSV}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+        >
+          📥 Export Roster (CSV)
+        </button>
       </header>
 
       <section className="metrics page-fade">
         <Metric
           label="Students in Scope"
           value={students.length}
-          detail="Current authorized cohort"
+          detail="Authorized cohort"
           icon="👥"
           colorClass="metric-purple"
         />
         <Metric
           label="At-Risk Students"
           value={atRisk.length}
-          detail="Based on configured demo rules"
+          detail="Active risk signals"
           icon="⚠️"
           tone={atRisk.length ? 'warn' : ''}
           colorClass={atRisk.length ? 'metric-warn' : 'metric-green'}
@@ -1254,7 +1472,7 @@ function Teacher({ token, user, logout }) {
         <Metric
           label="Avg. Attendance"
           value={`${avgAtt}%`}
-          detail="Across students in scope"
+          detail="Across cohort in scope"
           icon="📊"
           colorClass="metric-blue"
         />
@@ -1273,21 +1491,61 @@ function Teacher({ token, user, logout }) {
             <div>
               <span className="eyebrow">Authorized Students</span>
               <h2>Risk watchlist</h2>
+              <small style={{ color: 'var(--text-muted)' }}>Click any student row to view full details and record interventions.</small>
             </div>
           </div>
+
+          <div className="teacher-toolbar">
+            <input
+              type="text"
+              className="teacher-search-input"
+              placeholder="🔍 Search by name or ID..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+            <div className="teacher-filter-group">
+              <button
+                type="button"
+                className={`teacher-filter-btn ${filter === 'all' ? 'active' : ''}`}
+                onClick={() => setFilter('all')}
+              >
+                All ({students.length})
+              </button>
+              <button
+                type="button"
+                className={`teacher-filter-btn ${filter === 'risk' ? 'active' : ''}`}
+                onClick={() => setFilter('risk')}
+              >
+                At-Risk ({atRisk.length})
+              </button>
+              <button
+                type="button"
+                className={`teacher-filter-btn ${filter === 'good' ? 'active' : ''}`}
+                onClick={() => setFilter('good')}
+              >
+                Good Standing ({students.length - atRisk.length})
+              </button>
+            </div>
+          </div>
+
           <div className="student-table">
             <div className="thead">
               <span>Student</span>
               <span>Attendance</span>
               <span>Risk status</span>
             </div>
-            {students.map(s => (
-              <div className="trow" key={s.id}>
+            {filteredStudents.length ? filteredStudents.map(s => (
+              <div
+                className="trow trow-clickable"
+                key={s.id}
+                onClick={() => setSelectedStudent(s.id)}
+                title="Click to view details & interventions"
+              >
                 <div className="student-info">
                   <div className="student-avatar">{initials(s.name)}</div>
                   <div className="student-info-text">
                     <b>{s.name}</b>
-                    <small>{s.cohort}</small>
+                    <small>ID: {s.id} · {s.cohort}</small>
                   </div>
                 </div>
                 <strong style={{ color: s.attendance < 75 ? 'var(--danger)' : 'var(--success)', fontWeight: 700 }}>
@@ -1300,14 +1558,18 @@ function Teacher({ token, user, logout }) {
                   }
                 </span>
               </div>
-            ))}
+            )) : (
+              <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>
+                No students match your search filter.
+              </div>
+            )}
           </div>
         </article>
 
         <aside>
           <article className="panel">
             <span className="eyebrow">Attendance × Grade</span>
-            <h2>Class relationship</h2>
+            <h2>Cohort relationship</h2>
             <ResponsiveContainer width="100%" height={220}>
               <ScatterChart>
                 <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" />
@@ -1321,6 +1583,14 @@ function Teacher({ token, user, logout }) {
           </article>
         </aside>
       </section>
+
+      {selectedStudent && (
+        <TeacherStudentModal
+          studentId={selectedStudent}
+          token={token}
+          onClose={() => setSelectedStudent(null)}
+        />
+      )}
     </>
   )
 }
