@@ -137,9 +137,10 @@ def risks(student_id: str) -> list[dict]:
 app = FastAPI(title="Student Performance API", version="0.1.0")
 _allowed_origins = [
     "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:5175",
     "https://studymate-mu-smoky.vercel.app",
-    "https://*.vercel.app",
-    "https://*.onrender.com",
+    "https://studymate-knap.onrender.com",
     "https://studymate-res1.onrender.com",
 ]
 if os.getenv("FRONTEND_URL"):
@@ -148,7 +149,7 @@ if os.getenv("FRONTEND_URL"):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
-    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_origin_regex=r"https://.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

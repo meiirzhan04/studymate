@@ -10,12 +10,14 @@ import './styles.css'
 const RENDER_BACKEND_URL = 'https://studymate-knap.onrender.com'
 
 const getApiBase = () => {
-  if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL
   if (typeof window !== 'undefined') {
     const host = window.location.hostname
     if (host !== 'localhost' && host !== '127.0.0.1') {
       return RENDER_BACKEND_URL
     }
+  }
+  if (import.meta.env.VITE_API_URL && !import.meta.env.VITE_API_URL.includes('studymate-res1')) {
+    return import.meta.env.VITE_API_URL
   }
   return ''
 }
