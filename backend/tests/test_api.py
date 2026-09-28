@@ -21,7 +21,7 @@ def test_invalid_login_is_generic():
 
 
 def test_student_dashboard_is_scoped_and_calculated():
-    response = client.get("/api/student/dashboard", headers=auth(token("240103118", "student123")))
+    response = client.get("/api/student/dashboard", headers=auth(token("240103118", "Student2028")))
     assert response.status_code == 200
     body = response.json()
     assert body["gpa"]["data_status"] == "available"
@@ -29,7 +29,7 @@ def test_student_dashboard_is_scoped_and_calculated():
 
 
 def test_student_cannot_open_teacher_area():
-    assert client.get("/api/teacher/students", headers=auth(token("240103118", "student123"))).status_code == 403
+    assert client.get("/api/teacher/students", headers=auth(token("240103118", "Student2028"))).status_code == 403
 
 
 def test_teacher_scope_hides_unknown_student():
@@ -58,7 +58,7 @@ def test_direct_reset_password():
     # verify login with new password
     t = token("240103118", "testNewPassword456")
     assert t is not None
-    # reset back
-    res2 = client.post("/api/auth/direct-reset", json={"email": "240103118", "new_password": "student123"})
+    # reset back to Student2028
+    res2 = client.post("/api/auth/direct-reset", json={"email": "240103118", "new_password": "Student2028"})
     assert res2.status_code == 200
 

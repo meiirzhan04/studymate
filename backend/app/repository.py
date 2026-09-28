@@ -106,10 +106,15 @@ class SQLiteRepository:
                 for table in ['notifications', 'assessment_items', 'attendance_sessions', 'login_attempts', 'grades', 'teacher_scope', 'students', 'login_identifiers', 'users', 'semesters', 'password_reset_tokens']:
                     db.execute(f"DELETE FROM {table}")
                 self._seed(db)
+            else:
+                user_240 = db.execute("SELECT id, password_salt FROM users WHERE student_id = '240103118'").fetchone()
+                if user_240:
+                    new_h = hash_password("Student2028", user_240["password_salt"])
+                    db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_h, user_240["id"]))
 
     def _seed(self, db):
         users = [
-            ("u-240103118", "Meirzhan", "student", "240103118", None, "student1-salt", "student123"),
+            ("u-240103118", "Meirzhan", "student", "240103118", None, "student1-salt", "Student2028"),
             ("u-240103120", "Dias Omar", "student", "240103120", None, "student2-salt", "student123"),
             ("u-teacher", "Dr. Nurlan Bek", "teacher", None, "t1", "teacher-salt", "teacher123"),
         ]

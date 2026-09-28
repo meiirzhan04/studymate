@@ -162,7 +162,7 @@ const CustomTooltip = ({ active, payload, label }) => {
 /* ─── LOGIN ──────────────────────────────────────────────────────── */
 function Login({ onLogin }) {
   const [identifier, setIdentifier] = useState('240103118')
-  const [password, setPassword]     = useState('student123')
+  const [password, setPassword]     = useState('Student2028')
   const [showPw, setShowPw]         = useState(false)
   const [error, setError]           = useState('')
   const [busy, setBusy]             = useState(false)
@@ -280,7 +280,7 @@ function Login({ onLogin }) {
               />
             </div>
             <span className="login-hint">
-              SDU Student ID: <b>240103118</b> · password: <b>student123</b>
+              SDU Student ID: <b>240103118</b> · password: <b>Student2028</b>
             </span>
           </div>
 
@@ -405,7 +405,7 @@ function Login({ onLogin }) {
             <button
               type="button"
               className="demo-btn"
-              onClick={() => { setIdentifier('240103118'); setPassword('student123') }}
+              onClick={() => { setIdentifier('240103118'); setPassword('Student2028') }}
             >
               👤 240103118 (Meirzhan)
             </button>
