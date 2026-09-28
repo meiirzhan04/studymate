@@ -166,13 +166,67 @@ function Login({ onLogin }) {
   const [busy, setBusy]             = useState(false)
   const [showForgot, setShowForgot] = useState(false)
   const [forgotEmail, setForgotEmail] = useState('')
+  const [newPw, setNewPw]           = useState('')
+  const [confirmPw, setConfirmPw]   = useState('')
+  const [showNewPw, setShowNewPw]   = useState(false)
   const [forgotMsg, setForgotMsg]   = useState('')
+  const [forgotErr, setForgotErr]   = useState('')
+  const [forgotBusy, setForgotBusy] = useState(false)
 
   const submit = async e => {
     e.preventDefault(); setBusy(true); setError('')
     try { onLogin(await api('/api/auth/login', null, { method: 'POST', body: JSON.stringify({ identifier, password }) })) }
     catch (e) { setError(e.message) }
     finally { setBusy(false) }
+  }
+
+  const handleResetPassword = async e => {
+    e?.preventDefault()
+    if (!forgotEmail.trim()) {
+      setForgotErr('Please enter your university email or Student ID')
+      return
+    }
+    if (newPw.length < 6) {
+      setForgotErr('Password must be at least 6 characters long')
+      return
+    }
+    if (confirmPw && newPw !== confirmPw) {
+      setForgotErr('Passwords do not match')
+      return
+    }
+    setForgotBusy(true)
+    setForgotErr('')
+    setForgotMsg('')
+    try {
+      const res = await api('/api/auth/direct-reset', null, {
+        method: 'POST',
+        body: JSON.stringify({ email: forgotEmail.trim(), new_password: newPw })
+      })
+      setForgotMsg(res.message || 'Password updated successfully!')
+      setPassword(newPw)
+      if (forgotEmail.includes('@') || forgotEmail.toUpperCase().startsWith('STU')) {
+        setIdentifier(forgotEmail.trim())
+      }
+      setTimeout(() => {
+        setShowForgot(false)
+        setNewPw('')
+        setConfirmPw('')
+        setForgotMsg('')
+      }, 1500)
+    } catch (err) {
+      setForgotErr(err.message)
+    } finally {
+      setForgotBusy(false)
+    }
+  }
+
+  const openForgot = () => {
+    setShowForgot(true)
+    setForgotEmail(identifier || '')
+    setNewPw('')
+    setConfirmPw('')
+    setForgotMsg('')
+    setForgotErr('')
   }
 
   return (
@@ -253,7 +307,7 @@ function Login({ onLogin }) {
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 6 }}>
               <button
                 type="button"
-                onClick={() => { setShowForgot(true); setForgotEmail(identifier.includes('@') ? identifier : ''); setForgotMsg('') }}
+                onClick={openForgot}
                 style={{ background: 'none', border: 'none', color: 'var(--primary)', fontSize: '.8rem', cursor: 'pointer', fontWeight: 600 }}
               >
                 Forgot password?
@@ -273,21 +327,54 @@ function Login({ onLogin }) {
                 <div className="whatif-header">
                   <div>
                     <span className="eyebrow">Account Recovery</span>
-                    <h2>Password Reset</h2>
+                    <h2>Reset Password</h2>
                   </div>
-                  <button className="close-btn" onClick={() => setShowForgot(false)}>✕</button>
+                  <button type="button" className="close-btn" onClick={() => setShowForgot(false)}>✕</button>
                 </div>
                 <div className="whatif-body">
                   <p style={{ color: 'var(--text-secondary)', fontSize: '.88rem', margin: 0 }}>
-                    Enter your registered university email. We will send a time-limited (15-minute) secure password reset link.
+                    Enter your registered email or Student ID and set your new password.
                   </p>
                   <label>
-                    University Email
+                    University Email or Student ID
                     <input
-                      type="email"
+                      type="text"
                       value={forgotEmail}
                       onChange={e => setForgotEmail(e.target.value)}
-                      placeholder="e.g. student@univ.edu"
+                      placeholder="e.g. student@univ.edu or STU-001"
+                      autoComplete="username"
+                    />
+                  </label>
+                  <label>
+                    New Password
+                    <div style={{ position: 'relative' }}>
+                      <input
+                        type={showNewPw ? 'text' : 'password'}
+                        value={newPw}
+                        onChange={e => setNewPw(e.target.value)}
+                        placeholder="At least 6 characters"
+                        autoComplete="new-password"
+                        style={{ paddingRight: 44, width: '100%' }}
+                      />
+                      <button
+                        type="button"
+                        className="pw-toggle"
+                        onClick={() => setShowNewPw(v => !v)}
+                        tabIndex={-1}
+                        aria-label={showNewPw ? 'Hide password' : 'Show password'}
+                      >
+                        {showNewPw ? '🙈' : '👁️'}
+                      </button>
+                    </div>
+                  </label>
+                  <label>
+                    Confirm New Password
+                    <input
+                      type={showNewPw ? 'text' : 'password'}
+                      value={confirmPw}
+                      onChange={e => setConfirmPw(e.target.value)}
+                      placeholder="Repeat new password"
+                      autoComplete="new-password"
                     />
                   </label>
                   {forgotMsg && (
@@ -295,15 +382,17 @@ function Login({ onLogin }) {
                       ✓ {forgotMsg}
                     </div>
                   )}
+                  {forgotErr && <div className="error">{forgotErr}</div>}
                 </div>
                 <div className="whatif-footer">
-                  <button className="btn-ghost" onClick={() => setShowForgot(false)}>Close</button>
+                  <button type="button" className="btn-ghost" onClick={() => setShowForgot(false)}>Cancel</button>
                   <button
+                    type="button"
                     className="btn-primary"
-                    disabled={!forgotEmail.includes('@')}
-                    onClick={() => setForgotMsg(`A 15-minute secure reset link has been dispatched to ${forgotEmail}. Please check your inbox.`)}
+                    disabled={!forgotEmail.trim() || newPw.length < 6 || forgotBusy}
+                    onClick={handleResetPassword}
                   >
-                    Send Reset Link
+                    {forgotBusy ? 'Saving…' : '🔒 Save New Password'}
                   </button>
                 </div>
               </div>

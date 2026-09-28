@@ -6,6 +6,7 @@ import hmac
 import json
 import math
 import os
+import secrets
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +33,20 @@ class WhatIfRequest(BaseModel):
     course_code: str
     target_score: float
     component_name: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=120)
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str = Field(min_length=6, max_length=200)
+
+
+class DirectResetRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=120)
+    new_password: str = Field(min_length=6, max_length=200)
 
 
 class User(BaseModel):
@@ -154,6 +169,43 @@ def login(request: LoginRequest):
         raise HTTPException(status_code=401, detail="Invalid identifier or password")
     repo.clear_attempts(request.identifier)
     return {"access_token": issue_token(user), "token_type": "bearer", "expires_in": 1800, "user": user}
+
+
+@app.post("/api/auth/forgot-password")
+def forgot_password(req: ForgotPasswordRequest):
+    user = repo.get_user_by_email(req.email)
+    # Always return success to avoid user enumeration
+    if not user:
+        return {"ok": True, "message": "If that email is registered, a reset link has been sent."}
+    token = secrets.token_urlsafe(32)
+    expires_at = time.time() + 900  # 15 minutes
+    repo.create_reset_token(user["id"], token, expires_at)
+    # In production, send email. For demo, return the token directly.
+    return {
+        "ok": True,
+        "message": "If that email is registered, a reset link has been sent.",
+        "_demo_token": token,
+        "_demo_reset_url": f"/reset-password?token={token}"
+    }
+
+
+@app.post("/api/auth/reset-password")
+def reset_password(req: ResetPasswordRequest):
+    token_data = repo.validate_reset_token(req.token)
+    if not token_data:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+    success = repo.use_reset_token_and_update_password(req.token, req.new_password)
+    if not success:
+        raise HTTPException(status_code=400, detail="Failed to reset password")
+    return {"ok": True, "message": "Password has been reset successfully. You can now sign in."}
+
+
+@app.post("/api/auth/direct-reset")
+def direct_reset(req: DirectResetRequest):
+    success = repo.direct_reset_password(req.email, req.new_password)
+    if not success:
+        raise HTTPException(status_code=404, detail="User with this email or ID not found")
+    return {"ok": True, "message": "Password updated successfully! You can now sign in."}
 
 
 @app.get("/api/me")

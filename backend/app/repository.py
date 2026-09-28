@@ -91,6 +91,13 @@ class SQLiteRepository:
                     read INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL REFERENCES users(id),
+                    token TEXT NOT NULL UNIQUE,
+                    expires_at REAL NOT NULL,
+                    used INTEGER NOT NULL DEFAULT 0
+                );
                 """
             )
             if db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
@@ -241,3 +248,64 @@ class SQLiteRepository:
         with self.connect() as db:
             db.execute("DELETE FROM login_attempts WHERE identifier = ? COLLATE NOCASE", (identifier,))
             db.commit()
+
+    def get_user_by_email(self, email: str):
+        with self.connect() as db:
+            row = db.execute(
+                """SELECT u.* FROM users u JOIN login_identifiers i ON i.user_id = u.id
+                   WHERE i.identifier = ? COLLATE NOCASE""", (email.strip(),)
+            ).fetchone()
+            if not row:
+                return None
+            return {key: row[key] for key in ("id", "name", "role", "student_id", "teacher_id")}
+
+    def create_reset_token(self, user_id: str, token: str, expires_at: float):
+        with self.connect() as db:
+            db.execute("DELETE FROM password_reset_tokens WHERE user_id = ? AND used = 0", (user_id,))
+            db.execute(
+                "INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES (?, ?, ?)",
+                (user_id, token, expires_at)
+            )
+            db.commit()
+
+    def validate_reset_token(self, token: str):
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT * FROM password_reset_tokens WHERE token = ? AND used = 0",
+                (token,)
+            ).fetchone()
+            if not row:
+                return None
+            if row["expires_at"] < time.time():
+                return None
+            return dict(row)
+
+    def use_reset_token_and_update_password(self, token: str, new_password: str):
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT * FROM password_reset_tokens WHERE token = ? AND used = 0",
+                (token,)
+            ).fetchone()
+            if not row or row["expires_at"] < time.time():
+                return False
+            user_row = db.execute("SELECT * FROM users WHERE id = ?", (row["user_id"],)).fetchone()
+            if not user_row:
+                return False
+            new_hash = hash_password(new_password, user_row["password_salt"])
+            db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_hash, row["user_id"]))
+            db.execute("UPDATE password_reset_tokens SET used = 1 WHERE id = ?", (row["id"],))
+            db.commit()
+            return True
+
+    def direct_reset_password(self, email: str, new_password: str):
+        user = self.get_user_by_email(email)
+        if not user:
+            return False
+        with self.connect() as db:
+            user_row = db.execute("SELECT password_salt FROM users WHERE id = ?", (user["id"],)).fetchone()
+            if not user_row:
+                return False
+            new_hash = hash_password(new_password, user_row["password_salt"])
+            db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_hash, user["id"]))
+            db.commit()
+            return True
