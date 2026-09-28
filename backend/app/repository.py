@@ -117,12 +117,10 @@ class SQLiteRepository:
                 );
                 """
             )
-            has_sdu = db.execute("SELECT COUNT(*) FROM users WHERE student_id = '240103118'").fetchone()[0]
-            if has_sdu == 0:
-                db.execute("PRAGMA foreign_keys = OFF;")
-                for table in ['notifications', 'assessment_items', 'attendance_sessions', 'login_attempts', 'grades', 'teacher_scope', 'students', 'login_identifiers', 'users', 'semesters', 'password_reset_tokens', 'password_reset_codes', 'interventions']:
-                    db.execute(f"DELETE FROM {table}")
-                self._seed(db)
+            # Check if the real SDU Information Systems curriculum is loaded
+            has_is = db.execute("SELECT COUNT(*) FROM grades WHERE code = 'CSS 105'").fetchone()[0]
+            if has_is == 0:
+                self._seed_is_curriculum(db)
             else:
                 user_240 = db.execute("SELECT id, password_salt FROM users WHERE student_id = '240103118'").fetchone()
                 if user_240:
@@ -141,31 +139,163 @@ class SQLiteRepository:
                     db.execute("INSERT INTO login_identifiers VALUES (?, ?)", ("240103188", "u-240103188"))
                     db.execute("INSERT OR IGNORE INTO login_identifiers VALUES (?, ?)", ("240103188@sdu.edu.kz", "u-240103188"))
                     db.execute("INSERT OR IGNORE INTO students VALUES (?, ?, ?, ?, ?)",
-                               ("240103188", "Student 240103188", "CS-2024 (SDU)", 84.5, 1))
+                               ("240103188", "Student 240103188", "Information Systems (IS-2024)", 94.0, 0))
                     db.execute("INSERT OR IGNORE INTO teacher_scope VALUES (?, ?)", ("t1", "240103188"))
 
-                # Ensure 240103188 has courses and grades
-                has_188_grades = db.execute("SELECT COUNT(*) FROM grades WHERE student_id = '240103188'").fetchone()[0]
-                if has_188_grades == 0:
-                    grades_188 = [
-                        ("240103188", "spring-2026", "Algorithms & Data Structures", "CSS 301", 4, json.dumps([{"name":"Homework","score":85,"weight":.25},{"name":"Midterm","score":80,"weight":.35},{"name":"Project","score":88,"weight":.40}])),
-                        ("240103188", "spring-2026", "Linear Algebra", "MAT 210", 3, json.dumps([{"name":"Problems","score":78,"weight":.30},{"name":"Midterm","score":72,"weight":.30},{"name":"Final","score":82,"weight":.40}])),
-                        ("240103188", "spring-2026", "Database Systems", "CSS 240", 4, json.dumps([{"name":"Labs","score":90,"weight":.35},{"name":"Midterm","score":85,"weight":.30},{"name":"Project","score":89,"weight":.35}])),
-                        ("240103188", "spring-2026", "Web Development", "CSS 260", 3, json.dumps([{"name":"Practice","score":88,"weight":.30},{"name":"Midterm","score":82,"weight":.30},{"name":"Project","score":90,"weight":.40}])),
-                        ("240103188", "fall-2025", "Object-Oriented Programming (Java)", "CSS 202", 4, json.dumps([{"name":"Coursework","score":80,"weight":1.0}])),
-                    ]
-                    db.executemany("INSERT INTO grades (student_id, semester, course, code, credits, components_json) VALUES (?, ?, ?, ?, ?, ?)", grades_188)
+    def _seed_is_curriculum(self, db):
+        db.execute("PRAGMA foreign_keys = OFF;")
+        db.execute("DELETE FROM assessment_items")
+        db.execute("DELETE FROM attendance_sessions")
+        db.execute("DELETE FROM notifications")
+        db.execute("DELETE FROM grades")
+        db.execute("DELETE FROM semesters")
 
-                    att_188 = []
-                    for i in range(20):
-                        att_188.append(("240103188", "CSS 301", f"2026-01-{i+1:02d}", "present"))
-                    for i in range(18):
-                        att_188.append(("240103188", "MAT 210", f"2026-01-{i+1:02d}", "present" if i < 16 else "absent"))
-                    for i in range(19):
-                        att_188.append(("240103188", "CSS 240", f"2026-01-{i+1:02d}", "present"))
-                    for i in range(16):
-                        att_188.append(("240103188", "CSS 260", f"2026-01-{i+1:02d}", "present"))
-                    db.executemany("INSERT OR IGNORE INTO attendance_sessions (student_id, course_code, session_date, status) VALUES (?, ?, ?, ?)", att_188)
+        # 1. Semesters (all 8 academic terms)
+        semesters = [
+            ("spring-2026", "Semester 5 (Spring 2026) · Current (IP)"),
+            ("fall-2025", "Semester 4 (Fall 2025)"),
+            ("spring-2025", "Semester 3 (Spring 2025)"),
+            ("fall-2024", "Semester 2 (Fall 2024)"),
+            ("spring-2024", "Semester 1 (Spring 2024)"),
+            ("fall-2026", "Semester 6 (Fall 2026) · Upcoming"),
+            ("spring-2027", "Semester 7 (Spring 2027) · Upcoming"),
+            ("fall-2027", "Semester 8 (Spring 2028) · Senior Project"),
+        ]
+        db.executemany("INSERT INTO semesters VALUES (?, ?)", semesters)
+
+        db.execute("UPDATE students SET cohort = 'Information Systems (IS-2024)', attendance = 96.0, missing_assignments = 0 WHERE id = '240103118'")
+        db.execute("UPDATE students SET cohort = 'Information Systems (IS-2024)', attendance = 94.0, missing_assignments = 0 WHERE id = '240103188'")
+        db.execute("UPDATE students SET cohort = 'Information Systems (IS-2024)', attendance = 88.0, missing_assignments = 1 WHERE id = '240103120'")
+        db.execute("DELETE FROM attendance_sessions")
+        db.execute("DELETE FROM notifications")
+
+        curriculum = [
+            # Semester 1 (spring-2024)
+            ("spring-2024", "CSS 105", "Fundamentals of Programming", 3, [{"name": "Midterm", "score": 90, "weight": 0.4}, {"name": "Final", "score": 93, "weight": 0.6}]),
+            ("spring-2024", "INF 106", "Information and Communication Technologies", 3, [{"name": "Midterm", "score": 70, "weight": 0.4}, {"name": "Final", "score": 75, "weight": 0.6}]),
+            ("spring-2024", "MAT 156", "Discrete Mathematics", 4, [{"name": "Midterm", "score": 72, "weight": 0.4}, {"name": "Final", "score": 75, "weight": 0.6}]),
+            ("spring-2024", "MDE 160", "Community engagement and value based Society 1", 1, [{"name": "Coursework", "score": 100, "weight": 1.0}]),
+            ("spring-2024", "MDE 171", "History of Kazakhstan", 3, [{"name": "Midterm", "score": 80, "weight": 0.4}, {"name": "Final", "score": 83, "weight": 0.6}]),
+            ("spring-2024", "MDE 291", "Physical Education 1", 1, [{"name": "Practice", "score": 96, "weight": 1.0}]),
+            ("spring-2024", "MDE 190", "Foreign language 1", 3, [{"name": "Midterm", "score": 65, "weight": 0.4}, {"name": "Final", "score": 70, "weight": 0.6}]),
+            ("spring-2024", "MDE 283", "Turkish language 1", 3, [{"name": "Midterm", "score": 82, "weight": 0.4}, {"name": "Final", "score": 84, "weight": 0.6}]),
+
+            # Semester 2 (fall-2024)
+            ("fall-2024", "CSS 108", "Programming Technologies and Educational Practice", 3, [{"name": "Practice", "score": 70, "weight": 0.4}, {"name": "Final", "score": 75, "weight": 0.6}]),
+            ("fall-2024", "INF 329", "Fundamentals of Information Systems", 2, [{"name": "Midterm", "score": 80, "weight": 0.4}, {"name": "Final", "score": 83, "weight": 0.6}]),
+            ("fall-2024", "MAT 137", "Mathematics for Information Systems 1", 3, [{"name": "Midterm", "score": 70, "weight": 0.4}, {"name": "Final", "score": 73, "weight": 0.6}]),
+            ("fall-2024", "MAT 151", "Linear Algebra", 3, [{"name": "Midterm", "score": 68, "weight": 0.4}, {"name": "Final", "score": 73, "weight": 0.6}]),
+            ("fall-2024", "MDE 170", "Community engagement and value based Society 2", 1, [{"name": "Evaluation", "score": 100, "weight": 1.0}]),
+            ("fall-2024", "MDE 292", "Physical Education 2", 1, [{"name": "Practice", "score": 95, "weight": 1.0}]),
+            ("fall-2024", "MDE 191", "Foreign language 2", 3, [{"name": "Midterm", "score": 75, "weight": 0.4}, {"name": "Final", "score": 78, "weight": 0.6}]),
+            ("fall-2024", "MDE 284", "Turkish language 2", 3, [{"name": "Midterm", "score": 72, "weight": 0.4}, {"name": "Final", "score": 75, "weight": 0.6}]),
+
+            # Semester 3 (spring-2025)
+            ("spring-2025", "CSS 215", "Introduction to Algorithms", 3, [{"name": "Homework", "score": 96, "weight": 0.3}, {"name": "Midterm", "score": 94, "weight": 0.3}, {"name": "Final", "score": 95, "weight": 0.4}]),
+            ("spring-2025", "CSS 217", "Software Architecture and Design Patterns", 3, [{"name": "Labs", "score": 90, "weight": 0.3}, {"name": "Midterm", "score": 85, "weight": 0.3}, {"name": "Project", "score": 86, "weight": 0.4}]),
+            ("spring-2025", "CSS 331", "Operating Systems", 3, [{"name": "Labs", "score": 80, "weight": 0.3}, {"name": "Midterm", "score": 75, "weight": 0.3}, {"name": "Final", "score": 79, "weight": 0.4}]),
+            ("spring-2025", "INF 203", "Information security", 3, [{"name": "Labs", "score": 75, "weight": 0.3}, {"name": "Midterm", "score": 70, "weight": 0.3}, {"name": "Final", "score": 74, "weight": 0.4}]),
+            ("spring-2025", "INF 211", "Educational practice 2", 1, [{"name": "Report", "score": 95, "weight": 1.0}]),
+            ("spring-2025", "MAT 138", "Mathematics for Information Systems 2", 3, [{"name": "Midterm", "score": 74, "weight": 0.4}, {"name": "Final", "score": 77, "weight": 0.6}]),
+            ("spring-2025", "MDE 293", "Physical Education 3", 1, [{"name": "Attendance", "score": 96, "weight": 1.0}]),
+            ("spring-2025", "MDE 115", "Kazakh / Russian language 1", 3, [{"name": "Midterm", "score": 94, "weight": 0.4}, {"name": "Final", "score": 96, "weight": 0.6}]),
+
+            # Semester 4 (fall-2025)
+            ("fall-2025", "INF 202", "Database Management Systems 1", 3, [{"name": "Labs", "score": 76, "weight": 0.3}, {"name": "Midterm", "score": 70, "weight": 0.3}, {"name": "Project", "score": 73, "weight": 0.4}]),
+            ("fall-2025", "INF 208", "Business in information systems", 3, [{"name": "Case Studies", "score": 80, "weight": 0.3}, {"name": "Midterm", "score": 74, "weight": 0.3}, {"name": "Final", "score": 77, "weight": 0.4}]),
+            ("fall-2025", "INF 313", "Computer networks 1", 3, [{"name": "Packet Tracer", "score": 85, "weight": 0.3}, {"name": "Midterm", "score": 80, "weight": 0.3}, {"name": "Final", "score": 81, "weight": 0.4}]),
+            ("fall-2025", "MAT 251", "Probability and Mathematical Statistics", 4, [{"name": "Quizzes", "score": 85, "weight": 0.3}, {"name": "Midterm", "score": 80, "weight": 0.3}, {"name": "Final", "score": 84, "weight": 0.4}]),
+            ("fall-2025", "MDE 294", "Physical Education 4", 1, [{"name": "Fitness Test", "score": 97, "weight": 1.0}]),
+            ("fall-2025", "MDE 116", "Kazakh / Russian language 2", 3, [{"name": "Midterm", "score": 95, "weight": 0.4}, {"name": "Final", "score": 97, "weight": 0.6}]),
+
+            # Semester 5 (spring-2026) - Current Active Semester!
+            ("spring-2026", "CSS 280", "Industrial practice 1", 1, [{"name": "Practice Journal", "score": 88, "weight": 1.0}]),
+            ("spring-2026", "INF 381", "Project Management information system", 3, [{"name": "Agile Sprints", "score": 88, "weight": 0.25}, {"name": "Midterm", "score": 82, "weight": 0.35}, {"name": "Jira Project", "score": 90, "weight": 0.40}]),
+            ("spring-2026", "MDE 153", "Module of Social and Political Knowledge (Cultural Studies)", 1, [{"name": "Essay", "score": 95, "weight": 1.0}]),
+            ("spring-2026", "MDE 154", "Module of Social and Political Knowledge (Psychology)", 1, [{"name": "Colloquium", "score": 91, "weight": 1.0}]),
+            ("spring-2026", "CSS 216", "Elective 2 (Software Engineering)", 3, [{"name": "Homework", "score": 88, "weight": 0.30}, {"name": "Midterm", "score": 82, "weight": 0.30}, {"name": "Team Project", "score": 90, "weight": 0.40}]),
+            ("spring-2026", "MDE 162", "General education elective", 3, [{"name": "Presentations", "score": 92, "weight": 0.30}, {"name": "Midterm", "score": 84, "weight": 0.30}, {"name": "Term Paper", "score": 88, "weight": 0.40}]),
+            ("spring-2026", "INF 318", "Elective 3 (Cloud Architecture & Systems)", 3, [{"name": "Cloud Labs", "score": 95, "weight": 0.35}, {"name": "Midterm", "score": 88, "weight": 0.30}, {"name": "DevOps Project", "score": 92, "weight": 0.35}]),
+            ("spring-2026", "INF 376", "Elective 4 (Business Intelligence & Data Analysis)", 3, [{"name": "SQL Analytics", "score": 92, "weight": 0.30}, {"name": "Midterm", "score": 85, "weight": 0.30}, {"name": "BI Dashboard", "score": 90, "weight": 0.40}]),
+
+            # Semester 6 (fall-2026) - Upcoming
+            ("fall-2026", "INF 395", "Advanced project for information systems", 3, []),
+            ("fall-2026", "MDE 151", "Module of Social and Political Knowledge (Political Science)", 1, [{"name": "Evaluation", "score": 87, "weight": 1.0}]),
+            ("fall-2026", "MDE 152", "Module of Social and Political Knowledge (Sociology)", 1, [{"name": "Evaluation", "score": 87, "weight": 1.0}]),
+            ("fall-2026", "MDE 172", "Philosophy", 3, [{"name": "Midterm", "score": 70, "weight": 0.4}, {"name": "Final", "score": 75, "weight": 0.6}]),
+            ("fall-2026", "INF 3XX", "Elective 6 (Mobile Application Development)", 3, []),
+            ("fall-2026", "XXX 3XX", "Elective 7 (Big Data Technologies)", 3, []),
+            ("fall-2026", "XXX XXX", "Elective 8 (Cybersecurity Principles)", 3, []),
+
+            # Semester 7 (spring-2027)
+            ("spring-2027", "CSS 410", "Research tools and methods", 3, []),
+            ("spring-2027", "CSS 483", "Industrial practice 2", 3, []),
+            ("spring-2027", "INF 4XX", "Elective 9 (Enterprise Information Systems)", 3, []),
+            ("spring-2027", "XXX 4XX", "Elective 11 (DevOps & CI/CD Pipelines)", 3, []),
+            ("spring-2027", "XXX 4XX", "Elective 10 (Machine Learning for Business)", 3, []),
+            ("spring-2027", "XXX XXX", "Elective 12 (IT Auditing & Governance)", 3, []),
+
+            # Semester 8 (fall-2027)
+            ("fall-2027", "INF 420", "Senior Project", 5, []),
+            ("fall-2027", "INF 459", "Startups Theory", 3, []),
+            ("fall-2027", "CSS XXX", "Diploma thesis / Comprehensive exam", 6, []),
+            ("fall-2027", "XXX xxx", "Industrial practice 3 / Pre-graduation practice", 3, []),
+        ]
+
+        for student_id in ["240103118", "240103188", "240103120"]:
+            for sem, code, name, cr, comps in curriculum:
+                mod_comps = []
+                if comps:
+                    for c in comps:
+                        s = c["score"]
+                        if student_id == "240103188" and s is not None:
+                            s = max(65, min(98, s - 2))
+                        elif student_id == "240103120" and s is not None:
+                            s = max(55, min(95, s - 6))
+                        mod_comps.append({"name": c["name"], "score": s, "weight": c["weight"]})
+
+                cur = db.execute(
+                    "INSERT INTO grades (student_id, semester, course, code, credits, components_json) VALUES (?, ?, ?, ?, ?, ?)",
+                    (student_id, sem, name, code, cr, json.dumps(mod_comps))
+                )
+                gid = cur.lastrowid
+                if sem == "spring-2026" and mod_comps:
+                    for c in mod_comps:
+                        db.execute(
+                            "INSERT INTO assessment_items (grade_id, name, score, max_score, weight, feedback) VALUES (?, ?, ?, ?, ?, ?)",
+                            (gid, c["name"], c["score"], 100, c["weight"], "Good progress on coursework")
+                        )
+
+        # Seed attendance sessions for semester 5 (spring-2026) courses
+        s5_courses = [
+            ("CSS 280", 10, 0),
+            ("INF 381", 19, 1),
+            ("MDE 153", 15, 0),
+            ("MDE 154", 15, 0),
+            ("CSS 216", 19, 1),
+            ("MDE 162", 17, 1),
+            ("INF 318", 20, 0),
+            ("INF 376", 16, 2),
+        ]
+        att_rows = []
+        for student_id in ["240103118", "240103188", "240103120"]:
+            for code, present_cnt, absent_cnt in s5_courses:
+                total = present_cnt + absent_cnt
+                for i in range(total):
+                    status = "present" if i < present_cnt else "absent"
+                    if student_id == "240103120" and i == present_cnt - 1 and absent_cnt > 0:
+                        status = "absent"
+                    att_rows.append((student_id, code, f"2026-02-{i+1:02d}", status))
+        db.executemany("INSERT INTO attendance_sessions (student_id, course_code, session_date, status) VALUES (?, ?, ?, ?)", att_rows)
+
+        # Seed realistic notifications for 240103118
+        notifs = [
+            ("240103118", "info", "Semester 5 Enrollment Confirmed", "Enrolled in 8 courses for Information Systems (IS-2024).", "INF 381", 0, "2026-02-01T09:00:00Z"),
+            ("240103118", "info", "Sprint 2 Review Notice", "Project Management (INF 381): Sprint 2 deliverables and Jira backlog submission deadline is Friday.", "INF 381", 0, "2026-03-01T10:00:00Z"),
+            ("240103118", "low_attendance", "Attendance Alert", "Business Intelligence (INF 376): 2 unexcused absences recorded. 2 remaining before drop limit!", "INF 376", 0, "2026-03-15T12:00:00Z"),
+            ("240103120", "low_attendance", "Attendance Warning", "Business Intelligence (INF 376): 3 unexcused absences recorded. 1 remaining!", "INF 376", 0, "2026-03-12T11:00:00Z"),
+        ]
+        db.executemany("INSERT INTO notifications (student_id, type, title, detail, course, read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", notifs)
 
     def _seed(self, db):
         users = [
@@ -192,10 +322,10 @@ class SQLiteRepository:
             ("teacher@univ.edu", "u-teacher"),
         ])
         db.executemany("INSERT INTO students VALUES (?, ?, ?, ?, ?)", [
-            ("240103118", "Meirzhan", "CS-2024 (SDU)", 88.5, 1),
-            ("240103188", "Student 240103188", "CS-2024 (SDU)", 84.5, 1),
-            ("240103120", "Dias Omar", "CS-2024 (SDU)", 71.0, 2),
-            ("s3", "Sara Kim", "CS-2024 (SDU)", 96.0, 0),
+            ("240103118", "Meirzhan", "Information Systems (IS-2024)", 96.0, 0),
+            ("240103188", "Student 240103188", "Information Systems (IS-2024)", 94.0, 0),
+            ("240103120", "Dias Omar", "Information Systems (IS-2024)", 88.0, 1),
+            ("s3", "Sara Kim", "Information Systems (IS-2024)", 97.0, 0),
         ])
         db.executemany("INSERT INTO teacher_scope VALUES (?, ?)", [
             ("t1", "240103118"),
@@ -203,83 +333,7 @@ class SQLiteRepository:
             ("t1", "240103120"),
             ("t1", "s3")
         ])
-        db.executemany("INSERT INTO semesters VALUES (?, ?)", [
-            ("spring-2026", "Spring 2026"),
-            ("fall-2025", "Fall 2025")
-        ])
-        grades = [
-            ("240103118", "spring-2026", "Algorithms & Data Structures", "CSS 301", 4, [{"name":"Homework","score":88,"weight":.25},{"name":"Midterm","score":82,"weight":.35},{"name":"Project","score":92,"weight":.40}]),
-            ("240103118", "spring-2026", "Linear Algebra", "MAT 210", 3, [{"name":"Problems","score":70,"weight":.30},{"name":"Midterm","score":64,"weight":.30},{"name":"Final","score":75,"weight":.40}]),
-            ("240103118", "spring-2026", "Database Systems", "CSS 240", 4, [{"name":"Labs","score":95,"weight":.35},{"name":"Midterm","score":90,"weight":.30},{"name":"Project","score":93,"weight":.35}]),
-            ("240103118", "spring-2026", "Web Development", "CSS 260", 3, [{"name":"Practice","score":92,"weight":.30},{"name":"Midterm","score":86,"weight":.30},{"name":"Project","score":94,"weight":.40}]),
-            ("240103118", "fall-2025", "Object-Oriented Programming (Java)", "CSS 202", 4, [{"name":"Coursework","score":84,"weight":1.0}]),
-            ("240103120", "spring-2026", "Algorithms & Data Structures", "CSS 301", 4, [{"name":"Homework","score":62,"weight":.25},{"name":"Midterm","score":54,"weight":.35},{"name":"Project","score":68,"weight":.40}]),
-            ("240103120", "spring-2026", "Linear Algebra", "MAT 210", 3, [{"name":"Problems","score":74,"weight":.30},{"name":"Midterm","score":70,"weight":.30},{"name":"Final","score":78,"weight":.40}]),
-            ("240103120", "spring-2026", "Database Systems", "CSS 240", 4, [{"name":"Labs","score":82,"weight":.35},{"name":"Midterm","score":76,"weight":.30},{"name":"Project","score":80,"weight":.35}]),
-            ("240103120", "fall-2025", "Object-Oriented Programming (Java)", "CSS 202", 4, [{"name":"Coursework","score":72,"weight":1.0}]),
-            ("s3", "spring-2026", "Algorithms & Data Structures", "CSS 301", 4, [{"name":"Coursework","score":94,"weight":1.0}]),
-        ]
-        db.executemany("INSERT INTO grades (student_id, semester, course, code, credits, components_json) VALUES (?, ?, ?, ?, ?, ?)", [(*row[:5], json.dumps(row[5])) for row in grades])
-        
-        # Seed attendance_sessions
-        s1_att = []
-        for i in range(20):
-            status = 'present' if i < 19 else 'excused'
-            s1_att.append(("240103118", "CSS 301", f"2026-01-{i+1:02d}", status))
-        for i in range(18):
-            status = 'present' if i < 15 else 'absent'
-            s1_att.append(("240103118", "MAT 210", f"2026-01-{i+1:02d}", status))
-        for i in range(19):
-            s1_att.append(("240103118", "CSS 240", f"2026-01-{i+1:02d}", "present"))
-        for i in range(16):
-            status = 'present' if i < 15 else 'absent'
-            s1_att.append(("240103118", "CSS 260", f"2026-01-{i+1:02d}", status))
-
-        s2_att = []
-        for i in range(20):
-            status = 'present' if i < 16 else 'absent'
-            s2_att.append(("240103120", "CSS 301", f"2026-01-{i+1:02d}", status))
-        for i in range(18):
-            status = 'present' if i < 16 else 'absent'
-            s2_att.append(("240103120", "MAT 210", f"2026-01-{i+1:02d}", status))
-        for i in range(19):
-            status = 'present' if i < 17 else 'absent'
-            s2_att.append(("240103120", "CSS 240", f"2026-01-{i+1:02d}", status))
-            
-        s3_att = [("s3", "CSS 301", "2026-01-01", "present")]
-        db.executemany("INSERT INTO attendance_sessions (student_id, course_code, session_date, status) VALUES (?, ?, ?, ?)", s1_att + s2_att + s3_att)
-
-        # Seed assessment_items for 240103118 (grades 1, 2, 3, 4)
-        items = [
-            (1, "HW1", 90, 100, 0.25/3, None),
-            (1, "HW2", 84, 100, 0.25/3, None),
-            (1, "HW3", 90, 100, 0.25/3, None),
-            (1, "Midterm", 82, 100, 0.35, "Great dynamic programming solutions"),
-            (1, "Project", 92, 100, 0.40, "Full graph algorithms implementation"),
-            (2, "Problems", 70, 100, 0.30, None),
-            (2, "Midterm", 64, 100, 0.30, "Review matrix operations and eigenvectors"),
-            (2, "Final", 75, 100, 0.40, None),
-            (3, "Labs", 95, 100, 0.35, None),
-            (3, "Midterm", 90, 100, 0.30, None),
-            (3, "Project", 93, 100, 0.35, "Very clean 3NF database schema"),
-            (4, "Practice", 92, 100, 0.30, None),
-            (4, "Midterm", 86, 100, 0.30, None),
-            (4, "Project", 94, 100, 0.40, "Responsive frontend and REST integration"),
-            # Seed items for 240103120 (grade 6)
-            (6, "Homework", 62, 100, 0.25, None),
-            (6, "Midterm", 54, 100, 0.35, "Review tree traversals and recursion"),
-            (6, "Project", 68, 100, 0.40, "Good attempt, improve time complexity"),
-        ]
-        db.executemany("INSERT INTO assessment_items (grade_id, name, score, max_score, weight, feedback) VALUES (?, ?, ?, ?, ?, ?)", items)
-
-        # Seed notifications
-        notifs = [
-            ("240103118", "low_grade", "Low Grade Alert", "Your MAT 210 midterm score is 64%. Tutoring recommended.", "Linear Algebra", 0, "2026-03-01T10:00:00Z"),
-            ("240103118", "low_attendance", "Attendance Alert", "Your MAT 210 attendance has 3 unexcused absences. 1 remaining before course drop limit!", "Linear Algebra", 0, "2026-03-05T12:00:00Z"),
-            ("240103120", "low_grade", "Academic Warning", "Your CSS 301 midterm score is 54% (below the 60% threshold).", "Algorithms & Data Structures", 0, "2026-03-02T10:00:00Z"),
-            ("240103120", "low_attendance", "Attendance Warning", "Your CSS 301 attendance has 4 unexcused absences. Automatic drop risk!", "Algorithms & Data Structures", 0, "2026-03-10T09:00:00Z"),
-        ]
-        db.executemany("INSERT INTO notifications (student_id, type, title, detail, course, read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", notifs)
+        self._seed_is_curriculum(db)
 
     def authenticate(self, identifier: str, password: str):
         with self.connect() as db:

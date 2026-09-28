@@ -145,10 +145,25 @@ def require_role(role: Role):
     return dependency
 
 
+def resolve_semester(sem: str) -> str:
+    aliases = {
+        "sem-1": "spring-2024",
+        "sem-2": "fall-2024",
+        "sem-3": "spring-2025",
+        "sem-4": "fall-2025",
+        "sem-5": "spring-2026",
+        "sem-6": "fall-2026",
+        "sem-7": "spring-2027",
+        "sem-8": "fall-2027",
+    }
+    return aliases.get(sem, sem)
+
+
 def student_courses(student_id: str, semester: str) -> list[dict]:
+    resolved = resolve_semester(semester)
     result = []
     for row in repo.grades:
-        if row["student_id"] == student_id and row["semester"] == semester:
+        if row["student_id"] == student_id and (row["semester"] == resolved or row["semester"] == semester):
             score = weighted_score(row)
             result.append({**row, "score": score, "data_status": "available" if score is not None else "insufficient_data"})
     return result
@@ -476,8 +491,19 @@ def student_grades(user: Annotated[User, Depends(require_role("student"))], seme
 
 
 @app.get("/api/student/grades/breakdown")
-def grades_breakdown(user: Annotated[User, Depends(require_role("student"))], course_code: str):
-    course = next((c for c in student_courses(user.student_id, "spring-2026") if c["code"] == course_code), None)
+def grades_breakdown(user: Annotated[User, Depends(require_role("student"))], course_code: str, semester: Optional[str] = None):
+    course = None
+    target_sem = resolve_semester(semester) if semester else None
+    for g in repo.grades:
+        if g["student_id"] == user.student_id and g["code"] == course_code:
+            if target_sem is None or g["semester"] == target_sem or g["semester"] == semester:
+                course = {**g, "score": weighted_score(g)}
+                break
+    if not course:
+        for g in repo.grades:
+            if g["student_id"] == user.student_id and g["code"] == course_code:
+                course = {**g, "score": weighted_score(g)}
+                break
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
         
@@ -485,19 +511,6 @@ def grades_breakdown(user: Annotated[User, Depends(require_role("student"))], co
     components = []
     
     if items:
-        # Group by component name (e.g., Homework, Midterm, Project, etc.) based on course.components
-        comp_map = {c["name"]: {"name": c["name"], "weight": c["weight"], "score": c["score"], "max_score": 100, "percentage": c["score"], "feedback": None, "posted_at": None, "items": []} for c in course["components"]}
-        for item in items:
-            comp_name = item["name"] # Or some mapping, here assuming items match components or are grouped.
-            # In seed, we have HW1, HW2 under Homework? No, the seed says HW1, HW2, HW3. The component might be Homework. 
-            # We'll just list items. The requirements say:
-            # {"name": "Homework", "weight": 0.25, "score": 86, "max_score": 100, "percentage": 86.0, "feedback": null, "posted_at": null, "items": [...]},
-            # Wait, if items don't map perfectly, we just use the items as components directly if no grouping is obvious.
-            # Or group them by item name? Actually, if HW1, HW2, HW3 are items, they are not components.
-            # Let's map items to components by checking if the item name starts with component name, or just use the items directly.
-            pass
-            
-        # Simplified: if we have items, we return them. Let's just create components from items.
         for item in items:
             components.append({
                 "name": item["name"],
@@ -506,11 +519,11 @@ def grades_breakdown(user: Annotated[User, Depends(require_role("student"))], co
                 "max_score": item["max_score"],
                 "percentage": round(item["score"] / item["max_score"] * 100, 1),
                 "feedback": item["feedback"],
-                "posted_at": item["posted_at"],
+                "posted_at": item.get("posted_at"),
                 "items": []
             })
     else:
-        for c in course["components"]:
+        for c in course.get("components", []):
             components.append({
                 "name": c["name"],
                 "weight": c["weight"],
@@ -525,14 +538,14 @@ def grades_breakdown(user: Annotated[User, Depends(require_role("student"))], co
     return {
         "course": course["course"],
         "code": course["code"],
-        "weighted_score": course["score"],
+        "weighted_score": course.get("score"),
         "components": components
     }
 
 
 @app.post("/api/student/grades/whatif")
 def grades_whatif(user: Annotated[User, Depends(require_role("student"))], req: WhatIfRequest):
-    course = next((c for c in student_courses(user.student_id, "spring-2026") if c["code"] == req.course_code), None)
+    course = next((c for c in repo.grades if c["student_id"] == user.student_id and c["code"] == req.course_code), None)
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
         
@@ -547,7 +560,7 @@ def grades_whatif(user: Annotated[User, Depends(require_role("student"))], req: 
             else:
                 other_score += (item["score"] / item["max_score"] * 100) * item["weight"]
     else:
-        for c in course["components"]:
+        for c in course.get("components", []):
             if c["name"] == req.component_name:
                 target_comp = c
             else:

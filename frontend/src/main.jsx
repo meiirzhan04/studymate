@@ -948,9 +948,8 @@ function WhatIfModal({ token, courses, onClose }) {
 }
 
 /* ─── DASHBOARD TAB ──────────────────────────────────────────────── */
-function DashboardTab({ token, user }) {
+function DashboardTab({ token, user, semester = 'spring-2026', setSemester, semestersList = [] }) {
   const [data, setData]         = useState(null)
-  const [semester, setSemester] = useState('spring-2026')
   const [error, setError]       = useState('')
   const [showWhatIf, setShowWhatIf] = useState(false)
 
@@ -997,20 +996,32 @@ function DashboardTab({ token, user }) {
             )}
           </div>
           <h1>Good {timeOfDay()}, {user.name.split(' ')[0]}</h1>
-          <p>{fmtDate()} · Your current semester, distilled into what needs attention.</p>
+          <p>{fmtDate()} · Academic profile: Information Systems (IS-2024)</p>
         </div>
-        <select value={semester} onChange={e => setSemester(e.target.value)}>
-          <option value="spring-2026">Spring 2026</option>
-          <option value="fall-2025">Fall 2025</option>
+        <select value={semester} onChange={e => setSemester && setSemester(e.target.value)}>
+          {semestersList && semestersList.length ? (
+            semestersList.map(s => <option key={s.id} value={s.id}>{s.label}</option>)
+          ) : (
+            <>
+              <option value="spring-2026">Semester 5 (Spring 2026) · Current (IP)</option>
+              <option value="fall-2025">Semester 4 (Fall 2025)</option>
+              <option value="spring-2025">Semester 3 (Spring 2025)</option>
+              <option value="fall-2024">Semester 2 (Fall 2024)</option>
+              <option value="spring-2024">Semester 1 (Spring 2024)</option>
+              <option value="fall-2026">Semester 6 (Fall 2026) · Upcoming</option>
+              <option value="spring-2027">Semester 7 (Spring 2027) · Upcoming</option>
+              <option value="fall-2027">Semester 8 (Spring 2028) · Senior Project</option>
+            </>
+          )}
         </select>
       </header>
 
       {/* Stat cards */}
       <section className="metrics page-fade">
         <Metric
-          label="Current GPA"
-          value={gpa?.toFixed(2)}
-          detail="Demo 4-point scale · policy pending"
+          label="Term GPA"
+          value={gpa != null ? gpa.toFixed(2) : '—'}
+          detail="SDU 4.00 Grade Scale"
           icon={<Icons.Target size={20} color="var(--primary)" />}
           colorClass="metric-purple"
         />
@@ -1024,7 +1035,7 @@ function DashboardTab({ token, user }) {
         <Metric
           label="Completed Credits"
           value={data.credits}
-          detail={`${data.courses.length} active courses`}
+          detail={`${data.courses.length} courses enrolled`}
           icon={<Icons.Book size={20} color="var(--success)" />}
           colorClass="metric-green"
         />
@@ -1053,36 +1064,48 @@ function DashboardTab({ token, user }) {
             </div>
           </div>
 
-          <ResponsiveContainer width="100%" height={240}>
-            <BarChart data={data.courses} barCategoryGap="32%">
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F3F4F6" />
-              <XAxis dataKey="code" tick={{ fontSize: 12, fill: '#9CA3AF', fontWeight: 600 }} axisLine={false} tickLine={false} />
-              <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: '#9CA3AF' }} axisLine={false} tickLine={false} />
-              <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(91,79,207,.06)' }} />
-              <Bar dataKey="score" fill="#5B4FCF" radius={[6, 6, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          {data.courses.length ? (
+            <>
+              <ResponsiveContainer width="100%" height={240}>
+                <BarChart data={data.courses} barCategoryGap="32%">
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F3F4F6" />
+                  <XAxis dataKey="code" tick={{ fontSize: 12, fill: '#9CA3AF', fontWeight: 600 }} axisLine={false} tickLine={false} />
+                  <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: '#9CA3AF' }} axisLine={false} tickLine={false} />
+                  <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(91,79,207,.06)' }} />
+                  <Bar dataKey="score" fill="#5B4FCF" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
 
-          {/* Course rows */}
-          <div className="course-list">
-            {data.courses.map(c => (
-              <div key={c.code} className="course-row">
-                <span>
-                  <b>{c.course}</b>
-                  <small>{c.code} · {c.credits} cr</small>
-                </span>
-                <div className="course-progress-wrap">
-                  <div className="progress-bar-track">
-                    <div className="progress-bar-fill" style={{ width: `${c.progress ?? 0}%` }} title={`Attendance: ${c.progress ?? 0}%`} />
+              {/* Course rows */}
+              <div className="course-list">
+                {data.courses.map(c => (
+                  <div key={c.code} className="course-row">
+                    <span>
+                      <b>{c.course}</b>
+                      <small>{c.code} · {c.credits} cr</small>
+                    </span>
+                    <div className="course-progress-wrap">
+                      <div className="progress-bar-track">
+                        <div className="progress-bar-fill" style={{ width: `${c.progress ?? 0}%` }} title={`Attendance: ${c.progress ?? 0}%`} />
+                      </div>
+                      <span className="progress-label">Att. {c.progress ?? 0}%</span>
+                    </div>
+                    <span className={`score-chip-inline ${c.score == null ? 'chip-none' : c.score >= 75 ? 'chip-good' : 'chip-warn'}`}>
+                      {c.score == null ? 'In Progress' : `${c.score}%`}
+                    </span>
                   </div>
-                  <span className="progress-label">Att. {c.progress ?? 0}%</span>
-                </div>
-                <span className={`score-chip-inline ${c.score == null ? 'chip-none' : c.score >= 75 ? 'chip-good' : 'chip-warn'}`}>
-                  {c.score == null ? 'N/A' : `${c.score}%`}
-                </span>
+                ))}
               </div>
-            ))}
-          </div>
+            </>
+          ) : (
+            <div style={{ padding: '48px 24px', textAlign: 'center', background: 'var(--paper)', borderRadius: 12, margin: '20px 0' }}>
+              <div style={{ display: 'inline-flex', padding: 14, background: '#EEF2FF', borderRadius: '50%', marginBottom: 12, color: 'var(--primary)' }}>
+                <Icons.Book size={28} />
+              </div>
+              <h3 style={{ margin: '0 0 6px', fontSize: '1rem', color: '#111827' }}>No courses for this semester</h3>
+              <p style={{ margin: 0, fontSize: '.85rem', color: 'var(--text-secondary)' }}>You are not registered in any courses for this term yet.</p>
+            </div>
+          )}
         </article>
 
         {/* Right column */}
@@ -1130,7 +1153,7 @@ function DashboardTab({ token, user }) {
 }
 
 /* ─── GRADES TAB ─────────────────────────────────────────────────── */
-function GradesTab({ token }) {
+function GradesTab({ token, semester = 'spring-2026', setSemester, semestersList = [] }) {
   const [courses, setCourses]       = useState(null)
   const [expanded, setExpanded]     = useState(null)
   const [breakdown, setBreakdown]   = useState({})
@@ -1139,10 +1162,12 @@ function GradesTab({ token }) {
   const [showWhatIf, setShowWhatIf] = useState(false)
 
   useEffect(() => {
-    api('/api/student/grades?semester=spring-2026', token)
-      .then(d => setCourses(d.items))
+    setCourses(null)
+    setExpanded(null)
+    api(`/api/student/grades?semester=${semester}`, token)
+      .then(d => setCourses(d.items || []))
       .catch(e => setError(e.message))
-  }, [token])
+  }, [semester, token])
 
   const toggleRow = async code => {
     if (expanded === code) { setExpanded(null); return }
@@ -1170,7 +1195,7 @@ function GradesTab({ token }) {
     const encodedUri = encodeURI(csvContent)
     const link = document.createElement('a')
     link.setAttribute('href', encodedUri)
-    link.setAttribute('download', 'Academic_Transcript_Spring_2026.csv')
+    link.setAttribute('download', `Academic_Transcript_${semester}.csv`)
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
@@ -1192,7 +1217,23 @@ function GradesTab({ token }) {
           <h1>Grades breakdown</h1>
           <p>Click a course row to expand assessment components.</p>
         </div>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          {semestersList.length > 0 && setSemester && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#fff', border: '1px solid var(--border)', borderRadius: 8, padding: '4px 10px', boxShadow: 'var(--shadow-sm)' }}>
+              <Icons.Calendar size={14} color="var(--primary)" />
+              <select
+                value={semester}
+                onChange={e => setSemester(e.target.value)}
+                style={{ border: 'none', background: 'transparent', fontWeight: 600, fontSize: '.84rem', color: '#111827', cursor: 'pointer', outline: 'none' }}
+              >
+                {semestersList.map(s => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} {s.is_current ? '(Current)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <button className="btn-ghost" onClick={exportGradesCSV} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <Icons.Download size={14} /> Export CSV
           </button>
@@ -1202,52 +1243,64 @@ function GradesTab({ token }) {
         </div>
       </header>
 
-      <article className="panel page-fade" style={{ marginTop: 0 }}>
-        <table className="grades-table">
-          <thead>
-            <tr>
-              <th>Course</th>
-              <th>Code</th>
-              <th>Credits</th>
-              <th>Score</th>
-              <th style={{ width: 40 }} />
-            </tr>
-          </thead>
-          <tbody>
-            {courses.map(c => (
-              <React.Fragment key={c.code}>
-                <tr
-                  className={`breakdown-row ${expanded === c.code ? 'expanded' : ''}`}
-                  onClick={() => toggleRow(c.code)}
-                >
-                  <td><b>{c.course}</b></td>
-                  <td><code>{c.code}</code></td>
-                  <td style={{ color: 'var(--text-secondary)', fontWeight: 500 }}>{c.credits}</td>
-                  <td>
-                    <span className={`score-chip ${c.score == null ? '' : c.score >= 75 ? 'chip-good' : 'chip-warn'}`}>
-                      {c.score == null ? '—' : `${c.score}%`}
-                    </span>
-                  </td>
-                  <td className="expand-chevron">{expanded === c.code ? <Icons.ChevronUp size={14} /> : <Icons.ChevronDown size={14} />}</td>
-                </tr>
-
-                {expanded === c.code && (
-                  <tr className="breakdown-detail-row">
-                    <td colSpan={5}>
-                      {loadingBD === c.code
-                        ? <div className="loading-sm">Loading breakdown…</div>
-                        : breakdown[c.code]
-                          ? <BreakdownPanel data={breakdown[c.code]} />
-                          : null
-                      }
+      {courses.length === 0 ? (
+        <div style={{ padding: '60px 24px', textAlign: 'center', background: '#fff', borderRadius: 14, border: '1px solid var(--border)', margin: '20px 0' }}>
+          <div style={{ display: 'inline-flex', padding: 16, background: '#EEF2FF', borderRadius: '50%', marginBottom: 14, color: 'var(--primary)' }}>
+            <Icons.Book size={32} />
+          </div>
+          <h3 style={{ margin: '0 0 8px', fontSize: '1.1rem', color: '#111827' }}>No courses for this semester</h3>
+          <p style={{ margin: '0 auto', maxWidth: 440, fontSize: '.88rem', color: 'var(--text-secondary)' }}>
+            There are no course records for this term yet. Switch to another semester above to view your grades.
+          </p>
+        </div>
+      ) : (
+        <article className="panel page-fade" style={{ marginTop: 0 }}>
+          <table className="grades-table">
+            <thead>
+              <tr>
+                <th>Course</th>
+                <th>Code</th>
+                <th>Credits</th>
+                <th>Score</th>
+                <th style={{ width: 40 }} />
+              </tr>
+            </thead>
+            <tbody>
+              {courses.map(c => (
+                <React.Fragment key={c.code}>
+                  <tr
+                    className={`breakdown-row ${expanded === c.code ? 'expanded' : ''}`}
+                    onClick={() => toggleRow(c.code)}
+                  >
+                    <td><b>{c.course}</b></td>
+                    <td><code>{c.code}</code></td>
+                    <td style={{ color: 'var(--text-secondary)', fontWeight: 500 }}>{c.credits}</td>
+                    <td>
+                      <span className={`score-chip ${c.score == null ? '' : c.score >= 75 ? 'chip-good' : 'chip-warn'}`}>
+                        {c.score == null ? (c.data_status === 'planned' ? 'Planned' : 'In Progress') : `${c.score}%`}
+                      </span>
                     </td>
+                    <td className="expand-chevron">{expanded === c.code ? <Icons.ChevronUp size={14} /> : <Icons.ChevronDown size={14} />}</td>
                   </tr>
-                )}
-              </React.Fragment>
-            ))}
-          </tbody>
-        </table>
-      </article>
+
+                  {expanded === c.code && (
+                    <tr className="breakdown-detail-row">
+                      <td colSpan={5}>
+                        {loadingBD === c.code
+                          ? <div className="loading-sm">Loading breakdown…</div>
+                          : breakdown[c.code]
+                            ? <BreakdownPanel data={breakdown[c.code]} />
+                            : null
+                        }
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              ))}
+            </tbody>
+          </table>
+        </article>
+      )}
 
       {showWhatIf && (
         <WhatIfModal token={token} courses={courses} onClose={() => setShowWhatIf(false)} />
@@ -1272,41 +1325,48 @@ function BreakdownPanel({ data }) {
       </div>
 
       <div className="bd-components">
-        {data.components.map((comp, i) => (
-          <div className="bd-comp-row" key={i}>
-            <div className="bd-comp-info">
-              <b>{comp.name}</b>
-              <span className="bd-weight">Weight: {Math.round(comp.weight * 100)}%</span>
-            </div>
-            <div className="bd-comp-bar-wrap">
-              <div className="progress-bar-track" style={{ flex: 1 }}>
-                <div className="progress-bar-fill"
-                  style={{ width: `${comp.percentage ?? 0}%` }} />
+        {data.components && data.components.length > 0 ? (
+          data.components.map((comp, i) => (
+            <div className="bd-comp-row" key={i}>
+              <div className="bd-comp-info">
+                <b>{comp.name}</b>
+                <span className="bd-weight">Weight: {Math.round(comp.weight * 100)}%</span>
               </div>
-              <span className="bd-pct">{comp.percentage != null ? `${comp.percentage}%` : '—'}</span>
+              <div className="bd-comp-bar-wrap">
+                <div className="progress-bar-track" style={{ flex: 1 }}>
+                  <div className="progress-bar-fill"
+                    style={{ width: `${comp.percentage ?? 0}%` }} />
+                </div>
+                <span className="bd-pct">{comp.percentage != null ? `${comp.percentage}%` : '—'}</span>
+              </div>
+              <div className="bd-comp-score">
+                {comp.score != null ? `${comp.score} / ${comp.max_score}` : '—'}
+              </div>
+              {comp.feedback && <em className="bd-feedback">"{comp.feedback}"</em>}
             </div>
-            <div className="bd-comp-score">
-              {comp.score != null ? `${comp.score} / ${comp.max_score}` : '—'}
-            </div>
-            {comp.feedback && <em className="bd-feedback">"{comp.feedback}"</em>}
+          ))
+        ) : (
+          <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '.85rem' }}>
+            No assessment components or grades recorded for this course yet.
           </div>
-        ))}
+        )}
       </div>
     </div>
   )
 }
 
 /* ─── ATTENDANCE TAB ─────────────────────────────────────────────── */
-function AttendanceTab({ token }) {
+function AttendanceTab({ token, semester = 'spring-2026', setSemester, semestersList = [] }) {
   const [data, setData]           = useState(null)
   const [error, setError]         = useState('')
   const [openSessions, setOpenSessions] = useState({})
 
   useEffect(() => {
-    api('/api/student/attendance', token)
-      .then(d => setData(d.items))
+    setData(null)
+    api(`/api/student/attendance?semester=${semester}`, token)
+      .then(d => setData(d.items || []))
       .catch(e => setError(e.message))
-  }, [token])
+  }, [semester, token])
 
   const toggleSessions = code =>
     setOpenSessions(prev => ({ ...prev, [code]: !prev[code] }))
@@ -1335,83 +1395,111 @@ function AttendanceTab({ token }) {
           <h1>Course attendance</h1>
           <p>Per-course breakdown with session history. You have 4 unexcused absences allowed.</p>
         </div>
+        {semestersList.length > 0 && setSemester && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#fff', border: '1px solid var(--border)', borderRadius: 8, padding: '4px 10px', boxShadow: 'var(--shadow-sm)' }}>
+            <Icons.Calendar size={14} color="var(--primary)" />
+            <select
+              value={semester}
+              onChange={e => setSemester(e.target.value)}
+              style={{ border: 'none', background: 'transparent', fontWeight: 600, fontSize: '.84rem', color: '#111827', cursor: 'pointer', outline: 'none' }}
+            >
+              {semestersList.map(s => (
+                <option key={s.id} value={s.id}>
+                  {s.name} {s.is_current ? '(Current)' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </header>
 
-      <div className="att-grid page-fade">
-        {data.map(item => (
-          <article key={item.code} className={`course-card att-card-${item.status}`}>
-            {/* Card header */}
-            <div className="card-top">
-              <div>
-                <b className="card-course-name">{item.course}</b>
-                <code className="card-code">{item.code}</code>
+      {data.length === 0 ? (
+        <div style={{ padding: '60px 24px', textAlign: 'center', background: '#fff', borderRadius: 14, border: '1px solid var(--border)', margin: '20px 0' }}>
+          <div style={{ display: 'inline-flex', padding: 16, background: '#EEF2FF', borderRadius: '50%', marginBottom: 14, color: 'var(--primary)' }}>
+            <Icons.Calendar size={32} />
+          </div>
+          <h3 style={{ margin: '0 0 8px', fontSize: '1.1rem', color: '#111827' }}>No attendance sessions recorded</h3>
+          <p style={{ margin: '0 auto', maxWidth: 440, fontSize: '.88rem', color: 'var(--text-secondary)' }}>
+            There are no classroom attendance logs recorded for this semester yet. Switch to another semester above or check back once classes are held.
+          </p>
+        </div>
+      ) : (
+        <div className="att-grid page-fade">
+          {data.map(item => (
+            <article key={item.code} className={`course-card att-card-${item.status}`}>
+              {/* Card header */}
+              <div className="card-top">
+                <div>
+                  <b className="card-course-name">{item.course}</b>
+                  <code className="card-code">{item.code}</code>
+                </div>
+                <StatusBadge status={item.status} />
               </div>
-              <StatusBadge status={item.status} />
-            </div>
 
-            {/* Ring + counts */}
-            <div className="card-ring-row">
-              <ProgressRing
-                pct={item.attendance_pct}
-                color={ringColor(item.status)}
-                size={110}
-                stroke={10}
-              />
-              <div className="card-counts">
-                <div className="count-row">
-                  <span className="dot dot-present" />Present <b>{item.present}</b>
-                </div>
-                <div className="count-row">
-                  <span className="dot dot-excused" />Excused <b>{item.excused}</b>
-                </div>
-                <div className="count-row">
-                  <span className="dot dot-absent"  />Absent  <b>{item.absent}</b>
-                </div>
-                <div className="count-row unexcused-row">
-                  Remaining unexcused: <b className={item.remaining_unexcused <= 1 ? 'text-danger' : ''}>{item.remaining_unexcused}</b>
-                  <small> / {item.unexcused_limit}</small>
+              {/* Ring + counts */}
+              <div className="card-ring-row">
+                <ProgressRing
+                  pct={item.attendance_pct}
+                  color={ringColor(item.status)}
+                  size={110}
+                  stroke={10}
+                />
+                <div className="card-counts">
+                  <div className="count-row">
+                    <span className="dot dot-present" />Present <b>{item.present}</b>
+                  </div>
+                  <div className="count-row">
+                    <span className="dot dot-excused" />Excused <b>{item.excused}</b>
+                  </div>
+                  <div className="count-row">
+                    <span className="dot dot-absent"  />Absent  <b>{item.absent}</b>
+                  </div>
+                  <div className="count-row unexcused-row">
+                    Remaining unexcused: <b className={item.remaining_unexcused <= 1 ? 'text-danger' : ''}>{item.remaining_unexcused}</b>
+                    <small> / {item.unexcused_limit}</small>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* Warning strip */}
-            {item.remaining_unexcused <= 2 && (
-              <div className={`warning-strip ${item.remaining_unexcused <= 1 ? 'danger' : ''}`} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Icons.AlertTriangle size={15} />
-                <span>
-                  {item.remaining_unexcused <= 0
-                    ? 'Critical: Automatic course drop limit reached!'
-                    : item.remaining_unexcused === 1
-                      ? 'Critical: Only 1 absence remaining before automatic course drop'
-                      : `Warning: ${item.remaining_unexcused} absences remaining before automatic course drop`
-                  }
-                </span>
-              </div>
-            )}
-
-            {/* Session toggle */}
-            <button className="session-toggle" onClick={() => toggleSessions(item.code)} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-              {openSessions[item.code] ? (
-                <><Icons.ChevronUp size={14} /> Hide sessions</>
-              ) : (
-                <><Icons.ChevronDown size={14} /> Show {item.sessions.length} sessions</>
+              {/* Warning strip */}
+              {item.remaining_unexcused <= 2 && (
+                <div className={`warning-strip ${item.remaining_unexcused <= 1 ? 'danger' : ''}`} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Icons.AlertTriangle size={15} />
+                  <span>
+                    {item.remaining_unexcused <= 0
+                      ? 'Critical: Automatic course drop limit reached!'
+                      : item.remaining_unexcused === 1
+                        ? 'Critical: Only 1 absence remaining before automatic course drop'
+                        : `Warning: ${item.remaining_unexcused} absences remaining before automatic course drop`
+                    }
+                  </span>
+                </div>
               )}
-            </button>
 
-            {openSessions[item.code] && (
-              <ul className="session-history">
-                {item.sessions.map((s, i) => (
-                  <li key={i} className={`session-item session-${s.status}`}>
-                    <span>{sessionIcon(s.status)}</span>
-                    <span style={{ fontWeight: 500 }}>{s.date}</span>
-                    <span className="session-label">{s.status}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </article>
-        ))}
-      </div>
+              {/* Session toggle */}
+              <button className="session-toggle" onClick={() => toggleSessions(item.code)} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                {openSessions[item.code] ? (
+                  <><Icons.ChevronUp size={14} /> Hide sessions</>
+                ) : (
+                  <><Icons.ChevronDown size={14} /> Show {item.sessions.length} sessions</>
+                )}
+              </button>
+
+              {openSessions[item.code] && (
+                <ul className="session-history">
+                  {item.sessions.map((s, i) => (
+                    <li key={i} className={`session-item session-${s.status}`}>
+                      <span>{sessionIcon(s.status)}</span>
+                      <span style={{ fontWeight: 500 }}>{s.date}</span>
+                      <span className="session-label">{s.status}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </article>
+          ))}
+        </div>
+      )}
     </>
   )
 }
@@ -1665,13 +1753,26 @@ function AvatarMenu({ user, logout, token, onUpdateUser }) {
 
 /* ─── STUDENT SHELL (tabs + nav) ─────────────────────────────────── */
 function Student({ token, user, logout, onUpdateUser }) {
-  const [tab, setTab]       = useState('dashboard')
-  const [unread, setUnread] = useState(0)
+  const [tab, setTab]                 = useState('dashboard')
+  const [unread, setUnread]           = useState(0)
+  const [semester, setSemester]       = useState('spring-2026')
+  const [semestersList, setSemestersList] = useState([])
 
   // Eagerly fetch unread count for bell badge
   useEffect(() => {
     api('/api/student/notifications', token)
       .then(d => setUnread(d.unread_count))
+      .catch(() => {})
+  }, [token])
+
+  // Fetch available semesters list
+  useEffect(() => {
+    api('/api/semesters', token)
+      .then(d => {
+        if (d.items && d.items.length) {
+          setSemestersList(d.items)
+        }
+      })
       .catch(() => {})
   }, [token])
 
@@ -1729,9 +1830,9 @@ function Student({ token, user, logout, onUpdateUser }) {
       </nav>
 
       <main className="content">
-        {tab === 'dashboard'  && <DashboardTab  token={token} user={user} />}
-        {tab === 'grades'     && <GradesTab     token={token} />}
-        {tab === 'attendance' && <AttendanceTab token={token} />}
+        {tab === 'dashboard'  && <DashboardTab  token={token} user={user} semester={semester} setSemester={setSemester} semestersList={semestersList} />}
+        {tab === 'grades'     && <GradesTab     token={token} semester={semester} setSemester={setSemester} semestersList={semestersList} />}
+        {tab === 'attendance' && <AttendanceTab token={token} semester={semester} setSemester={setSemester} semestersList={semestersList} />}
         {tab === 'alerts'     && <AlertsTab     token={token} onUnreadChange={setUnread} onSelectTab={setTab} />}
       </main>
     </div>
