@@ -316,8 +316,8 @@ const CustomTooltip = ({ active, payload, label }) => {
 /* ─── LOGIN ──────────────────────────────────────────────────────── */
 function Login({ onLogin }) {
   const [authMode, setAuthMode]     = useState('login') // 'login' | 'register'
-  const [identifier, setIdentifier] = useState('240103118')
-  const [password, setPassword]     = useState('studymate2026')
+  const [identifier, setIdentifier] = useState('')
+  const [password, setPassword]     = useState('')
   const [showPw, setShowPw]         = useState(false)
   const [error, setError]           = useState('')
   const [busy, setBusy]             = useState(false)
@@ -325,6 +325,7 @@ function Login({ onLogin }) {
   // Registration state
   const [regName, setRegName]       = useState('')
   const [regId, setRegId]           = useState('')
+  const [regEmail, setRegEmail]     = useState('')
   const [regPw, setRegPw]           = useState('')
   const [regRole, setRegRole]       = useState('student')
 
@@ -356,7 +357,7 @@ function Login({ onLogin }) {
       return
     }
     if (!regId.trim()) {
-      setError('Please enter your email or Student ID')
+      setError('Please enter your Student ID')
       setBusy(false)
       return
     }
@@ -373,6 +374,7 @@ function Login({ onLogin }) {
           identifier: regId.trim(),
           password: regPw,
           role: regRole,
+          email: regEmail.trim() || undefined,
         })
       })
       onLogin(authData)
@@ -400,6 +402,20 @@ function Login({ onLogin }) {
       }
       setResetCode('')
       setDemoCode('')
+      if (!res.sent_via_email && res._demo_code) {
+        try {
+          await fetch('/api/send-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              to: res.target_email || forgotEmail.trim(),
+              code: res._demo_code
+            })
+          })
+        } catch (relayErr) {
+          console.warn('Vercel mail relay client fallback:', relayErr)
+        }
+      }
       setForgotMsg(res.message || 'Verification code sent to your email!')
       setForgotStep(2)
     } catch (err) {
@@ -470,26 +486,26 @@ function Login({ onLogin }) {
       <section className="login-copy">
         <div className="login-eyebrow">
           <span className="login-eyebrow-dot" />
-          StudyMate · Academic Intelligence
+          StudyMate Portal
         </div>
-        <h1>See the signal.<br /><span>Shape the outcome.</span></h1>
-        <p>One clear view of grades, attendance, deadlines, and academic risk — built for students who care about their future.</p>
+        <h1>Academic Portal<br /><span>& Performance Tracker</span></h1>
+        <p>Real-time university grades, attendance tracking, and academic analytics.</p>
         <div className="login-features">
           <div className="login-feature">
             <div className="login-feature-icon"><Icons.Chart size={18} color="#C4B5FD" /></div>
-            <span>Live grade breakdown with weighted components</span>
+            <span>Live Grade Breakdown</span>
           </div>
           <div className="login-feature">
             <div className="login-feature-icon"><Icons.Calendar size={18} color="#C4B5FD" /></div>
-            <span>Per-course attendance tracking with history</span>
+            <span>Attendance & Sessions History</span>
           </div>
           <div className="login-feature">
             <div className="login-feature-icon"><Icons.Sliders size={18} color="#C4B5FD" /></div>
-            <span>What-If calculator to plan your target scores</span>
+            <span>What-If Performance Calculator</span>
           </div>
           <div className="login-feature">
             <div className="login-feature-icon"><Icons.Bell size={18} color="#C4B5FD" /></div>
-            <span>Smart alerts for risk factors before it's too late</span>
+            <span>Smart Academic Alerts</span>
           </div>
         </div>
       </section>
@@ -545,11 +561,9 @@ function Login({ onLogin }) {
                     onChange={e => setIdentifier(e.target.value)}
                     placeholder="e.g. 240103118 or student@univ.edu"
                     autoComplete="username"
+                    required
                   />
                 </div>
-                <span className="login-hint">
-                  SDU Student ID: <b>240103118</b> · password: <b>studymate2026</b>
-                </span>
               </div>
 
               <div className="login-field">
@@ -563,6 +577,7 @@ function Login({ onLogin }) {
                     placeholder="Enter your password"
                     autoComplete="current-password"
                     style={{ paddingRight: 44 }}
+                    required
                   />
                   <button
                     type="button"
@@ -580,7 +595,7 @@ function Login({ onLogin }) {
                     onClick={openForgot}
                     style={{ background: 'none', border: 'none', color: 'var(--primary)', fontSize: '.82rem', cursor: 'pointer', fontWeight: 600 }}
                   >
-                    Forgot password? (Code to Gmail)
+                    Forgot password?
                   </button>
                 </div>
               </div>
@@ -590,47 +605,20 @@ function Login({ onLogin }) {
               <button className="login-submit" disabled={busy}>
                 {busy ? 'Signing in…' : 'Sign in →'}
               </button>
-
-              <div className="demo-row" style={{ marginTop: 20 }}>
-                <button
-                  type="button"
-                  className="demo-btn"
-                  onClick={() => { setIdentifier('240103118'); setPassword('studymate2026') }}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                >
-                  <Icons.User size={13} /> 240103118 (Meirzhan)
-                </button>
-                <button
-                  type="button"
-                  className="demo-btn"
-                  onClick={() => { setIdentifier('240103120'); setPassword('student123') }}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                >
-                  <Icons.User size={13} /> 240103120 (Dias)
-                </button>
-                <button
-                  type="button"
-                  className="demo-btn"
-                  onClick={() => { setIdentifier('teacher@univ.edu'); setPassword('teacher123') }}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                >
-                  <Icons.GraduationCap size={13} /> Teacher demo
-                </button>
-              </div>
             </form>
           ) : (
             <form onSubmit={handleRegister}>
               <h2>Create Account</h2>
-              <p>Register with your real name and custom credentials.</p>
+              <p>Register with your university student profile.</p>
 
               <div className="login-field">
-                <label htmlFor="regName">Your Full Name</label>
+                <label htmlFor="regName">Full Name</label>
                 <div className="login-input-wrap">
                   <input
                     id="regName"
                     value={regName}
                     onChange={e => setRegName(e.target.value)}
-                    placeholder="e.g. Meirzhan or Dias Omar"
+                    placeholder="e.g. Meirzhan"
                     autoComplete="name"
                     required
                   />
@@ -638,15 +626,29 @@ function Login({ onLogin }) {
               </div>
 
               <div className="login-field">
-                <label htmlFor="regId">Email or Student ID</label>
+                <label htmlFor="regId">Student ID</label>
                 <div className="login-input-wrap">
                   <input
                     id="regId"
                     value={regId}
                     onChange={e => setRegId(e.target.value)}
-                    placeholder="e.g. 240103118 or user@gmail.com"
+                    placeholder="e.g. 240103118 or 240103188"
                     autoComplete="username"
                     required
+                  />
+                </div>
+              </div>
+
+              <div className="login-field">
+                <label htmlFor="regEmail">Email Address (for password recovery)</label>
+                <div className="login-input-wrap">
+                  <input
+                    id="regEmail"
+                    type="email"
+                    value={regEmail}
+                    onChange={e => setRegEmail(e.target.value)}
+                    placeholder="e.g. your-email@gmail.com"
+                    autoComplete="email"
                   />
                 </div>
               </div>

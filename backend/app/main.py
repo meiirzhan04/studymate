@@ -9,6 +9,7 @@ import os
 import secrets
 import smtplib
 import time
+import urllib.request
 from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -35,6 +36,7 @@ class LoginRequest(BaseModel):
 class RegisterRequest(BaseModel):
     name: str = Field(min_length=2, max_length=100)
     identifier: str = Field(min_length=3, max_length=120)
+    email: Optional[str] = None
     password: str = Field(min_length=6, max_length=200)
     role: Role = "student"
     cohort: Optional[str] = "CS-2026"
@@ -232,11 +234,26 @@ def reset_password(req: ResetPasswordRequest):
 
 
 def send_gmail_code(to_email: str, code: str) -> tuple[bool, str]:
+    # 1. Attempt delivery via Vercel HTTPS endpoint (bypasses Render outbound SMTP port blocking)
+    try:
+        relay_url = os.getenv("EMAIL_RELAY_URL", "https://studymate-mu-smoky.vercel.app/api/send-email")
+        req_payload = json.dumps({"to": to_email, "code": code}).encode("utf-8")
+        h_req = urllib.request.Request(
+            relay_url,
+            data=req_payload,
+            headers={"Content-Type": "application/json", "User-Agent": "StudyMate-Backend/1.0"}
+        )
+        with urllib.request.urlopen(h_req, timeout=12) as resp:
+            if resp.status == 200:
+                return True, "Email sent successfully via HTTPS Mailer"
+    except Exception:
+        pass
+
+    # 2. Direct SMTP fallback (SSL on 465 or STARTTLS on 587)
     smtp_user = os.getenv("GMAIL_USER") or os.getenv("SMTP_USER") or "amirzhanmeirzhan5@gmail.com"
     raw_pass = os.getenv("GMAIL_APP_PASSWORD") or os.getenv("SMTP_PASSWORD") or "ewsa dvkt cjdw cjlt"
     smtp_pass = raw_pass.replace(" ", "").strip()
     smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
 
     if not smtp_user or not smtp_pass:
         return False, "SMTP credentials not configured"
@@ -298,11 +315,19 @@ def send_gmail_code(to_email: str, code: str) -> tuple[bool, str]:
         msg.attach(MIMEText(text, "plain", "utf-8"))
         msg.attach(MIMEText(html, "html", "utf-8"))
 
-        with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:
-            server.starttls()
-            server.login(smtp_user, smtp_pass)
-            server.send_message(msg)
-        return True, "Email sent successfully"
+        import ssl
+        context = ssl.create_default_context()
+        try:
+            with smtplib.SMTP_SSL(smtp_host, 465, context=context, timeout=8) as server:
+                server.login(smtp_user, smtp_pass)
+                server.send_message(msg)
+            return True, "Email sent successfully via SMTP SSL"
+        except Exception:
+            with smtplib.SMTP(smtp_host, 587, timeout=8) as server:
+                server.starttls()
+                server.login(smtp_user, smtp_pass)
+                server.send_message(msg)
+            return True, "Email sent successfully via SMTP TLS"
     except Exception as exc:
         return False, str(exc)
 
@@ -315,7 +340,8 @@ def register(req: RegisterRequest):
             identifier=req.identifier,
             password=req.password,
             role=req.role,
-            cohort=req.cohort or "CS-2026"
+            cohort=req.cohort or "CS-2026",
+            email=req.email
         )
     except ValueError as err:
         raise HTTPException(status_code=400, detail=str(err))
@@ -336,10 +362,12 @@ def send_reset_code(req: SendCodeRequest):
 
     target_email = clean_email
     if "@" not in clean_email:
-        if clean_email in ("240103118", "240103188") or user.get("id") == "u-240103118":
+        found_email = repo.get_email_for_user(user["id"])
+        if clean_email == "240103118":
             target_email = "amirzhanmeirzhan5@gmail.com"
+        elif clean_email == "240103188":
+            target_email = found_email if (found_email and "@sdu.edu.kz" not in found_email and "@univ.edu" not in found_email) else "amirzhanmeirzhan5@gmail.com"
         else:
-            found_email = repo.get_email_for_user(user["id"])
             target_email = found_email or "amirzhanmeirzhan5@gmail.com"
 
     code = f"{secrets.randbelow(900000) + 100000}"

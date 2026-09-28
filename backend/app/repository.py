@@ -129,11 +129,25 @@ class SQLiteRepository:
                     new_h = hash_password("studymate2026", user_240["password_salt"])
                     db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_h, user_240["id"]))
                     db.execute("INSERT OR IGNORE INTO login_identifiers (identifier, user_id) VALUES (?, ?)", ("amirzhanmeirzhan5@gmail.com", user_240["id"]))
-                    db.execute("INSERT OR IGNORE INTO login_identifiers (identifier, user_id) VALUES (?, ?)", ("240103188", user_240["id"]))
+
+                # Ensure friend 240103188 has a dedicated student account
+                has_188 = db.execute("SELECT COUNT(*) FROM users WHERE student_id = '240103188'").fetchone()[0]
+                if has_188 == 0:
+                    salt_188 = "student188-salt"
+                    h_188 = hash_password("studymate2026", salt_188)
+                    db.execute("INSERT OR IGNORE INTO users VALUES (?, ?, ?, ?, ?, ?, ?)",
+                               ("u-240103188", "Student 240103188", "student", "240103188", None, salt_188, h_188))
+                    db.execute("DELETE FROM login_identifiers WHERE identifier = '240103188'")
+                    db.execute("INSERT INTO login_identifiers VALUES (?, ?)", ("240103188", "u-240103188"))
+                    db.execute("INSERT OR IGNORE INTO login_identifiers VALUES (?, ?)", ("240103188@sdu.edu.kz", "u-240103188"))
+                    db.execute("INSERT OR IGNORE INTO students VALUES (?, ?, ?, ?, ?)",
+                               ("240103188", "Student 240103188", "CS-2024 (SDU)", 84.5, 1))
+                    db.execute("INSERT OR IGNORE INTO teacher_scope VALUES (?, ?)", ("t1", "240103188"))
 
     def _seed(self, db):
         users = [
             ("u-240103118", "Meirzhan", "student", "240103118", None, "student1-salt", "studymate2026"),
+            ("u-240103188", "Student 240103188", "student", "240103188", None, "student188-salt", "studymate2026"),
             ("u-240103120", "Dias Omar", "student", "240103120", None, "student2-salt", "student123"),
             ("u-teacher", "Dr. Nurlan Bek", "teacher", None, "t1", "teacher-salt", "teacher123"),
         ]
@@ -143,11 +157,12 @@ class SQLiteRepository:
         )
         db.executemany("INSERT INTO login_identifiers VALUES (?, ?)", [
             ("240103118", "u-240103118"),
-            ("240103188", "u-240103118"),
             ("amirzhanmeirzhan5@gmail.com", "u-240103118"),
             ("240103118@sdu.edu.kz", "u-240103118"),
             ("student@univ.edu", "u-240103118"),
             ("STU-001", "u-240103118"),
+            ("240103188", "u-240103188"),
+            ("240103188@sdu.edu.kz", "u-240103188"),
             ("240103120", "u-240103120"),
             ("240103120@sdu.edu.kz", "u-240103120"),
             ("STU-002", "u-240103120"),
@@ -155,11 +170,13 @@ class SQLiteRepository:
         ])
         db.executemany("INSERT INTO students VALUES (?, ?, ?, ?, ?)", [
             ("240103118", "Meirzhan", "CS-2024 (SDU)", 88.5, 1),
+            ("240103188", "Student 240103188", "CS-2024 (SDU)", 84.5, 1),
             ("240103120", "Dias Omar", "CS-2024 (SDU)", 71.0, 2),
             ("s3", "Sara Kim", "CS-2024 (SDU)", 96.0, 0),
         ])
         db.executemany("INSERT INTO teacher_scope VALUES (?, ?)", [
             ("t1", "240103118"),
+            ("t1", "240103188"),
             ("t1", "240103120"),
             ("t1", "s3")
         ])
@@ -417,13 +434,18 @@ class SQLiteRepository:
         with self.connect() as db:
             return [dict(r) for r in db.execute("SELECT * FROM interventions WHERE student_id = ? ORDER BY id DESC", (student_id,)).fetchall()]
 
-    def create_user(self, name: str, identifier: str, password: str, role: str = "student", cohort: str = "CS-2026"):
+    def create_user(self, name: str, identifier: str, password: str, role: str = "student", cohort: str = "CS-2026", email: str | None = None):
         clean_id = identifier.strip()
         clean_name = name.strip()
         with self.connect() as db:
             existing = db.execute("SELECT user_id FROM login_identifiers WHERE identifier = ? COLLATE NOCASE", (clean_id,)).fetchone()
             if existing:
                 raise ValueError("An account with this email or Student ID already exists.")
+            if email and email.strip():
+                clean_email = email.strip()
+                existing_email = db.execute("SELECT user_id FROM login_identifiers WHERE identifier = ? COLLATE NOCASE", (clean_email,)).fetchone()
+                if existing_email:
+                    raise ValueError("An account with this email address already exists.")
 
             user_id = f"u-{secrets.token_hex(6)}"
             salt = secrets.token_hex(8)
@@ -445,6 +467,8 @@ class SQLiteRepository:
                 db.execute("INSERT INTO login_identifiers (identifier, user_id) VALUES (?, ?)", (clean_id, user_id))
                 if clean_id.lower() != student_id.lower():
                     db.execute("INSERT OR IGNORE INTO login_identifiers (identifier, user_id) VALUES (?, ?)", (student_id, user_id))
+                if email and email.strip():
+                    db.execute("INSERT OR IGNORE INTO login_identifiers (identifier, user_id) VALUES (?, ?)", (email.strip(), user_id))
 
                 db.execute(
                     "INSERT INTO students (id, name, cohort, attendance, missing_assignments) VALUES (?, ?, ?, ?, ?)",

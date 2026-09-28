@@ -143,7 +143,58 @@ def test_profile_name_update():
     assert res.status_code == 200
     assert res.json()["name"] == "Meirzhan Updated"
 
-    # Restore name
-    client.put("/api/me/profile", headers=auth(t), json={"name": "Meirzhan"})
+def test_reset_code_flow_user_118():
+    # 1. Request reset code
+    res = client.post("/api/auth/send-reset-code", json={"email": "240103118"})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is True
+    assert "_demo_code" in data
+    code = data["_demo_code"]
+
+    # 2. Reset password using the code
+    res_reset = client.post("/api/auth/verify-reset-code", json={
+        "email": "240103118",
+        "code": code,
+        "new_password": "newpassword118"
+    })
+    assert res_reset.status_code == 200
+
+    # 3. Authenticate with new password
+    res_login = client.post("/api/auth/login", json={"identifier": "240103118", "password": "newpassword118"})
+    assert res_login.status_code == 200
+
+    # 4. Restore original password
+    client.post("/api/auth/send-reset-code", json={"email": "240103118"})
+    from app.main import repo
+    repo.reset_password_with_code("240103118", repo.connect().execute("SELECT code FROM password_reset_codes WHERE email = '240103118'").fetchone()["code"], "studymate2026")
 
 
+def test_reset_code_flow_friend_188():
+    # 1. Request reset code for 240103188
+    res = client.post("/api/auth/send-reset-code", json={"email": "240103188"})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is True
+    code = data["_demo_code"]
+
+    # 2. Reset password
+    res_reset = client.post("/api/auth/verify-reset-code", json={
+        "email": "240103188",
+        "code": code,
+        "new_password": "newpassword188"
+    })
+    assert res_reset.status_code == 200
+
+    # 3. Authenticate with new password
+    res_login = client.post("/api/auth/login", json={"identifier": "240103188", "password": "newpassword188"})
+    assert res_login.status_code == 200
+
+    # 4. Restore original password
+    from app.main import repo
+    from app.repository import hash_password
+    salt = repo.connect().execute("SELECT password_salt FROM users WHERE student_id = '240103188'").fetchone()["password_salt"]
+    h = hash_password("studymate2026", salt)
+    with repo.connect() as db:
+        db.execute("UPDATE users SET password_hash = ? WHERE student_id = '240103188'", (h,))
+        db.commit()
