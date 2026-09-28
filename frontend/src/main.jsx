@@ -161,13 +161,25 @@ const CustomTooltip = ({ active, payload, label }) => {
 
 /* ─── LOGIN ──────────────────────────────────────────────────────── */
 function Login({ onLogin }) {
+  const [authMode, setAuthMode]     = useState('login') // 'login' | 'register'
   const [identifier, setIdentifier] = useState('240103118')
-  const [password, setPassword]     = useState('Student2028')
+  const [password, setPassword]     = useState('studymate2026')
   const [showPw, setShowPw]         = useState(false)
   const [error, setError]           = useState('')
   const [busy, setBusy]             = useState(false)
+
+  // Registration state
+  const [regName, setRegName]       = useState('')
+  const [regId, setRegId]           = useState('')
+  const [regPw, setRegPw]           = useState('')
+  const [regRole, setRegRole]       = useState('student')
+
+  // Forgot password / 6-digit code modal state
   const [showForgot, setShowForgot] = useState(false)
+  const [forgotStep, setForgotStep] = useState(1) // 1: enter email, 2: enter 6-digit code & new password
   const [forgotEmail, setForgotEmail] = useState('')
+  const [resetCode, setResetCode]   = useState('')
+  const [demoCode, setDemoCode]     = useState('')
   const [newPw, setNewPw]           = useState('')
   const [confirmPw, setConfirmPw]   = useState('')
   const [showNewPw, setShowNewPw]   = useState(false)
@@ -182,10 +194,70 @@ function Login({ onLogin }) {
     finally { setBusy(false) }
   }
 
-  const handleResetPassword = async e => {
+  const handleRegister = async e => {
+    e.preventDefault(); setBusy(true); setError('')
+    if (!regName.trim()) {
+      setError('Please enter your full name')
+      setBusy(false)
+      return
+    }
+    if (!regId.trim()) {
+      setError('Please enter your email or Student ID')
+      setBusy(false)
+      return
+    }
+    if (regPw.length < 6) {
+      setError('Password must be at least 6 characters')
+      setBusy(false)
+      return
+    }
+    try {
+      const authData = await api('/api/auth/register', null, {
+        method: 'POST',
+        body: JSON.stringify({
+          name: regName.trim(),
+          identifier: regId.trim(),
+          password: regPw,
+          role: regRole,
+        })
+      })
+      onLogin(authData)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleSendCode = async e => {
     e?.preventDefault()
     if (!forgotEmail.trim()) {
-      setForgotErr('Please enter your university email or Student ID')
+      setForgotErr('Please enter your registered email or Student ID')
+      return
+    }
+    setForgotBusy(true); setForgotErr(''); setForgotMsg('')
+    try {
+      const res = await api('/api/auth/send-reset-code', null, {
+        method: 'POST',
+        body: JSON.stringify({ email: forgotEmail.trim() })
+      })
+      if (res._demo_code) {
+        setDemoCode(res._demo_code)
+        setResetCode(res._demo_code)
+      }
+      setForgotMsg(res.message || 'Verification code sent to your email!')
+      setForgotStep(2)
+    } catch (err) {
+      setForgotErr(err.message)
+    } finally {
+      setForgotBusy(false)
+    }
+  }
+
+  const handleVerifyAndReset = async e => {
+    e?.preventDefault()
+    if (!resetCode.trim() || resetCode.trim().length !== 6) {
+      setForgotErr('Please enter the 6-digit verification code')
       return
     }
     if (newPw.length < 6) {
@@ -196,21 +268,24 @@ function Login({ onLogin }) {
       setForgotErr('Passwords do not match')
       return
     }
-    setForgotBusy(true)
-    setForgotErr('')
-    setForgotMsg('')
+    setForgotBusy(true); setForgotErr(''); setForgotMsg('')
     try {
-      const res = await api('/api/auth/direct-reset', null, {
+      const res = await api('/api/auth/verify-reset-code', null, {
         method: 'POST',
-        body: JSON.stringify({ email: forgotEmail.trim(), new_password: newPw })
+        body: JSON.stringify({
+          email: forgotEmail.trim(),
+          code: resetCode.trim(),
+          new_password: newPw
+        })
       })
       setForgotMsg(res.message || 'Password updated successfully!')
       setPassword(newPw)
-      if (forgotEmail.includes('@') || forgotEmail.toUpperCase().startsWith('STU') || /^\d+$/.test(forgotEmail.trim())) {
-        setIdentifier(forgotEmail.trim())
-      }
+      setIdentifier(forgotEmail.trim())
       setTimeout(() => {
         setShowForgot(false)
+        setForgotStep(1)
+        setResetCode('')
+        setDemoCode('')
         setNewPw('')
         setConfirmPw('')
         setForgotMsg('')
@@ -224,7 +299,10 @@ function Login({ onLogin }) {
 
   const openForgot = () => {
     setShowForgot(true)
+    setForgotStep(1)
     setForgotEmail(identifier || '')
+    setResetCode('')
+    setDemoCode('')
     setNewPw('')
     setConfirmPw('')
     setForgotMsg('')
@@ -263,69 +341,227 @@ function Login({ onLogin }) {
 
       {/* Right form panel */}
       <div className="login-right">
-        <form className="login-card" onSubmit={submit}>
+        <div className="login-card">
           <div className="login-logo">S</div>
-          <h2>Welcome back</h2>
-          <p>Sign in with your university account.</p>
 
-          <div className="login-field">
-            <label htmlFor="identifier">University email or Student ID</label>
-            <div className="login-input-wrap">
-              <input
-                id="identifier"
-                value={identifier}
-                onChange={e => setIdentifier(e.target.value)}
-                placeholder="e.g. 240103118 or student@univ.edu"
-                autoComplete="username"
-              />
-            </div>
-            <span className="login-hint">
-              SDU Student ID: <b>240103118</b> · password: <b>Student2028</b>
-            </span>
+          {/* Mode Switcher Tabs */}
+          <div style={{ display: 'flex', gap: 6, background: 'var(--paper)', padding: 4, borderRadius: 10, marginBottom: 20 }}>
+            <button
+              type="button"
+              onClick={() => { setAuthMode('login'); setError('') }}
+              style={{
+                flex: 1, padding: '9px 12px', border: 'none', borderRadius: 8,
+                fontWeight: 700, fontSize: '.88rem', cursor: 'pointer',
+                background: authMode === 'login' ? '#fff' : 'transparent',
+                color: authMode === 'login' ? '#111827' : 'var(--text-secondary)',
+                boxShadow: authMode === 'login' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                transition: 'all .2s'
+              }}
+            >
+              Sign In
+            </button>
+            <button
+              type="button"
+              onClick={() => { setAuthMode('register'); setError('') }}
+              style={{
+                flex: 1, padding: '9px 12px', border: 'none', borderRadius: 8,
+                fontWeight: 700, fontSize: '.88rem', cursor: 'pointer',
+                background: authMode === 'register' ? '#fff' : 'transparent',
+                color: authMode === 'register' ? '#111827' : 'var(--text-secondary)',
+                boxShadow: authMode === 'register' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                transition: 'all .2s'
+              }}
+            >
+              Create Account
+            </button>
           </div>
 
-          <div className="login-field">
-            <label htmlFor="password">Password</label>
-            <div className="login-input-wrap">
-              <input
-                id="password"
-                type={showPw ? 'text' : 'password'}
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                placeholder="Enter your password"
-                autoComplete="current-password"
-                style={{ paddingRight: 44 }}
-              />
-              <button
-                type="button"
-                className="pw-toggle"
-                onClick={() => setShowPw(v => !v)}
-                tabIndex={-1}
-                aria-label={showPw ? 'Hide password' : 'Show password'}
-              >
-                {showPw ? '🙈' : '👁️'}
+          {authMode === 'login' ? (
+            <form onSubmit={submit}>
+              <h2>Welcome back</h2>
+              <p>Sign in with your university account or email.</p>
+
+              <div className="login-field">
+                <label htmlFor="identifier">University email or Student ID</label>
+                <div className="login-input-wrap">
+                  <input
+                    id="identifier"
+                    value={identifier}
+                    onChange={e => setIdentifier(e.target.value)}
+                    placeholder="e.g. 240103118 or student@univ.edu"
+                    autoComplete="username"
+                  />
+                </div>
+                <span className="login-hint">
+                  SDU Student ID: <b>240103118</b> · password: <b>studymate2026</b>
+                </span>
+              </div>
+
+              <div className="login-field">
+                <label htmlFor="password">Password</label>
+                <div className="login-input-wrap">
+                  <input
+                    id="password"
+                    type={showPw ? 'text' : 'password'}
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                    placeholder="Enter your password"
+                    autoComplete="current-password"
+                    style={{ paddingRight: 44 }}
+                  />
+                  <button
+                    type="button"
+                    className="pw-toggle"
+                    onClick={() => setShowPw(v => !v)}
+                    tabIndex={-1}
+                    aria-label={showPw ? 'Hide password' : 'Show password'}
+                  >
+                    {showPw ? '🙈' : '👁️'}
+                  </button>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 6 }}>
+                  <button
+                    type="button"
+                    onClick={openForgot}
+                    style={{ background: 'none', border: 'none', color: 'var(--primary)', fontSize: '.82rem', cursor: 'pointer', fontWeight: 600 }}
+                  >
+                    Forgot password? (Code to Gmail)
+                  </button>
+                </div>
+              </div>
+
+              {error && <div className="error">{error}</div>}
+
+              <button className="login-submit" disabled={busy}>
+                {busy ? 'Signing in…' : 'Sign in →'}
               </button>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 6 }}>
-              <button
-                type="button"
-                onClick={openForgot}
-                style={{ background: 'none', border: 'none', color: 'var(--primary)', fontSize: '.8rem', cursor: 'pointer', fontWeight: 600 }}
-              >
-                Forgot password?
+
+              <div className="demo-row" style={{ marginTop: 20 }}>
+                <button
+                  type="button"
+                  className="demo-btn"
+                  onClick={() => { setIdentifier('240103118'); setPassword('studymate2026') }}
+                >
+                  👤 240103118 (Meirzhan)
+                </button>
+                <button
+                  type="button"
+                  className="demo-btn"
+                  onClick={() => { setIdentifier('240103120'); setPassword('student123') }}
+                >
+                  👤 240103120 (Dias)
+                </button>
+                <button
+                  type="button"
+                  className="demo-btn"
+                  onClick={() => { setIdentifier('teacher@univ.edu'); setPassword('teacher123') }}
+                >
+                  🎓 Teacher demo
+                </button>
+              </div>
+            </form>
+          ) : (
+            <form onSubmit={handleRegister}>
+              <h2>Create Account</h2>
+              <p>Register with your real name and custom credentials.</p>
+
+              <div className="login-field">
+                <label htmlFor="regName">Your Full Name</label>
+                <div className="login-input-wrap">
+                  <input
+                    id="regName"
+                    value={regName}
+                    onChange={e => setRegName(e.target.value)}
+                    placeholder="e.g. Meirzhan or Dias Omar"
+                    autoComplete="name"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="login-field">
+                <label htmlFor="regId">Email or Student ID</label>
+                <div className="login-input-wrap">
+                  <input
+                    id="regId"
+                    value={regId}
+                    onChange={e => setRegId(e.target.value)}
+                    placeholder="e.g. 240103118 or user@gmail.com"
+                    autoComplete="username"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="login-field">
+                <label htmlFor="regPw">Password</label>
+                <div className="login-input-wrap">
+                  <input
+                    id="regPw"
+                    type={showPw ? 'text' : 'password'}
+                    value={regPw}
+                    onChange={e => setRegPw(e.target.value)}
+                    placeholder="At least 6 characters"
+                    autoComplete="new-password"
+                    style={{ paddingRight: 44 }}
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="pw-toggle"
+                    onClick={() => setShowPw(v => !v)}
+                    tabIndex={-1}
+                    aria-label={showPw ? 'Hide password' : 'Show password'}
+                  >
+                    {showPw ? '🙈' : '👁️'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="login-field">
+                <label>Account Role</label>
+                <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+                  <button
+                    type="button"
+                    onClick={() => setRegRole('student')}
+                    style={{
+                      flex: 1, padding: '10px 12px', borderRadius: 8,
+                      border: regRole === 'student' ? '2px solid var(--primary)' : '1px solid var(--border)',
+                      background: regRole === 'student' ? '#EEF2FF' : '#fff',
+                      fontWeight: 600, fontSize: '.84rem', cursor: 'pointer',
+                      color: regRole === 'student' ? 'var(--primary)' : 'var(--text-secondary)'
+                    }}
+                  >
+                    🎓 Student
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRegRole('teacher')}
+                    style={{
+                      flex: 1, padding: '10px 12px', borderRadius: 8,
+                      border: regRole === 'teacher' ? '2px solid var(--primary)' : '1px solid var(--border)',
+                      background: regRole === 'teacher' ? '#EEF2FF' : '#fff',
+                      fontWeight: 600, fontSize: '.84rem', cursor: 'pointer',
+                      color: regRole === 'teacher' ? 'var(--primary)' : 'var(--text-secondary)'
+                    }}
+                  >
+                    👨‍🏫 Teacher
+                  </button>
+                </div>
+              </div>
+
+              {error && <div className="error">{error}</div>}
+
+              <button className="login-submit" disabled={busy}>
+                {busy ? 'Creating account…' : 'Create Account →'}
               </button>
-            </div>
-          </div>
+            </form>
+          )}
 
-          {error && <div className="error">{error}</div>}
-
-          <button className="login-submit" disabled={busy}>
-            {busy ? 'Signing in…' : 'Sign in →'}
-          </button>
-
+          {/* 6-Digit Code Reset Modal */}
           {showForgot && (
             <div className="whatif-overlay" onClick={e => e.target === e.currentTarget && setShowForgot(false)}>
-              <div className="whatif-modal">
+              <div className="whatif-modal" style={{ maxWidth: 460 }}>
                 <div className="whatif-header">
                   <div>
                     <span className="eyebrow">Account Recovery</span>
@@ -333,98 +569,123 @@ function Login({ onLogin }) {
                   </div>
                   <button type="button" className="close-btn" onClick={() => setShowForgot(false)}>✕</button>
                 </div>
-                <div className="whatif-body">
-                  <p style={{ color: 'var(--text-secondary)', fontSize: '.88rem', margin: 0 }}>
-                    Enter your registered email or Student ID and set your new password.
-                  </p>
-                  <label>
-                    University Email or Student ID
-                    <input
-                      type="text"
-                      value={forgotEmail}
-                      onChange={e => setForgotEmail(e.target.value)}
-                      placeholder="e.g. student@univ.edu or STU-001"
-                      autoComplete="username"
-                    />
-                  </label>
-                  <label>
-                    New Password
-                    <div style={{ position: 'relative' }}>
-                      <input
-                        type={showNewPw ? 'text' : 'password'}
-                        value={newPw}
-                        onChange={e => setNewPw(e.target.value)}
-                        placeholder="At least 6 characters"
-                        autoComplete="new-password"
-                        style={{ paddingRight: 44, width: '100%' }}
-                      />
+
+                {forgotStep === 1 ? (
+                  <form onSubmit={handleSendCode}>
+                    <div className="whatif-body">
+                      <p style={{ color: 'var(--text-secondary)', fontSize: '.88rem', margin: 0, lineHeight: 1.5 }}>
+                        Enter your registered email address (e.g. your Gmail) or Student ID. We will generate and send a <b>6-digit confirmation code</b>.
+                      </p>
+                      <label>
+                        University Email or Student ID
+                        <input
+                          type="text"
+                          value={forgotEmail}
+                          onChange={e => setForgotEmail(e.target.value)}
+                          placeholder="e.g. 240103118 or user@gmail.com"
+                          autoComplete="email"
+                          autoFocus
+                          required
+                        />
+                      </label>
+                      {forgotErr && <div className="error">{forgotErr}</div>}
+                    </div>
+                    <div className="whatif-footer">
+                      <button type="button" className="btn-ghost" onClick={() => setShowForgot(false)}>Cancel</button>
                       <button
-                        type="button"
-                        className="pw-toggle"
-                        onClick={() => setShowNewPw(v => !v)}
-                        tabIndex={-1}
-                        aria-label={showNewPw ? 'Hide password' : 'Show password'}
+                        type="submit"
+                        className="btn-primary"
+                        disabled={!forgotEmail.trim() || forgotBusy}
                       >
-                        {showNewPw ? '🙈' : '👁️'}
+                        {forgotBusy ? 'Sending code…' : '📨 Send 6-Digit Code'}
                       </button>
                     </div>
-                  </label>
-                  <label>
-                    Confirm New Password
-                    <input
-                      type={showNewPw ? 'text' : 'password'}
-                      value={confirmPw}
-                      onChange={e => setConfirmPw(e.target.value)}
-                      placeholder="Repeat new password"
-                      autoComplete="new-password"
-                    />
-                  </label>
-                  {forgotMsg && (
-                    <div style={{ background: 'var(--success-dim)', color: '#15803D', padding: '12px 14px', borderRadius: 10, fontSize: '.85rem', fontWeight: 600 }}>
-                      ✓ {forgotMsg}
+                  </form>
+                ) : (
+                  <form onSubmit={handleVerifyAndReset}>
+                    <div className="whatif-body">
+                      {forgotMsg && (
+                        <div style={{ background: 'var(--success-dim)', color: '#15803D', padding: '10px 14px', borderRadius: 8, fontSize: '.84rem', fontWeight: 600 }}>
+                          ✓ {forgotMsg}
+                        </div>
+                      )}
+                      {demoCode && (
+                        <div style={{ background: '#EEF2FF', border: '1px dashed #6366F1', color: '#4338CA', padding: '10px 14px', borderRadius: 8, fontSize: '.82rem' }}>
+                          💡 <b>Verification Code:</b> <code style={{ fontSize: '1.2rem', letterSpacing: 4, fontWeight: 800 }}>{demoCode}</code>
+                        </div>
+                      )}
+                      <p style={{ color: 'var(--text-secondary)', fontSize: '.84rem', margin: '4px 0 0' }}>
+                        Check your inbox for <b>{forgotEmail}</b> and enter the 6-digit code:
+                      </p>
+
+                      <label>
+                        6-Digit Verification Code
+                        <input
+                          type="text"
+                          maxLength={6}
+                          value={resetCode}
+                          onChange={e => setResetCode(e.target.value.replace(/\D/g, ''))}
+                          placeholder="123456"
+                          style={{ textAlign: 'center', fontSize: '1.4rem', letterSpacing: 8, fontWeight: 800, fontFamily: 'monospace' }}
+                          autoFocus
+                          required
+                        />
+                      </label>
+
+                      <label>
+                        New Password
+                        <div style={{ position: 'relative' }}>
+                          <input
+                            type={showNewPw ? 'text' : 'password'}
+                            value={newPw}
+                            onChange={e => setNewPw(e.target.value)}
+                            placeholder="At least 6 characters"
+                            autoComplete="new-password"
+                            style={{ paddingRight: 44, width: '100%' }}
+                            required
+                          />
+                          <button
+                            type="button"
+                            className="pw-toggle"
+                            onClick={() => setShowNewPw(v => !v)}
+                            tabIndex={-1}
+                            aria-label={showNewPw ? 'Hide password' : 'Show password'}
+                          >
+                            {showNewPw ? '🙈' : '👁️'}
+                          </button>
+                        </div>
+                      </label>
+
+                      <label>
+                        Confirm New Password
+                        <input
+                          type={showNewPw ? 'text' : 'password'}
+                          value={confirmPw}
+                          onChange={e => setConfirmPw(e.target.value)}
+                          placeholder="Repeat new password"
+                          autoComplete="new-password"
+                          required
+                        />
+                      </label>
+
+                      {forgotErr && <div className="error">{forgotErr}</div>}
                     </div>
-                  )}
-                  {forgotErr && <div className="error">{forgotErr}</div>}
-                </div>
-                <div className="whatif-footer">
-                  <button type="button" className="btn-ghost" onClick={() => setShowForgot(false)}>Cancel</button>
-                  <button
-                    type="button"
-                    className="btn-primary"
-                    disabled={!forgotEmail.trim() || newPw.length < 6 || forgotBusy}
-                    onClick={handleResetPassword}
-                  >
-                    {forgotBusy ? 'Saving…' : '🔒 Save New Password'}
-                  </button>
-                </div>
+                    <div className="whatif-footer">
+                      <button type="button" className="btn-ghost" onClick={() => setForgotStep(1)}>← Back</button>
+                      <button
+                        type="submit"
+                        className="btn-primary"
+                        disabled={resetCode.length !== 6 || newPw.length < 6 || forgotBusy}
+                      >
+                        {forgotBusy ? 'Verifying…' : '🔒 Update Password'}
+                      </button>
+                    </div>
+                  </form>
+                )}
               </div>
             </div>
           )}
-
-          <div className="demo-row">
-            <button
-              type="button"
-              className="demo-btn"
-              onClick={() => { setIdentifier('240103118'); setPassword('Student2028') }}
-            >
-              👤 240103118 (Meirzhan)
-            </button>
-            <button
-              type="button"
-              className="demo-btn"
-              onClick={() => { setIdentifier('240103120'); setPassword('student123') }}
-            >
-              👤 240103120 (Dias)
-            </button>
-            <button
-              type="button"
-              className="demo-btn"
-              onClick={() => { setIdentifier('teacher@univ.edu'); setPassword('teacher123') }}
-            >
-              🎓 Teacher demo
-            </button>
-          </div>
-        </form>
+        </div>
       </div>
     </main>
   )
@@ -1115,15 +1376,42 @@ function AlertsTab({ token, onUnreadChange, onSelectTab }) {
 }
 
 /* ─── AVATAR DROPDOWN ─────────────────────────────────────────────── */
-function AvatarMenu({ user, logout }) {
+function AvatarMenu({ user, logout, token, onUpdateUser }) {
   const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [nameVal, setNameVal] = useState(user?.name || '')
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState('')
   const ref = useRef(null)
 
   useEffect(() => {
-    const handler = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    const handler = e => { if (ref.current && !ref.current.contains(e.target)) { setOpen(false); setEditing(false) } }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [])
+
+  const saveName = async e => {
+    e?.preventDefault()
+    if (!nameVal.trim() || !token) return
+    setSaving(true)
+    try {
+      await api('/api/me/profile', token, {
+        method: 'PUT',
+        body: JSON.stringify({ name: nameVal.trim() })
+      })
+      if (onUpdateUser) onUpdateUser({ ...user, name: nameVal.trim() })
+      setMsg('Saved!')
+      setTimeout(() => {
+        setEditing(false)
+        setMsg('')
+        setOpen(false)
+      }, 800)
+    } catch (err) {
+      alert(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
 
   return (
     <div style={{ position: 'relative' }} ref={ref}>
@@ -1139,8 +1427,49 @@ function AvatarMenu({ user, logout }) {
         <div className="avatar-dropdown">
           <div className="avatar-dropdown-header">
             <b>{user?.name ?? 'User'}</b>
-            <span>{user?.email ?? user?.id ?? ''}</span>
+            <span>{user?.student_id ? `ID: ${user.student_id}` : (user?.email ?? user?.id ?? '')}</span>
           </div>
+
+          {editing ? (
+            <form onSubmit={saveName} style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
+              <label style={{ fontSize: '.75rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>
+                Change Display Name:
+              </label>
+              <input
+                type="text"
+                value={nameVal}
+                onChange={e => setNameVal(e.target.value)}
+                style={{ width: '100%', padding: '6px 8px', fontSize: '.84rem', borderRadius: 6, border: '1px solid var(--border)', marginBottom: 8 }}
+                autoFocus
+              />
+              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  onClick={() => setEditing(false)}
+                  style={{ background: 'none', border: 'none', fontSize: '.78rem', color: 'var(--text-muted)', cursor: 'pointer' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={saving || !nameVal.trim()}
+                  className="btn-primary"
+                  style={{ padding: '4px 10px', fontSize: '.78rem' }}
+                >
+                  {saving ? 'Saving…' : (msg || 'Save')}
+                </button>
+              </div>
+            </form>
+          ) : (
+            <button
+              className="dropdown-item"
+              onClick={() => { setEditing(true); setNameVal(user?.name || '') }}
+              style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+            >
+              ✏️ Edit Name
+            </button>
+          )}
+
           <button
             className="dropdown-item danger"
             onClick={() => { setOpen(false); logout() }}
@@ -1154,7 +1483,7 @@ function AvatarMenu({ user, logout }) {
 }
 
 /* ─── STUDENT SHELL (tabs + nav) ─────────────────────────────────── */
-function Student({ token, user, logout }) {
+function Student({ token, user, logout, onUpdateUser }) {
   const [tab, setTab]       = useState('dashboard')
   const [unread, setUnread] = useState(0)
 
@@ -1213,7 +1542,7 @@ function Student({ token, user, logout }) {
             🔔
             {unread > 0 && <span className="bell-badge">{unread}</span>}
           </button>
-          <AvatarMenu user={user} logout={logout} />
+          <AvatarMenu user={user} logout={logout} token={token} onUpdateUser={onUpdateUser} />
         </div>
       </nav>
 
@@ -1603,6 +1932,13 @@ function App() {
   const login  = s => { localStorage.setItem('session', JSON.stringify(s)); setSession(s) }
   const logout = ()  => { localStorage.removeItem('session'); setSession(null) }
 
+  const updateUser = updatedUser => {
+    if (!session) return
+    const newSession = { ...session, user: updatedUser }
+    try { localStorage.setItem('session', JSON.stringify(newSession)) } catch {}
+    setSession(newSession)
+  }
+
   useEffect(() => {
     const onAuthExpired = () => setSession(null)
     window.addEventListener('auth:expired', onAuthExpired)
@@ -1624,7 +1960,7 @@ function App() {
           </div>
           <div className="nav-center" />
           <div className="nav-right">
-            <AvatarMenu user={session.user} logout={logout} />
+            <AvatarMenu user={session.user} logout={logout} token={session.access_token} onUpdateUser={updateUser} />
           </div>
         </nav>
         <main className="content">
@@ -1634,7 +1970,7 @@ function App() {
     )
   }
 
-  return <Student token={session.access_token} user={session.user} logout={logout} />
+  return <Student token={session.access_token} user={session.user} logout={logout} onUpdateUser={updateUser} />
 }
 
 createRoot(document.getElementById('root')).render(<App />)

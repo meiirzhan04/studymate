@@ -7,8 +7,11 @@ import json
 import math
 import os
 import secrets
+import smtplib
 import time
 from datetime import datetime, timezone
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Annotated, Literal, Optional
 
@@ -29,6 +32,14 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=6, max_length=200)
 
 
+class RegisterRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=100)
+    identifier: str = Field(min_length=3, max_length=120)
+    password: str = Field(min_length=6, max_length=200)
+    role: Role = "student"
+    cohort: Optional[str] = "CS-2026"
+
+
 class WhatIfRequest(BaseModel):
     course_code: str
     target_score: float
@@ -42,6 +53,20 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str
     new_password: str = Field(min_length=6, max_length=200)
+
+
+class SendCodeRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=120)
+
+
+class VerifyCodeRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=120)
+    code: str = Field(min_length=6, max_length=6)
+    new_password: str = Field(min_length=6, max_length=200)
+
+
+class UpdateProfileRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=100)
 
 
 class DirectResetRequest(BaseModel):
@@ -206,12 +231,154 @@ def reset_password(req: ResetPasswordRequest):
     return {"ok": True, "message": "Password has been reset successfully. You can now sign in."}
 
 
+def send_gmail_code(to_email: str, code: str) -> tuple[bool, str]:
+    smtp_user = os.getenv("GMAIL_USER") or os.getenv("SMTP_USER")
+    smtp_pass = os.getenv("GMAIL_APP_PASSWORD") or os.getenv("SMTP_PASSWORD")
+    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+
+    if not smtp_user or not smtp_pass:
+        return False, "SMTP credentials not configured"
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = f"StudyMate - Password Reset Code: {code}"
+        msg["From"] = f"StudyMate <{smtp_user}>"
+        msg["To"] = to_email
+
+        text = (
+            f"Hello!\n\n"
+            f"Your 6-digit password reset verification code is:\n\n"
+            f"  {code}\n\n"
+            f"This code will expire in 15 minutes.\n"
+            f"If you did not request this password reset, please ignore this email.\n\n"
+            f"— StudyMate Academic Team"
+        )
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <style>
+            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: #F9FAFB; margin: 0; padding: 24px; color: #111827; }}
+            .card {{ max-width: 480px; margin: 0 auto; background: #ffffff; border-radius: 16px; padding: 32px; border: 1px solid #E5E7EB; box-shadow: 0 4px 16px rgba(0,0,0,0.06); }}
+            .brand {{ display: flex; align-items: center; gap: 10px; margin-bottom: 24px; }}
+            .logo {{ background: #5B4FCF; color: #fff; width: 36px; height: 36px; border-radius: 10px; font-weight: 800; font-size: 18px; display: inline-flex; align-items: center; justify-content: center; }}
+            .name {{ font-size: 20px; font-weight: 800; color: #111827; }}
+            .code-box {{ text-align: center; margin: 28px 0; background: #EEF2FF; border: 2px dashed #6366F1; border-radius: 12px; padding: 18px 24px; }}
+            .code {{ font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #4F46E5; font-family: monospace; }}
+            .footer {{ margin-top: 24px; padding-top: 18px; border-top: 1px solid #F3F4F6; font-size: 13px; color: #6B7280; text-align: center; }}
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <div class="brand">
+              <span class="logo">S</span>
+              <span class="name">StudyMate</span>
+            </div>
+            <h2 style="margin: 0 0 12px; font-size: 20px; color: #111827;">Password Reset Verification</h2>
+            <p style="margin: 0 0 16px; color: #4B5563; font-size: 15px; line-height: 1.5;">
+              You requested a password reset for your StudyMate account. Use this 6-digit verification code to proceed:
+            </p>
+            <div class="code-box">
+              <div class="code">{code}</div>
+            </div>
+            <p style="margin: 0; color: #6B7280; font-size: 13px;">
+              ⏱ This code is valid for <b>15 minutes</b>. Never share this code with anyone.
+            </p>
+            <div class="footer">
+              If you didn't request this code, you can safely ignore this email.<br>
+              © 2026 StudyMate Portal
+            </div>
+          </div>
+        </body>
+        </html>
+        """
+        msg.attach(MIMEText(text, "plain", "utf-8"))
+        msg.attach(MIMEText(html, "html", "utf-8"))
+
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
+        return True, "Email sent successfully"
+    except Exception as exc:
+        return False, str(exc)
+
+
+@app.post("/api/auth/register")
+def register(req: RegisterRequest):
+    try:
+        user = repo.create_user(
+            name=req.name,
+            identifier=req.identifier,
+            password=req.password,
+            role=req.role,
+            cohort=req.cohort or "CS-2026"
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+    return {
+        "access_token": issue_token(user),
+        "token_type": "bearer",
+        "expires_in": 1800,
+        "user": user
+    }
+
+
+@app.post("/api/auth/send-reset-code")
+def send_reset_code(req: SendCodeRequest):
+    clean_email = req.email.strip()
+    user = repo.get_user_by_email(clean_email)
+    if not user:
+        raise HTTPException(status_code=404, detail="No registered account found with this email or Student ID.")
+
+    code = f"{secrets.randbelow(900000) + 100000}"
+    expires_at = time.time() + 900
+    repo.create_reset_code(clean_email, code, expires_at)
+
+    sent, detail = send_gmail_code(clean_email, code)
+    if sent:
+        return {
+            "ok": True,
+            "message": f"6-digit verification code sent to {clean_email}!",
+            "sent_via_email": True
+        }
+    else:
+        return {
+            "ok": True,
+            "message": "Verification code generated! (Use code below or check email)",
+            "sent_via_email": False,
+            "_demo_code": code,
+            "smtp_note": "Set GMAIL_USER and GMAIL_APP_PASSWORD in environment to deliver directly to Gmail."
+        }
+
+
+@app.post("/api/auth/verify-reset-code")
+def verify_reset_code(req: VerifyCodeRequest):
+    success = repo.reset_password_with_code(req.email, req.code, req.new_password)
+    if not success:
+        raise HTTPException(status_code=400, detail="Invalid or expired 6-digit verification code. Please request a new code.")
+    return {
+        "ok": True,
+        "message": "Password updated successfully! You can now sign in."
+    }
+
+
 @app.post("/api/auth/direct-reset")
 def direct_reset(req: DirectResetRequest):
     success = repo.direct_reset_password(req.email, req.new_password)
     if not success:
         raise HTTPException(status_code=404, detail="User with this email or ID not found")
     return {"ok": True, "message": "Password updated successfully! You can now sign in."}
+
+
+@app.put("/api/me/profile")
+def update_profile(req: UpdateProfileRequest, user: Annotated[User, Depends(current_user)]):
+    success = repo.update_user_name(user.id, req.name)
+    if not success:
+        raise HTTPException(status_code=400, detail="Failed to update profile name")
+    return {"ok": True, "name": req.name.strip()}
 
 
 @app.get("/api/me")

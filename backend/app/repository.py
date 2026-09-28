@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -99,6 +100,13 @@ class SQLiteRepository:
                     expires_at REAL NOT NULL,
                     used INTEGER NOT NULL DEFAULT 0
                 );
+                CREATE TABLE IF NOT EXISTS password_reset_codes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT NOT NULL,
+                    code TEXT NOT NULL,
+                    expires_at REAL NOT NULL,
+                    used INTEGER NOT NULL DEFAULT 0
+                );
                 CREATE TABLE IF NOT EXISTS interventions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     student_id TEXT NOT NULL REFERENCES students(id),
@@ -112,18 +120,18 @@ class SQLiteRepository:
             has_sdu = db.execute("SELECT COUNT(*) FROM users WHERE student_id = '240103118'").fetchone()[0]
             if has_sdu == 0:
                 db.execute("PRAGMA foreign_keys = OFF;")
-                for table in ['notifications', 'assessment_items', 'attendance_sessions', 'login_attempts', 'grades', 'teacher_scope', 'students', 'login_identifiers', 'users', 'semesters', 'password_reset_tokens']:
+                for table in ['notifications', 'assessment_items', 'attendance_sessions', 'login_attempts', 'grades', 'teacher_scope', 'students', 'login_identifiers', 'users', 'semesters', 'password_reset_tokens', 'password_reset_codes', 'interventions']:
                     db.execute(f"DELETE FROM {table}")
                 self._seed(db)
             else:
                 user_240 = db.execute("SELECT id, password_salt FROM users WHERE student_id = '240103118'").fetchone()
                 if user_240:
-                    new_h = hash_password("Student2028", user_240["password_salt"])
+                    new_h = hash_password("studymate2026", user_240["password_salt"])
                     db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_h, user_240["id"]))
 
     def _seed(self, db):
         users = [
-            ("u-240103118", "Meirzhan", "student", "240103118", None, "student1-salt", "Student2028"),
+            ("u-240103118", "Meirzhan", "student", "240103118", None, "student1-salt", "studymate2026"),
             ("u-240103120", "Dias Omar", "student", "240103120", None, "student2-salt", "student123"),
             ("u-teacher", "Dr. Nurlan Bek", "teacher", None, "t1", "teacher-salt", "teacher123"),
         ]
@@ -386,3 +394,161 @@ class SQLiteRepository:
     def get_interventions(self, student_id: str):
         with self.connect() as db:
             return [dict(r) for r in db.execute("SELECT * FROM interventions WHERE student_id = ? ORDER BY id DESC", (student_id,)).fetchall()]
+
+    def create_user(self, name: str, identifier: str, password: str, role: str = "student", cohort: str = "CS-2026"):
+        clean_id = identifier.strip()
+        clean_name = name.strip()
+        with self.connect() as db:
+            existing = db.execute("SELECT user_id FROM login_identifiers WHERE identifier = ? COLLATE NOCASE", (clean_id,)).fetchone()
+            if existing:
+                raise ValueError("An account with this email or Student ID already exists.")
+
+            user_id = f"u-{secrets.token_hex(6)}"
+            salt = secrets.token_hex(8)
+            pw_hash = hash_password(password, salt)
+
+            student_id = None
+            teacher_id = None
+
+            if role == "student":
+                if clean_id.isdigit():
+                    student_id = clean_id
+                else:
+                    student_id = f"STU-{secrets.randbelow(89999) + 10000}"
+
+                db.execute(
+                    "INSERT INTO users (id, name, role, student_id, teacher_id, password_salt, password_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (user_id, clean_name, "student", student_id, None, salt, pw_hash)
+                )
+                db.execute("INSERT INTO login_identifiers (identifier, user_id) VALUES (?, ?)", (clean_id, user_id))
+                if clean_id.lower() != student_id.lower():
+                    db.execute("INSERT OR IGNORE INTO login_identifiers (identifier, user_id) VALUES (?, ?)", (student_id, user_id))
+
+                db.execute(
+                    "INSERT INTO students (id, name, cohort, attendance, missing_assignments) VALUES (?, ?, ?, ?, ?)",
+                    (student_id, clean_name, cohort, 93.5, 0)
+                )
+
+                # Link to teacher t1 scope so student appears in teacher dashboard
+                db.execute("INSERT OR IGNORE INTO teacher_scope (teacher_id, student_id) VALUES (?, ?)", ("t1", student_id))
+
+                # Create realistic starter courses
+                starter_courses = [
+                    (student_id, "spring-2026", "Algorithms & Data Structures", "CSS 301", 4, [
+                        {"name": "Homework", "score": 88, "weight": 0.25},
+                        {"name": "Midterm", "score": 84, "weight": 0.35},
+                        {"name": "Project", "score": 92, "weight": 0.40}
+                    ]),
+                    (student_id, "spring-2026", "Database Systems", "CSS 240", 4, [
+                        {"name": "Labs", "score": 95, "weight": 0.35},
+                        {"name": "Midterm", "score": 88, "weight": 0.30},
+                        {"name": "Project", "score": 91, "weight": 0.35}
+                    ]),
+                    (student_id, "spring-2026", "Web Development", "CSS 260", 3, [
+                        {"name": "Practice", "score": 92, "weight": 0.30},
+                        {"name": "Midterm", "score": 87, "weight": 0.30},
+                        {"name": "Project", "score": 94, "weight": 0.40}
+                    ]),
+                    (student_id, "spring-2026", "Linear Algebra", "MAT 210", 3, [
+                        {"name": "Problems", "score": 80, "weight": 0.30},
+                        {"name": "Midterm", "score": 76, "weight": 0.30},
+                        {"name": "Final", "score": 82, "weight": 0.40}
+                    ]),
+                ]
+                for c_sid, c_sem, c_course, c_code, c_cred, c_comps in starter_courses:
+                    cur = db.execute(
+                        "INSERT INTO grades (student_id, semester, course, code, credits, components_json) VALUES (?, ?, ?, ?, ?, ?)",
+                        (c_sid, c_sem, c_course, c_code, c_cred, json.dumps(c_comps))
+                    )
+                    gid = cur.lastrowid
+                    for comp in c_comps:
+                        db.execute(
+                            "INSERT INTO assessment_items (grade_id, name, score, max_score, weight, feedback) VALUES (?, ?, ?, ?, ?, ?)",
+                            (gid, comp["name"], comp["score"], 100, comp["weight"], "Good progress!")
+                        )
+
+                # Starter attendance sessions
+                for i in range(14):
+                    db.execute(
+                        "INSERT INTO attendance_sessions (student_id, course_code, session_date, status) VALUES (?, ?, ?, ?)",
+                        (student_id, "CSS 301", f"2026-02-{i+1:02d}", "present")
+                    )
+                    db.execute(
+                        "INSERT INTO attendance_sessions (student_id, course_code, session_date, status) VALUES (?, ?, ?, ?)",
+                        (student_id, "CSS 240", f"2026-02-{i+1:02d}", "present")
+                    )
+
+                # Welcome notification
+                now = datetime.now(timezone.utc).isoformat()
+                db.execute(
+                    "INSERT INTO notifications (student_id, type, title, detail, course, read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (student_id, "welcome", f"Welcome to StudyMate, {clean_name}!", "Your personal academic dashboard is ready. Explore your grades, attendance, and What-If calculator.", None, 0, now)
+                )
+
+            else:
+                teacher_id = f"t-{secrets.randbelow(899) + 100}"
+                db.execute(
+                    "INSERT INTO users (id, name, role, student_id, teacher_id, password_salt, password_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (user_id, clean_name, "teacher", None, teacher_id, salt, pw_hash)
+                )
+                db.execute("INSERT INTO login_identifiers (identifier, user_id) VALUES (?, ?)", (clean_id, user_id))
+
+            db.commit()
+            return {"id": user_id, "name": clean_name, "role": role, "student_id": student_id, "teacher_id": teacher_id}
+
+    def update_user_name(self, user_id: str, new_name: str) -> bool:
+        clean_name = new_name.strip()
+        if not clean_name:
+            return False
+        with self.connect() as db:
+            user = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+            if not user:
+                return False
+            db.execute("UPDATE users SET name = ? WHERE id = ?", (clean_name, user_id))
+            if user["student_id"]:
+                db.execute("UPDATE students SET name = ? WHERE id = ?", (clean_name, user["student_id"]))
+            db.commit()
+            return True
+
+    def create_reset_code(self, email: str, code: str, expires_at: float):
+        clean_email = email.strip()
+        with self.connect() as db:
+            db.execute("DELETE FROM password_reset_codes WHERE email = ? COLLATE NOCASE AND used = 0", (clean_email,))
+            db.execute(
+                "INSERT INTO password_reset_codes (email, code, expires_at, used) VALUES (?, ?, ?, 0)",
+                (clean_email, code.strip(), expires_at)
+            )
+            db.commit()
+
+    def verify_reset_code(self, email: str, code: str) -> bool:
+        clean_email = email.strip()
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT * FROM password_reset_codes WHERE email = ? COLLATE NOCASE AND code = ? AND used = 0 AND expires_at >= ?",
+                (clean_email, code.strip(), time.time())
+            ).fetchone()
+            return row is not None
+
+    def reset_password_with_code(self, email: str, code: str, new_password: str) -> bool:
+        clean_email = email.strip()
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT * FROM password_reset_codes WHERE email = ? COLLATE NOCASE AND code = ? AND used = 0 AND expires_at >= ?",
+                (clean_email, code.strip(), time.time())
+            ).fetchone()
+            if not row:
+                return False
+
+            user = self.get_user_by_email(clean_email)
+            if not user:
+                return False
+
+            user_row = db.execute("SELECT password_salt FROM users WHERE id = ?", (user["id"],)).fetchone()
+            if not user_row:
+                return False
+
+            new_h = hash_password(new_password, user_row["password_salt"])
+            db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_h, user["id"]))
+            db.execute("UPDATE password_reset_codes SET used = 1 WHERE id = ?", (row["id"],))
+            db.commit()
+            return True
