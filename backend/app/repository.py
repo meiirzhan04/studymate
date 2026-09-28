@@ -144,6 +144,29 @@ class SQLiteRepository:
                                ("240103188", "Student 240103188", "CS-2024 (SDU)", 84.5, 1))
                     db.execute("INSERT OR IGNORE INTO teacher_scope VALUES (?, ?)", ("t1", "240103188"))
 
+                # Ensure 240103188 has courses and grades
+                has_188_grades = db.execute("SELECT COUNT(*) FROM grades WHERE student_id = '240103188'").fetchone()[0]
+                if has_188_grades == 0:
+                    grades_188 = [
+                        ("240103188", "spring-2026", "Algorithms & Data Structures", "CSS 301", 4, json.dumps([{"name":"Homework","score":85,"weight":.25},{"name":"Midterm","score":80,"weight":.35},{"name":"Project","score":88,"weight":.40}])),
+                        ("240103188", "spring-2026", "Linear Algebra", "MAT 210", 3, json.dumps([{"name":"Problems","score":78,"weight":.30},{"name":"Midterm","score":72,"weight":.30},{"name":"Final","score":82,"weight":.40}])),
+                        ("240103188", "spring-2026", "Database Systems", "CSS 240", 4, json.dumps([{"name":"Labs","score":90,"weight":.35},{"name":"Midterm","score":85,"weight":.30},{"name":"Project","score":89,"weight":.35}])),
+                        ("240103188", "spring-2026", "Web Development", "CSS 260", 3, json.dumps([{"name":"Practice","score":88,"weight":.30},{"name":"Midterm","score":82,"weight":.30},{"name":"Project","score":90,"weight":.40}])),
+                        ("240103188", "fall-2025", "Object-Oriented Programming (Java)", "CSS 202", 4, json.dumps([{"name":"Coursework","score":80,"weight":1.0}])),
+                    ]
+                    db.executemany("INSERT INTO grades (student_id, semester, course, code, credits, components_json) VALUES (?, ?, ?, ?, ?, ?)", grades_188)
+
+                    att_188 = []
+                    for i in range(20):
+                        att_188.append(("240103188", "CSS 301", f"2026-01-{i+1:02d}", "present"))
+                    for i in range(18):
+                        att_188.append(("240103188", "MAT 210", f"2026-01-{i+1:02d}", "present" if i < 16 else "absent"))
+                    for i in range(19):
+                        att_188.append(("240103188", "CSS 240", f"2026-01-{i+1:02d}", "present"))
+                    for i in range(16):
+                        att_188.append(("240103188", "CSS 260", f"2026-01-{i+1:02d}", "present"))
+                    db.executemany("INSERT OR IGNORE INTO attendance_sessions (student_id, course_code, session_date, status) VALUES (?, ?, ?, ?)", att_188)
+
     def _seed(self, db):
         users = [
             ("u-240103118", "Meirzhan", "student", "240103118", None, "student1-salt", "studymate2026"),
