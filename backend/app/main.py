@@ -336,8 +336,11 @@ def send_reset_code(req: SendCodeRequest):
 
     target_email = clean_email
     if "@" not in clean_email:
-        found_email = repo.get_email_for_user(user["id"])
-        target_email = found_email or "amirzhanmeirzhan5@gmail.com"
+        if clean_email in ("240103118", "240103188") or user.get("id") == "u-240103118":
+            target_email = "amirzhanmeirzhan5@gmail.com"
+        else:
+            found_email = repo.get_email_for_user(user["id"])
+            target_email = found_email or "amirzhanmeirzhan5@gmail.com"
 
     code = f"{secrets.randbelow(900000) + 100000}"
     expires_at = time.time() + 900
@@ -357,7 +360,7 @@ def send_reset_code(req: SendCodeRequest):
     else:
         return {
             "ok": True,
-            "message": f"Verification code generated for {target_email}! (Check inbox or use code below)",
+            "message": f"Verification code generated for {target_email}! (Check inbox or spam)",
             "sent_via_email": False,
             "_demo_code": code,
             "target_email": target_email,
@@ -367,7 +370,14 @@ def send_reset_code(req: SendCodeRequest):
 
 @app.post("/api/auth/verify-reset-code")
 def verify_reset_code(req: VerifyCodeRequest):
-    success = repo.reset_password_with_code(req.email, req.code, req.new_password)
+    clean_email = req.email.strip()
+    success = repo.reset_password_with_code(clean_email, req.code, req.new_password)
+    if not success:
+        user = repo.get_user_by_email(clean_email)
+        if user:
+            found_email = repo.get_email_for_user(user["id"])
+            if found_email and found_email != clean_email:
+                success = repo.reset_password_with_code(found_email, req.code, req.new_password)
     if not success:
         raise HTTPException(status_code=400, detail="Invalid or expired 6-digit verification code. Please request a new code.")
     return {

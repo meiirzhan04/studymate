@@ -129,6 +129,7 @@ class SQLiteRepository:
                     new_h = hash_password("studymate2026", user_240["password_salt"])
                     db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_h, user_240["id"]))
                     db.execute("INSERT OR IGNORE INTO login_identifiers (identifier, user_id) VALUES (?, ?)", ("amirzhanmeirzhan5@gmail.com", user_240["id"]))
+                    db.execute("INSERT OR IGNORE INTO login_identifiers (identifier, user_id) VALUES (?, ?)", ("240103188", user_240["id"]))
 
     def _seed(self, db):
         users = [
@@ -142,8 +143,9 @@ class SQLiteRepository:
         )
         db.executemany("INSERT INTO login_identifiers VALUES (?, ?)", [
             ("240103118", "u-240103118"),
-            ("240103118@sdu.edu.kz", "u-240103118"),
+            ("240103188", "u-240103118"),
             ("amirzhanmeirzhan5@gmail.com", "u-240103118"),
+            ("240103118@sdu.edu.kz", "u-240103118"),
             ("student@univ.edu", "u-240103118"),
             ("STU-001", "u-240103118"),
             ("240103120", "u-240103120"),
@@ -331,7 +333,17 @@ class SQLiteRepository:
     def get_email_for_user(self, user_id: str) -> str | None:
         with self.connect() as db:
             row = db.execute(
-                "SELECT identifier FROM login_identifiers WHERE user_id = ? AND identifier LIKE '%@%' LIMIT 1",
+                """SELECT identifier FROM login_identifiers 
+                   WHERE user_id = ? AND identifier LIKE '%@%' 
+                   ORDER BY 
+                       CASE 
+                           WHEN identifier = 'amirzhanmeirzhan5@gmail.com' THEN 0
+                           WHEN identifier LIKE '%@gmail.com' THEN 1 
+                           WHEN identifier NOT LIKE '%@sdu.edu.kz' AND identifier NOT LIKE '%@univ.edu' THEN 2 
+                           ELSE 3 
+                       END, 
+                       rowid DESC 
+                   LIMIT 1""",
                 (user_id,)
             ).fetchone()
             return row["identifier"] if row else None

@@ -395,10 +395,11 @@ function Login({ onLogin }) {
         method: 'POST',
         body: JSON.stringify({ email: forgotEmail.trim() })
       })
-      if (res._demo_code) {
-        setDemoCode(res._demo_code)
-        setResetCode(res._demo_code)
+      if (res.target_email) {
+        setForgotEmail(res.target_email)
       }
+      setResetCode('')
+      setDemoCode('')
       setForgotMsg(res.message || 'Verification code sent to your email!')
       setForgotStep(2)
     } catch (err) {
@@ -769,13 +770,8 @@ function Login({ onLogin }) {
                           <Icons.CheckCircle size={16} /> {forgotMsg}
                         </div>
                       )}
-                      {demoCode && (
-                        <div style={{ background: '#EEF2FF', border: '1px dashed #6366F1', color: '#4338CA', padding: '10px 14px', borderRadius: 8, fontSize: '.82rem', display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <Icons.Lock size={16} /> <span><b>Verification Code:</b> <code style={{ fontSize: '1.2rem', letterSpacing: 4, fontWeight: 800 }}>{demoCode}</code></span>
-                        </div>
-                      )}
                       <p style={{ color: 'var(--text-secondary)', fontSize: '.84rem', margin: '4px 0 0' }}>
-                        Check your inbox for <b>{forgotEmail}</b> and enter the 6-digit code:
+                        Check your inbox for <b>{forgotEmail}</b> (also check Spam/Junk folder) and enter the 6-digit code:
                       </p>
 
                       <label>
@@ -785,7 +781,7 @@ function Login({ onLogin }) {
                           maxLength={6}
                           value={resetCode}
                           onChange={e => setResetCode(e.target.value.replace(/\D/g, ''))}
-                          placeholder="123456"
+                          placeholder="••••••"
                           style={{ textAlign: 'center', fontSize: '1.4rem', letterSpacing: 8, fontWeight: 800, fontFamily: 'monospace' }}
                           autoFocus
                           required
