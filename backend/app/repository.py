@@ -128,6 +128,7 @@ class SQLiteRepository:
                 if user_240:
                     new_h = hash_password("studymate2026", user_240["password_salt"])
                     db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_h, user_240["id"]))
+                    db.execute("INSERT OR IGNORE INTO login_identifiers (identifier, user_id) VALUES (?, ?)", ("amirzhanmeirzhan5@gmail.com", user_240["id"]))
 
     def _seed(self, db):
         users = [
@@ -142,6 +143,7 @@ class SQLiteRepository:
         db.executemany("INSERT INTO login_identifiers VALUES (?, ?)", [
             ("240103118", "u-240103118"),
             ("240103118@sdu.edu.kz", "u-240103118"),
+            ("amirzhanmeirzhan5@gmail.com", "u-240103118"),
             ("student@univ.edu", "u-240103118"),
             ("STU-001", "u-240103118"),
             ("240103120", "u-240103120"),
@@ -325,6 +327,14 @@ class SQLiteRepository:
             if not row:
                 return None
             return {key: row[key] for key in ("id", "name", "role", "student_id", "teacher_id")}
+
+    def get_email_for_user(self, user_id: str) -> str | None:
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT identifier FROM login_identifiers WHERE user_id = ? AND identifier LIKE '%@%' LIMIT 1",
+                (user_id,)
+            ).fetchone()
+            return row["identifier"] if row else None
 
     def create_reset_token(self, user_id: str, token: str, expires_at: float):
         with self.connect() as db:

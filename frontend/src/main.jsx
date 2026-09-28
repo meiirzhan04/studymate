@@ -57,6 +57,160 @@ const api = async (path, token, options = {}) => {
   return body
 }
 
+/* ─── PROFESSIONAL VECTOR ICONS ───────────────────────────────────── */
+const Icons = {
+  Chart: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <line x1="18" y1="20" x2="18" y2="10" />
+      <line x1="12" y1="20" x2="12" y2="4" />
+      <line x1="6" y1="20" x2="6" y2="14" />
+    </svg>
+  ),
+  Calendar: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+      <line x1="16" y1="2" x2="16" y2="6" />
+      <line x1="8" y1="2" x2="8" y2="6" />
+      <line x1="3" y1="10" x2="21" y2="10" />
+    </svg>
+  ),
+  Sliders: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" />
+      <line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" />
+      <line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" />
+      <line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" />
+    </svg>
+  ),
+  Bell: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+      <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+    </svg>
+  ),
+  User: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+      <circle cx="12" cy="7" r="4" />
+    </svg>
+  ),
+  GraduationCap: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <path d="M22 10v6M2 10l10-5 10 5-10 5z" />
+      <path d="M6 12v5c3 3 9 3 12 0v-5" />
+    </svg>
+  ),
+  Eye: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  ),
+  EyeOff: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+      <line x1="1" y1="1" x2="23" y2="23" />
+    </svg>
+  ),
+  Mail: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
+      <polyline points="22,6 12,13 2,6" />
+    </svg>
+  ),
+  Lock: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </svg>
+  ),
+  Check: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  ),
+  CheckCircle: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+      <polyline points="22 4 12 14.01 9 11.01" />
+    </svg>
+  ),
+  AlertTriangle: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+      <line x1="12" y1="9" x2="12" y2="13" />
+      <line x1="12" y1="17" x2="12.01" y2="17" />
+    </svg>
+  ),
+  Download: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" y1="15" x2="12" y2="3" />
+    </svg>
+  ),
+  Search: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <circle cx="11" cy="11" r="8" />
+      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+    </svg>
+  ),
+  Close: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <line x1="18" y1="6" x2="6" y2="18" />
+      <line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
+  ),
+  Target: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <circle cx="12" cy="12" r="10" />
+      <circle cx="12" cy="12" r="6" />
+      <circle cx="12" cy="12" r="2" />
+    </svg>
+  ),
+  Book: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+    </svg>
+  ),
+  Award: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <circle cx="12" cy="8" r="7" />
+      <polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88" />
+    </svg>
+  ),
+  SignOut: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <polyline points="16 17 21 12 16 7" />
+      <line x1="21" y1="12" x2="9" y2="12" />
+    </svg>
+  ),
+  Edit: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+    </svg>
+  ),
+  Send: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <line x1="22" y1="2" x2="11" y2="13" />
+      <polygon points="22 2 15 22 11 13 2 9 22 2" />
+    </svg>
+  ),
+  ChevronDown: ({ size = 16, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <polyline points="6 9 12 15 18 9" />
+    </svg>
+  ),
+  ChevronUp: ({ size = 16, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <polyline points="18 15 12 9 6 15" />
+    </svg>
+  ),
+}
+
 /* ─── Utility ─────────────────────────────────────────────────────── */
 function timeOfDay() {
   const h = new Date().getHours()
@@ -321,19 +475,19 @@ function Login({ onLogin }) {
         <p>One clear view of grades, attendance, deadlines, and academic risk — built for students who care about their future.</p>
         <div className="login-features">
           <div className="login-feature">
-            <div className="login-feature-icon">📊</div>
+            <div className="login-feature-icon"><Icons.Chart size={18} color="#C4B5FD" /></div>
             <span>Live grade breakdown with weighted components</span>
           </div>
           <div className="login-feature">
-            <div className="login-feature-icon">📅</div>
+            <div className="login-feature-icon"><Icons.Calendar size={18} color="#C4B5FD" /></div>
             <span>Per-course attendance tracking with history</span>
           </div>
           <div className="login-feature">
-            <div className="login-feature-icon">⚗️</div>
+            <div className="login-feature-icon"><Icons.Sliders size={18} color="#C4B5FD" /></div>
             <span>What-If calculator to plan your target scores</span>
           </div>
           <div className="login-feature">
-            <div className="login-feature-icon">🔔</div>
+            <div className="login-feature-icon"><Icons.Bell size={18} color="#C4B5FD" /></div>
             <span>Smart alerts for risk factors before it's too late</span>
           </div>
         </div>
@@ -416,7 +570,7 @@ function Login({ onLogin }) {
                     tabIndex={-1}
                     aria-label={showPw ? 'Hide password' : 'Show password'}
                   >
-                    {showPw ? '🙈' : '👁️'}
+                    {showPw ? <Icons.EyeOff size={16} color="var(--text-secondary)" /> : <Icons.Eye size={16} color="var(--text-secondary)" />}
                   </button>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 6 }}>
@@ -441,22 +595,25 @@ function Login({ onLogin }) {
                   type="button"
                   className="demo-btn"
                   onClick={() => { setIdentifier('240103118'); setPassword('studymate2026') }}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
                 >
-                  👤 240103118 (Meirzhan)
+                  <Icons.User size={13} /> 240103118 (Meirzhan)
                 </button>
                 <button
                   type="button"
                   className="demo-btn"
                   onClick={() => { setIdentifier('240103120'); setPassword('student123') }}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
                 >
-                  👤 240103120 (Dias)
+                  <Icons.User size={13} /> 240103120 (Dias)
                 </button>
                 <button
                   type="button"
                   className="demo-btn"
                   onClick={() => { setIdentifier('teacher@univ.edu'); setPassword('teacher123') }}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
                 >
-                  🎓 Teacher demo
+                  <Icons.GraduationCap size={13} /> Teacher demo
                 </button>
               </div>
             </form>
@@ -513,7 +670,7 @@ function Login({ onLogin }) {
                     tabIndex={-1}
                     aria-label={showPw ? 'Hide password' : 'Show password'}
                   >
-                    {showPw ? '🙈' : '👁️'}
+                    {showPw ? <Icons.EyeOff size={16} color="var(--text-secondary)" /> : <Icons.Eye size={16} color="var(--text-secondary)" />}
                   </button>
                 </div>
               </div>
@@ -529,10 +686,11 @@ function Login({ onLogin }) {
                       border: regRole === 'student' ? '2px solid var(--primary)' : '1px solid var(--border)',
                       background: regRole === 'student' ? '#EEF2FF' : '#fff',
                       fontWeight: 600, fontSize: '.84rem', cursor: 'pointer',
-                      color: regRole === 'student' ? 'var(--primary)' : 'var(--text-secondary)'
+                      color: regRole === 'student' ? 'var(--primary)' : 'var(--text-secondary)',
+                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6
                     }}
                   >
-                    🎓 Student
+                    <Icons.User size={15} /> Student
                   </button>
                   <button
                     type="button"
@@ -542,10 +700,11 @@ function Login({ onLogin }) {
                       border: regRole === 'teacher' ? '2px solid var(--primary)' : '1px solid var(--border)',
                       background: regRole === 'teacher' ? '#EEF2FF' : '#fff',
                       fontWeight: 600, fontSize: '.84rem', cursor: 'pointer',
-                      color: regRole === 'teacher' ? 'var(--primary)' : 'var(--text-secondary)'
+                      color: regRole === 'teacher' ? 'var(--primary)' : 'var(--text-secondary)',
+                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6
                     }}
                   >
-                    👨‍🏫 Teacher
+                    <Icons.GraduationCap size={15} /> Teacher
                   </button>
                 </div>
               </div>
@@ -567,7 +726,7 @@ function Login({ onLogin }) {
                     <span className="eyebrow">Account Recovery</span>
                     <h2>Reset Password</h2>
                   </div>
-                  <button type="button" className="close-btn" onClick={() => setShowForgot(false)}>✕</button>
+                  <button type="button" className="close-btn" onClick={() => setShowForgot(false)}><Icons.Close size={18} /></button>
                 </div>
 
                 {forgotStep === 1 ? (
@@ -596,8 +755,9 @@ function Login({ onLogin }) {
                         type="submit"
                         className="btn-primary"
                         disabled={!forgotEmail.trim() || forgotBusy}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
                       >
-                        {forgotBusy ? 'Sending code…' : '📨 Send 6-Digit Code'}
+                        {forgotBusy ? 'Sending code…' : <><Icons.Send size={15} /> Send 6-Digit Code</>}
                       </button>
                     </div>
                   </form>
@@ -605,13 +765,13 @@ function Login({ onLogin }) {
                   <form onSubmit={handleVerifyAndReset}>
                     <div className="whatif-body">
                       {forgotMsg && (
-                        <div style={{ background: 'var(--success-dim)', color: '#15803D', padding: '10px 14px', borderRadius: 8, fontSize: '.84rem', fontWeight: 600 }}>
-                          ✓ {forgotMsg}
+                        <div style={{ background: 'var(--success-dim)', color: '#15803D', padding: '10px 14px', borderRadius: 8, fontSize: '.84rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <Icons.CheckCircle size={16} /> {forgotMsg}
                         </div>
                       )}
                       {demoCode && (
-                        <div style={{ background: '#EEF2FF', border: '1px dashed #6366F1', color: '#4338CA', padding: '10px 14px', borderRadius: 8, fontSize: '.82rem' }}>
-                          💡 <b>Verification Code:</b> <code style={{ fontSize: '1.2rem', letterSpacing: 4, fontWeight: 800 }}>{demoCode}</code>
+                        <div style={{ background: '#EEF2FF', border: '1px dashed #6366F1', color: '#4338CA', padding: '10px 14px', borderRadius: 8, fontSize: '.82rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <Icons.Lock size={16} /> <span><b>Verification Code:</b> <code style={{ fontSize: '1.2rem', letterSpacing: 4, fontWeight: 800 }}>{demoCode}</code></span>
                         </div>
                       )}
                       <p style={{ color: 'var(--text-secondary)', fontSize: '.84rem', margin: '4px 0 0' }}>
@@ -651,7 +811,7 @@ function Login({ onLogin }) {
                             tabIndex={-1}
                             aria-label={showNewPw ? 'Hide password' : 'Show password'}
                           >
-                            {showNewPw ? '🙈' : '👁️'}
+                            {showNewPw ? <Icons.EyeOff size={16} color="var(--text-secondary)" /> : <Icons.Eye size={16} color="var(--text-secondary)" />}
                           </button>
                         </div>
                       </label>
@@ -676,8 +836,9 @@ function Login({ onLogin }) {
                         type="submit"
                         className="btn-primary"
                         disabled={resetCode.length !== 6 || newPw.length < 6 || forgotBusy}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
                       >
-                        {forgotBusy ? 'Verifying…' : '🔒 Update Password'}
+                        {forgotBusy ? 'Verifying…' : <><Icons.Lock size={15} /> Update Password</>}
                       </button>
                     </div>
                   </form>
@@ -732,7 +893,7 @@ function WhatIfModal({ token, courses, onClose }) {
             <span className="eyebrow">Grade Planner</span>
             <h2>What-If Calculator</h2>
           </div>
-          <button className="close-btn" onClick={onClose} aria-label="Close">✕</button>
+          <button className="close-btn" onClick={onClose} aria-label="Close"><Icons.Close size={18} /></button>
         </div>
 
         <div className="whatif-body">
@@ -764,7 +925,7 @@ function WhatIfModal({ token, courses, onClose }) {
 
           {result && (
             <div className={`whatif-result ${result.feasible ? 'feasible' : 'infeasible'}`}>
-              <span className="whatif-icon">{result.feasible ? '✅' : '⚠️'}</span>
+              <span className="whatif-icon">{result.feasible ? <Icons.CheckCircle size={22} color="var(--success)" /> : <Icons.AlertTriangle size={22} color="var(--danger)" />}</span>
               <div>
                 <b>{result.message}</b>
                 <p>
@@ -779,8 +940,8 @@ function WhatIfModal({ token, courses, onClose }) {
 
         <div className="whatif-footer">
           <button className="btn-ghost" onClick={onClose}>Cancel</button>
-          <button className="btn-primary" onClick={calculate} disabled={loading || !component}>
-            {loading ? 'Calculating…' : '⚗️ Calculate'}
+          <button className="btn-primary" onClick={calculate} disabled={loading || !component} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            {loading ? 'Calculating…' : <><Icons.Sliders size={15} /> Calculate</>}
           </button>
         </div>
       </div>
@@ -805,17 +966,21 @@ function DashboardTab({ token, user }) {
   if (!data) return <SkeletonDashboard />
 
   const gpa = data.gpa.value
-  let standingLabel = '✓ Good Standing'
+  let standingIcon = <Icons.Check size={14} />
+  let standingLabel = 'Good Standing'
   let standingClass = 'standing-good'
   if (gpa !== null) {
     if (gpa >= 3.5) {
-      standingLabel = "🏆 Dean's List / Honors Standing"
+      standingIcon = <Icons.Award size={14} />
+      standingLabel = "Dean's List / Honors Standing"
       standingClass = 'standing-honors'
     } else if (gpa >= 2.0) {
-      standingLabel = '✓ Good Standing'
+      standingIcon = <Icons.Check size={14} />
+      standingLabel = 'Good Standing'
       standingClass = 'standing-good'
     } else {
-      standingLabel = '⚠ Academic Warning'
+      standingIcon = <Icons.AlertTriangle size={14} />
+      standingLabel = 'Academic Warning'
       standingClass = 'standing-warn'
     }
   }
@@ -827,12 +992,13 @@ function DashboardTab({ token, user }) {
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
             {gpa !== null && (
-              <span className={`standing-badge ${standingClass}`}>
-                {standingLabel}
+              <span className={`standing-badge ${standingClass}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                {standingIcon}
+                <span>{standingLabel}</span>
               </span>
             )}
           </div>
-          <h1>Good {timeOfDay()}, {user.name.split(' ')[0]} 👋</h1>
+          <h1>Good {timeOfDay()}, {user.name.split(' ')[0]}</h1>
           <p>{fmtDate()} · Your current semester, distilled into what needs attention.</p>
         </div>
         <select value={semester} onChange={e => setSemester(e.target.value)}>
@@ -847,28 +1013,28 @@ function DashboardTab({ token, user }) {
           label="Current GPA"
           value={gpa?.toFixed(2)}
           detail="Demo 4-point scale · policy pending"
-          icon="🎯"
+          icon={<Icons.Target size={20} color="var(--primary)" />}
           colorClass="metric-purple"
         />
         <Metric
           label="Attendance"
           value={`${data.attendance.value}%`}
           detail="Across eligible sessions"
-          icon="📅"
+          icon={<Icons.Calendar size={20} color="#2563EB" />}
           colorClass="metric-blue"
         />
         <Metric
           label="Completed Credits"
           value={data.credits}
           detail={`${data.courses.length} active courses`}
-          icon="📚"
+          icon={<Icons.Book size={20} color="var(--success)" />}
           colorClass="metric-green"
         />
         <Metric
           label="Active Alerts"
           value={data.alerts.length}
           detail={data.alerts.length ? 'Review recommended' : 'Nothing urgent'}
-          icon={data.alerts.length ? '⚠️' : '✅'}
+          icon={data.alerts.length ? <Icons.AlertTriangle size={20} color="var(--danger)" /> : <Icons.CheckCircle size={20} color="var(--success)" />}
           tone={data.alerts.length ? 'warn' : ''}
           colorClass={data.alerts.length ? 'metric-warn' : 'metric-green'}
         />
@@ -884,7 +1050,7 @@ function DashboardTab({ token, user }) {
               <h2>Weighted grade overview</h2>
             </div>
             <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-              <button className="btn-whatif" onClick={() => setShowWhatIf(true)}>⚗️ What-If</button>
+              <button className="btn-whatif" onClick={() => setShowWhatIf(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Icons.Sliders size={14} /> What-If</button>
               <span className="muted">{semester.replace('-', ' ')}</span>
             </div>
           </div>
@@ -933,7 +1099,7 @@ function DashboardTab({ token, user }) {
                     <span>{a.detail}</span>
                   </div>
                 ))
-              : <p className="empty">🎉 No active risk signals.</p>
+              : <p className="empty" style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Icons.CheckCircle size={15} color="var(--success)" /> No active risk signals.</p>
             }
           </article>
 
@@ -948,7 +1114,7 @@ function DashboardTab({ token, user }) {
                     <small>{r.reason}</small>
                   </div>
                 ))
-              : <p className="empty">✨ No targeted recommendations for this period.</p>
+              : <p className="empty" style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Icons.Award size={15} color="var(--primary)" /> No targeted recommendations for this period.</p>
             }
           </article>
         </aside>
@@ -1030,9 +1196,11 @@ function GradesTab({ token }) {
         </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <button className="btn-ghost" onClick={exportGradesCSV} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            📥 Export CSV
+            <Icons.Download size={14} /> Export CSV
           </button>
-          <button className="btn-whatif" onClick={() => setShowWhatIf(true)}>⚗️ What-If Calculator</button>
+          <button className="btn-whatif" onClick={() => setShowWhatIf(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <Icons.Sliders size={14} /> What-If Calculator
+          </button>
         </div>
       </header>
 
@@ -1062,7 +1230,7 @@ function GradesTab({ token }) {
                       {c.score == null ? '—' : `${c.score}%`}
                     </span>
                   </td>
-                  <td className="expand-chevron">{expanded === c.code ? '▲' : '▼'}</td>
+                  <td className="expand-chevron">{expanded === c.code ? <Icons.ChevronUp size={14} /> : <Icons.ChevronDown size={14} />}</td>
                 </tr>
 
                 {expanded === c.code && (
@@ -1099,8 +1267,8 @@ function BreakdownPanel({ data }) {
           <div className="bd-score">{data.weighted_score != null ? `${data.weighted_score}%` : '—'}</div>
         </div>
         {data.weighted_score != null && (
-          <span className={`score-chip ${data.weighted_score >= 75 ? 'chip-good' : 'chip-warn'}`} style={{ alignSelf: 'flex-end' }}>
-            {data.weighted_score >= 75 ? '✓ Passing' : '⚠ Below threshold'}
+          <span className={`score-chip ${data.weighted_score >= 75 ? 'chip-good' : 'chip-warn'}`} style={{ alignSelf: 'flex-end', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            {data.weighted_score >= 75 ? <><Icons.Check size={13} /> Passing</> : <><Icons.AlertTriangle size={13} /> Below threshold</>}
           </span>
         )}
       </div>
@@ -1157,7 +1325,9 @@ function AttendanceTab({ token }) {
     status === 'critical' ? '#EF4444' : status === 'warning' ? '#F97316' : '#22C55E'
 
   const sessionIcon = s =>
-    s === 'present' ? '✅' : s === 'excused' ? '🔵' : '❌'
+    s === 'present' ? <Icons.CheckCircle size={14} color="#22C55E" /> :
+    s === 'excused' ? <Icons.Check size={14} color="#3B82F6" /> :
+    <Icons.Close size={14} color="#EF4444" />
 
   return (
     <>
@@ -1208,21 +1378,26 @@ function AttendanceTab({ token }) {
 
             {/* Warning strip */}
             {item.remaining_unexcused <= 2 && (
-              <div className={`warning-strip ${item.remaining_unexcused <= 1 ? 'danger' : ''}`}>
-                {item.remaining_unexcused <= 0
-                  ? '🚨 Critical: Automatic course drop limit reached!'
-                  : item.remaining_unexcused === 1
-                    ? '⚠️ Critical: Only 1 absence remaining before automatic course drop'
-                    : `⚠️ Warning: ${item.remaining_unexcused} absences remaining before automatic course drop`
-                }
+              <div className={`warning-strip ${item.remaining_unexcused <= 1 ? 'danger' : ''}`} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Icons.AlertTriangle size={15} />
+                <span>
+                  {item.remaining_unexcused <= 0
+                    ? 'Critical: Automatic course drop limit reached!'
+                    : item.remaining_unexcused === 1
+                      ? 'Critical: Only 1 absence remaining before automatic course drop'
+                      : `Warning: ${item.remaining_unexcused} absences remaining before automatic course drop`
+                  }
+                </span>
               </div>
             )}
 
             {/* Session toggle */}
-            <button className="session-toggle" onClick={() => toggleSessions(item.code)}>
-              {openSessions[item.code]
-                ? '▲ Hide sessions'
-                : `▼ Show ${item.sessions.length} sessions`}
+            <button className="session-toggle" onClick={() => toggleSessions(item.code)} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+              {openSessions[item.code] ? (
+                <><Icons.ChevronUp size={14} /> Hide sessions</>
+              ) : (
+                <><Icons.ChevronDown size={14} /> Show {item.sessions.length} sessions</>
+              )}
             </button>
 
             {openSessions[item.code] && (
@@ -1287,7 +1462,9 @@ function AlertsTab({ token, onUnreadChange, onSelectTab }) {
   const unreadCount = notifs.filter(n => !n.read).length
 
   const typeIcon = t =>
-    t === 'low_grade' ? '⚠️' : t === 'low_attendance' ? '📅' : '🔔'
+    t === 'low_grade' ? <Icons.AlertTriangle size={16} /> :
+    t === 'low_attendance' ? <Icons.Calendar size={16} /> :
+    <Icons.Bell size={16} />
 
   const typeIconClass = t =>
     t === 'low_grade' ? 'notif-icon-warn' : t === 'low_attendance' ? 'notif-icon-att' : 'notif-icon-bell'
@@ -1309,12 +1486,12 @@ function AlertsTab({ token, onUnreadChange, onSelectTab }) {
           <h1>Notifications</h1>
           <p>{unreadCount > 0
             ? `${unreadCount} unread notification${unreadCount > 1 ? 's' : ''}`
-            : 'All caught up! 🎉'
+            : 'All caught up!'
           }</p>
         </div>
         {unreadCount > 0 && (
-          <button className="btn-markall" onClick={markAll} disabled={marking}>
-            {marking ? 'Marking…' : '✓ Mark all read'}
+          <button className="btn-markall" onClick={markAll} disabled={marking} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            {marking ? 'Marking…' : <><Icons.Check size={14} /> Mark all read</>}
           </button>
         )}
       </header>
@@ -1323,7 +1500,9 @@ function AlertsTab({ token, onUnreadChange, onSelectTab }) {
         {notifs.length === 0
           ? (
             <article className="panel">
-              <p className="empty" style={{ padding: '40px 0' }}>🔕 No notifications yet.</p>
+              <p className="empty" style={{ padding: '40px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                <Icons.Bell size={18} color="var(--text-secondary)" /> No notifications yet.
+              </p>
             </article>
           )
           : notifs.map(n => (
@@ -1333,7 +1512,7 @@ function AlertsTab({ token, onUnreadChange, onSelectTab }) {
                 onClick={() => !n.read && markRead(n.id)}
                 title={n.read ? '' : 'Click to mark as read'}
               >
-                <div className={`notif-icon-circle ${typeIconClass(n.type)}`}>
+                <div className={`notif-icon-circle ${typeIconClass(n.type)}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   {typeIcon(n.type)}
                 </div>
                 <div className="notif-body">
@@ -1348,21 +1527,24 @@ function AlertsTab({ token, onUnreadChange, onSelectTab }) {
                       type="button"
                       className="notif-action-btn"
                       onClick={() => onSelectTab && onSelectTab('grades')}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
                     >
-                      📊 View Grade Breakdown
+                      <Icons.Chart size={13} /> View Grade Breakdown
                     </button>
                     <a
                       className="notif-action-btn"
                       href={`mailto:teacher@univ.edu?subject=Regarding ${encodeURIComponent(n.course || 'Academic Alert')}`}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
                     >
-                      ✉️ Contact Instructor
+                      <Icons.Mail size={13} /> Contact Instructor
                     </a>
                     <button
                       type="button"
                       className="notif-action-btn"
                       onClick={() => alert(`Academic Tutoring Center:\nDrop-in tutoring for ${n.course || 'your subjects'} is available Monday–Thursday 14:00–18:00 in Room 302.`)}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
                     >
-                      📚 Book Tutoring
+                      <Icons.Book size={13} /> Book Tutoring
                     </button>
                   </div>
                 </div>
@@ -1466,15 +1648,16 @@ function AvatarMenu({ user, logout, token, onUpdateUser }) {
               onClick={() => { setEditing(true); setNameVal(user?.name || '') }}
               style={{ display: 'flex', alignItems: 'center', gap: 8 }}
             >
-              ✏️ Edit Name
+              <Icons.Edit size={14} /> Edit Name
             </button>
           )}
 
           <button
             className="dropdown-item danger"
             onClick={() => { setOpen(false); logout() }}
+            style={{ display: 'flex', alignItems: 'center', gap: 8 }}
           >
-            🚪 Sign out
+            <Icons.SignOut size={14} /> Sign out
           </button>
         </div>
       )}
@@ -1538,8 +1721,9 @@ function Student({ token, user, logout, onUpdateUser }) {
             onClick={() => setTab('alerts')}
             title="Notifications"
             aria-label={`Notifications${unread > 0 ? `, ${unread} unread` : ''}`}
+            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
           >
-            🔔
+            <Icons.Bell size={18} color="var(--text-secondary)" />
             {unread > 0 && <span className="bell-badge">{unread}</span>}
           </button>
           <AvatarMenu user={user} logout={logout} token={token} onUpdateUser={onUpdateUser} />
@@ -1608,7 +1792,7 @@ function TeacherStudentModal({ studentId, token, onClose }) {
             <h2>{data?.student?.name ?? 'Student Profile'}</h2>
             <small style={{ color: 'var(--text-secondary)' }}>ID: {studentId} · {data?.student?.cohort}</small>
           </div>
-          <button type="button" className="close-btn" onClick={onClose}>✕</button>
+          <button type="button" className="close-btn" onClick={onClose}><Icons.Close size={18} /></button>
         </div>
         <div className="whatif-body" style={{ maxHeight: '70vh', overflowY: 'auto' }}>
           {loading ? (
@@ -1627,8 +1811,12 @@ function TeacherStudentModal({ studentId, token, onClose }) {
                 </div>
                 <div style={{ background: 'var(--paper)', padding: '12px 14px', borderRadius: 'var(--radius-sm)' }}>
                   <small style={{ color: 'var(--text-secondary)', display: 'block' }}>Risk Status</small>
-                  <strong style={{ fontSize: '.9rem', color: data.risk_factors.length ? 'var(--danger)' : 'var(--success)' }}>
-                    {data.risk_factors.length ? `⚠️ ${data.risk_factors.length} active risk signal(s)` : '✓ Good standing'}
+                  <strong style={{ fontSize: '.9rem', color: data.risk_factors.length ? 'var(--danger)' : 'var(--success)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    {data.risk_factors.length ? (
+                      <><Icons.AlertTriangle size={15} /> {data.risk_factors.length} active risk signal(s)</>
+                    ) : (
+                      <><Icons.CheckCircle size={15} /> Good standing</>
+                    )}
                   </strong>
                 </div>
               </div>
@@ -1677,10 +1865,10 @@ function TeacherStudentModal({ studentId, token, onClose }) {
                     style={{ width: '100%', padding: '8px 10px', fontSize: '.82rem', borderRadius: 6, border: '1px solid var(--border)', marginTop: 4, fontFamily: 'inherit' }}
                   />
                 </label>
-                {msg && <div style={{ background: 'var(--success-dim)', color: '#15803D', padding: '8px 12px', borderRadius: 6, fontSize: '.8rem', fontWeight: 600 }}>✓ {msg}</div>}
+                {msg && <div style={{ background: 'var(--success-dim)', color: '#15803D', padding: '8px 12px', borderRadius: 6, fontSize: '.8rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}><Icons.CheckCircle size={15} /> {msg}</div>}
                 {err && <div className="error">{err}</div>}
-                <button type="submit" className="btn-primary" disabled={!notes.trim() || submitting} style={{ alignSelf: 'flex-start', marginTop: 4 }}>
-                  {submitting ? 'Sending…' : '📨 Send Advisory Note'}
+                <button type="submit" className="btn-primary" disabled={!notes.trim() || submitting} style={{ alignSelf: 'flex-start', marginTop: 4, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  {submitting ? 'Sending…' : <><Icons.Send size={15} /> Send Advisory Note</>}
                 </button>
               </form>
 
@@ -1778,7 +1966,7 @@ function Teacher({ token, user, logout }) {
           onClick={exportClassRosterCSV}
           style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
         >
-          📥 Export Roster (CSV)
+          <Icons.Download size={14} /> Export Roster (CSV)
         </button>
       </header>
 
@@ -1787,14 +1975,14 @@ function Teacher({ token, user, logout }) {
           label="Students in Scope"
           value={students.length}
           detail="Authorized cohort"
-          icon="👥"
+          icon={<Icons.User size={20} color="var(--primary)" />}
           colorClass="metric-purple"
         />
         <Metric
           label="At-Risk Students"
           value={atRisk.length}
           detail="Active risk signals"
-          icon="⚠️"
+          icon={<Icons.AlertTriangle size={20} color={atRisk.length ? "var(--danger)" : "var(--success)"} />}
           tone={atRisk.length ? 'warn' : ''}
           colorClass={atRisk.length ? 'metric-warn' : 'metric-green'}
         />
@@ -1802,14 +1990,14 @@ function Teacher({ token, user, logout }) {
           label="Avg. Attendance"
           value={`${avgAtt}%`}
           detail="Across cohort in scope"
-          icon="📊"
+          icon={<Icons.Calendar size={20} color="#2563EB" />}
           colorClass="metric-blue"
         />
         <Metric
           label="Correlation"
           value={analytics.correlation}
           detail="Association, not causation"
-          icon="📈"
+          icon={<Icons.Chart size={20} color="var(--success)" />}
           colorClass="metric-green"
         />
       </section>
@@ -1825,13 +2013,19 @@ function Teacher({ token, user, logout }) {
           </div>
 
           <div className="teacher-toolbar">
-            <input
-              type="text"
-              className="teacher-search-input"
-              placeholder="🔍 Search by name or ID..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-            />
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+              <span style={{ position: 'absolute', left: 10, display: 'flex', alignItems: 'center', pointerEvents: 'none', color: 'var(--text-muted)' }}>
+                <Icons.Search size={15} />
+              </span>
+              <input
+                type="text"
+                className="teacher-search-input"
+                placeholder="Search by name or ID..."
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                style={{ paddingLeft: 32 }}
+              />
+            </div>
             <div className="teacher-filter-group">
               <button
                 type="button"
@@ -1883,7 +2077,7 @@ function Teacher({ token, user, logout }) {
                 <span>
                   {s.risk_factors.length
                     ? s.risk_factors.map((r, i) => <em key={i}>{r.detail}</em>)
-                    : <em className="good">✓ No active signals</em>
+                    : <em className="good" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><Icons.Check size={13} /> No active signals</em>
                   }
                 </span>
               </div>

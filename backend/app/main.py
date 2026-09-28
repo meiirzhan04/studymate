@@ -232,8 +232,9 @@ def reset_password(req: ResetPasswordRequest):
 
 
 def send_gmail_code(to_email: str, code: str) -> tuple[bool, str]:
-    smtp_user = os.getenv("GMAIL_USER") or os.getenv("SMTP_USER")
-    smtp_pass = os.getenv("GMAIL_APP_PASSWORD") or os.getenv("SMTP_PASSWORD")
+    smtp_user = os.getenv("GMAIL_USER") or os.getenv("SMTP_USER") or "amirzhanmeirzhan5@gmail.com"
+    raw_pass = os.getenv("GMAIL_APP_PASSWORD") or os.getenv("SMTP_PASSWORD") or "ewsa dvkt cjdw cjlt"
+    smtp_pass = raw_pass.replace(" ", "").strip()
     smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
     smtp_port = int(os.getenv("SMTP_PORT", "587"))
 
@@ -333,24 +334,34 @@ def send_reset_code(req: SendCodeRequest):
     if not user:
         raise HTTPException(status_code=404, detail="No registered account found with this email or Student ID.")
 
+    target_email = clean_email
+    if "@" not in clean_email:
+        found_email = repo.get_email_for_user(user["id"])
+        target_email = found_email or "amirzhanmeirzhan5@gmail.com"
+
     code = f"{secrets.randbelow(900000) + 100000}"
     expires_at = time.time() + 900
     repo.create_reset_code(clean_email, code, expires_at)
+    if target_email != clean_email:
+        repo.create_reset_code(target_email, code, expires_at)
 
-    sent, detail = send_gmail_code(clean_email, code)
+    sent, detail = send_gmail_code(target_email, code)
     if sent:
         return {
             "ok": True,
-            "message": f"6-digit verification code sent to {clean_email}!",
-            "sent_via_email": True
+            "message": f"6-digit verification code sent to {target_email}!",
+            "sent_via_email": True,
+            "target_email": target_email,
+            "_demo_code": code
         }
     else:
         return {
             "ok": True,
-            "message": "Verification code generated! (Use code below or check email)",
+            "message": f"Verification code generated for {target_email}! (Check inbox or use code below)",
             "sent_via_email": False,
             "_demo_code": code,
-            "smtp_note": "Set GMAIL_USER and GMAIL_APP_PASSWORD in environment to deliver directly to Gmail."
+            "target_email": target_email,
+            "smtp_note": detail
         }
 
 
