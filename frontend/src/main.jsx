@@ -7,7 +7,7 @@ import {
 import './styles.css'
 
 /* ─── API helper ──────────────────────────────────────────────────── */
-const RENDER_BACKEND_URL = 'https://studymate-res1.onrender.com'
+const RENDER_BACKEND_URL = 'https://studymate-knap.onrender.com'
 
 const getApiBase = () => {
   if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL
