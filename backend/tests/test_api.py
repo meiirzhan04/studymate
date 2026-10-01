@@ -1,4 +1,5 @@
 import secrets
+import time
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -198,3 +199,361 @@ def test_reset_code_flow_friend_188():
     with repo.connect() as db:
         db.execute("UPDATE users SET password_hash = ? WHERE student_id = '240103188'", (h,))
         db.commit()
+
+
+# ─── SDU PLATFORM OAUTH VERIFICATION TESTS ───────────────────────────────────
+
+def test_sdu_authorize_url_generation():
+    res = client.post("/api/sdu/authorize-url", json={
+        "redirect_uri": "http://localhost:5173/auth/sdu/callback"
+    })
+    assert res.status_code == 200
+    data = res.json()
+    assert "url" in data
+    assert "state" in data
+    assert "redirect_uri" in data
+    url = data["url"]
+    assert "https://api-sdu.javazhan.tech/oauth/authorize" in url
+    assert "response_type=code" in url
+    assert "code_challenge=" in url
+    assert "code_challenge_method=S256" in url
+    assert f"state={data['state']}" in url
+
+    # Verify attempt is recorded in database
+    from app.main import repo
+    with repo.connect() as db:
+        row = db.execute("SELECT * FROM sdu_oauth_attempts WHERE state = ?", (data["state"],)).fetchone()
+        assert row is not None
+        assert row["used"] == 0
+        assert row["redirect_uri"] == "http://localhost:5173/auth/sdu/callback"
+
+
+def test_sdu_successful_callback_and_data_sync(monkeypatch):
+    import app.sdu_client as sdu_mod
+
+    async def mock_exchange(code, code_verifier, redirect_uri, client=None):
+        return {
+            "access_token": "mock_sdu_token_123",
+            "token_type": "Bearer",
+            "expires_in": 2592000,
+            "scope": "profile:read schedule:read grades-attendance:read"
+        }
+
+    async def mock_fetch(endpoint, access_token, params=None, client=None):
+        if endpoint == "profile":
+            return 200, {
+                "student_id": "240999001",
+                "fullname": "Aisulu Kairat",
+                "email": "240999001@sdu.edu.kz"
+            }
+        elif endpoint == "attendance":
+            # absence_percent is SDU course absence percentage, NOT attendance percentage
+            return 200, {
+                "source": "stored_sdu_data",
+                "attendance": [
+                    {"lesson": "Software Architecture", "year": 2026, "term": 1, "absence_percent": 8.0, "updated_at": "2026-10-01T08:00:00Z"},
+                    {"lesson": "Computer Networks", "year": 2026, "term": 1, "absence_percent": 12.0, "updated_at": "2026-10-01T08:00:00Z"}
+                ]
+            }
+        elif endpoint == "grades":
+            return 200, {
+                "source": "stored_sdu_data",
+                "grades": [
+                    {"lesson": "Software Architecture", "year": 2026, "term": 1, "grade": 92.0, "letter_grade": "A-", "credits": 3, "ects": 5, "updated_at": "2026-10-01T08:00:00Z"}
+                ]
+            }
+        elif endpoint == "schedule":
+            return 200, {
+                "source": "stored_sdu_data",
+                "schedule": [
+                    {"course_code": "CSS 315", "course_name": "Software Architecture", "teacher": "Prof. Smith", "year": 2026, "term": 1}
+                ]
+            }
+        return 404, {}
+
+    monkeypatch.setattr(sdu_mod, "exchange_code_for_token", mock_exchange)
+    monkeypatch.setattr(sdu_mod, "fetch_sdu_data", mock_fetch)
+
+    # 1. Start authorization
+    start_res = client.post("/api/sdu/authorize-url", json={"redirect_uri": "http://localhost:5173/auth/sdu/callback"})
+    state = start_res.json()["state"]
+
+    # 2. Callback
+    cb_res = client.post("/api/sdu/callback", json={
+        "code": "valid_test_code",
+        "state": state,
+        "redirect_uri": "http://localhost:5173/auth/sdu/callback"
+    })
+    assert cb_res.status_code == 200
+    cb_data = cb_res.json()
+    assert cb_data["sdu_connected"] is True
+    assert cb_data["user"]["student_id"] == "240999001"
+    assert cb_data["user"]["name"] == "Aisulu Kairat"
+    assert "access_token" in cb_data
+
+    # 3. Verify student can access dashboard with the new token
+    user_tok = cb_data["access_token"]
+    dash_res = client.get("/api/student/dashboard", headers=auth(user_tok))
+    assert dash_res.status_code == 200
+    dash_data = dash_res.json()
+    # Average absence = (8 + 12) / 2 = 10%, attendance = 90.0%
+    assert dash_data["attendance"]["value"] == 90.0
+
+    # 4. Check SDU status endpoint
+    status_res = client.get("/api/sdu/status", headers=auth(user_tok))
+    assert status_res.status_code == 200
+    assert status_res.json()["connected"] is True
+
+
+def test_sdu_callback_denial():
+    start_res = client.post("/api/sdu/authorize-url", json={"redirect_uri": "http://localhost:5173/auth/sdu/callback"})
+    state = start_res.json()["state"]
+
+    # Simulate user clicked Cancel on SDU consent screen
+    cb_res = client.post("/api/sdu/callback", json={
+        "state": state,
+        "error": "access_denied",
+        "error_description": "User denied authorization"
+    })
+    assert cb_res.status_code == 400
+    assert "denied" in cb_res.json()["detail"].lower()
+
+
+def test_sdu_callback_wrong_or_missing_state():
+    # Nonexistent state
+    cb_res = client.post("/api/sdu/callback", json={
+        "code": "test_code",
+        "state": "nonexistent_state_value_123"
+    })
+    assert cb_res.status_code == 400
+    assert "state" in cb_res.json()["detail"].lower()
+
+    # Empty state
+    cb_res_empty = client.post("/api/sdu/callback", json={
+        "code": "test_code",
+        "state": ""
+    })
+    assert cb_res_empty.status_code == 400
+
+
+def test_sdu_callback_replayed_and_expired_attempt():
+    from app.main import repo
+    # 1. Test Replay attack
+    start_res = client.post("/api/sdu/authorize-url", json={"redirect_uri": "http://localhost:5173/auth/sdu/callback"})
+    state = start_res.json()["state"]
+
+    # First consumption (simulate code missing to stop early after consumption)
+    cb_first = client.post("/api/sdu/callback", json={"state": state})
+    assert cb_first.status_code == 400
+    assert "Missing authorization code" in cb_first.json()["detail"]
+
+    # Second consumption with same state should be rejected as replayed
+    cb_second = client.post("/api/sdu/callback", json={"code": "abc", "state": state})
+    assert cb_second.status_code == 400
+    assert "already been consumed" in cb_second.json()["detail"] or "replay" in cb_second.json()["detail"].lower()
+
+    # 2. Test Expired attempt
+    expired_state = f"expired_state_test_{secrets.token_hex(4)}"
+    repo.create_sdu_oauth_attempt(expired_state, "verif123", "http://localhost:5173/auth/sdu/callback", None, expires_at=time.time() - 100)
+    cb_exp = client.post("/api/sdu/callback", json={"code": "abc", "state": expired_state})
+    assert cb_exp.status_code == 400
+    assert "expired" in cb_exp.json()["detail"].lower()
+
+
+def test_sdu_callback_wrong_pkce_verifier(monkeypatch):
+    import app.sdu_client as sdu_mod
+
+    async def mock_exchange_fail(code, code_verifier, redirect_uri, client=None):
+        raise ValueError("Invalid PKCE code_verifier")
+
+    monkeypatch.setattr(sdu_mod, "exchange_code_for_token", mock_exchange_fail)
+
+    start_res = client.post("/api/sdu/authorize-url", json={"redirect_uri": "http://localhost:5173/auth/sdu/callback"})
+    state = start_res.json()["state"]
+
+    cb_res = client.post("/api/sdu/callback", json={
+        "code": "invalid_pkce_code",
+        "state": state
+    })
+    assert cb_res.status_code == 400
+    assert "Failed to exchange code" in cb_res.json()["detail"]
+
+
+def test_sdu_token_expiry_and_revocation(monkeypatch):
+    import app.sdu_client as sdu_mod
+    from app.main import repo
+
+    # Create dummy user and save connection
+    u = repo.create_user("Test Revoke Student", f"stu_rev_{secrets.token_hex(4)}", "password123")
+    user_tok = token(u["student_id"], "password123")
+    repo.save_sdu_connection(u["id"], "dummy_sdu_token_abc", time.time() + 3600, "profile:read")
+
+    # Mock SDU returning 401 on sync
+    async def mock_fetch_401(endpoint, access_token, params=None, client=None):
+        return 401, {"detail": "Token expired or revoked"}
+
+    monkeypatch.setattr(sdu_mod, "fetch_sdu_data", mock_fetch_401)
+
+    sync_res = client.post("/api/sdu/sync", headers=auth(user_tok))
+    assert sync_res.status_code == 401
+    assert "revoked or expired" in sync_res.json()["detail"].lower()
+
+    # Verify connection was deleted locally
+    conn = repo.get_sdu_connection(u["id"])
+    assert conn is None
+
+    # Test explicit disconnect endpoint
+    repo.save_sdu_connection(u["id"], "dummy_sdu_token_def", time.time() + 3600, "profile:read")
+    revoked_called = []
+
+    async def mock_revoke(token_val, client=None):
+        revoked_called.append(token_val)
+        return True
+
+    monkeypatch.setattr(sdu_mod, "revoke_token", mock_revoke)
+
+    disc_res = client.post("/api/sdu/disconnect", headers=auth(user_tok))
+    assert disc_res.status_code == 200
+    assert disc_res.json()["ok"] is True
+    assert "dummy_sdu_token_def" in revoked_called
+    assert repo.get_sdu_connection(u["id"]) is None
+
+
+def test_sdu_missing_scopes(monkeypatch):
+    import app.sdu_client as sdu_mod
+    from app.main import repo
+
+    u = repo.create_user("Scope Test Student", f"stu_scope_{secrets.token_hex(4)}", "password123")
+    user_tok = token(u["student_id"], "password123")
+    repo.save_sdu_connection(u["id"], "dummy_sdu_token_xyz", time.time() + 3600, "profile:read")
+
+    # Mock SDU returning 403 (missing scopes)
+    async def mock_fetch_403(endpoint, access_token, params=None, client=None):
+        return 403, {"detail": "Missing grades-attendance:read scope"}
+
+    monkeypatch.setattr(sdu_mod, "fetch_sdu_data", mock_fetch_403)
+
+    sync_res = client.post("/api/sdu/sync", headers=auth(user_tok))
+    assert sync_res.status_code == 403
+    assert "scope" in sync_res.json()["detail"].lower() or "restricted" in sync_res.json()["detail"].lower()
+
+
+def test_two_local_users_isolated_sdu_tokens():
+    from app.main import repo
+
+    u1 = repo.create_user("Isolated User 1", f"iso1_{secrets.token_hex(4)}", "password123")
+    u2 = repo.create_user("Isolated User 2", f"iso2_{secrets.token_hex(4)}", "password123")
+
+    tok1 = token(u1["student_id"], "password123")
+    tok2 = token(u2["student_id"], "password123")
+
+    token_a = f"token_secret_A_{secrets.token_hex(6)}"
+    token_b = f"token_secret_B_{secrets.token_hex(6)}"
+
+    repo.save_sdu_connection(u1["id"], token_a, time.time() + 3600, "profile:read")
+    repo.save_sdu_connection(u2["id"], token_b, time.time() + 3600, "schedule:read")
+
+    conn1 = repo.get_sdu_connection(u1["id"])
+    conn2 = repo.get_sdu_connection(u2["id"])
+
+    # Ensure token isolation
+    assert conn1["access_token"] == token_a
+    assert conn2["access_token"] == token_b
+    assert conn1["access_token"] != conn2["access_token"]
+
+    # When user 1 disconnects, user 2 must remain connected
+    client.post("/api/sdu/disconnect", headers=auth(tok1))
+    assert repo.get_sdu_connection(u1["id"]) is None
+    assert repo.get_sdu_connection(u2["id"]) is not None
+    assert repo.get_sdu_connection(u2["id"])["access_token"] == token_b
+
+
+def test_sdu_live_endpoints_profile_schedule_transcript(monkeypatch):
+    import app.sdu_client as sdu_mod
+    from app.main import repo
+
+    u = repo.create_user("Live Data Student", f"stu_live_{secrets.token_hex(4)}", "password123")
+    user_tok = token(u["student_id"], "password123")
+    repo.save_sdu_connection(u["id"], "dummy_live_token", time.time() + 3600, "profile:read schedule:read transcript:read")
+
+    async def mock_fetch_live(endpoint, access_token, params=None, client=None):
+        if endpoint == "profile":
+            return 200, {
+                "source": "live_sdu",
+                "fetched_at": "2026-10-01T12:00:00Z",
+                "student_id": "240103999",
+                "fullname": "Live SDU Student",
+                "email": "student@sdu.edu.kz"
+            }
+        elif endpoint == "schedule":
+            return 200, {
+                "source": "live_sdu",
+                "fetched_at": "2026-10-01T12:00:00Z",
+                "schedule": [
+                    {"course_code": "INF 381", "course_name": "Project Management", "section": "01", "teacher": "Dr. Bek"}
+                ]
+            }
+        elif endpoint == "transcript":
+            return 200, {
+                "source": "live_sdu",
+                "fetched_at": "2026-10-01T12:00:00Z",
+                "courses": [
+                    {"course_code": "CSS 301", "course_name": "Algorithms", "grade": 91.5, "letter_grade": "A-", "credits": 4, "passed": True}
+                ]
+            }
+        return 404, {}
+
+    monkeypatch.setattr(sdu_mod, "fetch_sdu_data", mock_fetch_live)
+
+    # 1. Profile
+    prof_res = client.get("/api/sdu/profile", headers=auth(user_tok))
+    assert prof_res.status_code == 200
+    assert prof_res.json()["source"] == "live_sdu"
+    assert prof_res.json()["student_id"] == "240103999"
+
+    # 2. Schedule
+    sched_res = client.get("/api/sdu/schedule", headers=auth(user_tok))
+    assert sched_res.status_code == 200
+    assert sched_res.json()["source"] == "live_sdu"
+    assert len(sched_res.json()["schedule"]) == 1
+
+    # 3. Transcript
+    trans_res = client.get("/api/sdu/transcript", headers=auth(user_tok))
+    assert trans_res.status_code == 200
+    assert trans_res.json()["source"] == "live_sdu"
+    assert len(trans_res.json()["courses"]) == 1
+
+
+def test_sdu_live_endpoints_error_handling_409_502_504(monkeypatch):
+    import app.sdu_client as sdu_mod
+    from app.main import repo
+
+    u = repo.create_user("Error Student", f"stu_err_{secrets.token_hex(4)}", "password123")
+    user_tok = token(u["student_id"], "password123")
+    repo.save_sdu_connection(u["id"], "dummy_err_token", time.time() + 3600, "profile:read schedule:read transcript:read")
+
+    # 1. Test 409 sdu_reconnect_required
+    async def mock_fetch_409(endpoint, access_token, params=None, client=None):
+        return 409, {"detail": {"code": "sdu_reconnect_required", "message": "SDU session expired, please re-authenticate"}}
+
+    monkeypatch.setattr(sdu_mod, "fetch_sdu_data", mock_fetch_409)
+    res_409 = client.get("/api/sdu/schedule", headers=auth(user_tok))
+    assert res_409.status_code == 409
+
+    # 2. Test 502 upstream_unavailable
+    async def mock_fetch_502(endpoint, access_token, params=None, client=None):
+        return 502, {"detail": "upstream_unavailable"}
+
+    monkeypatch.setattr(sdu_mod, "fetch_sdu_data", mock_fetch_502)
+    res_502 = client.get("/api/sdu/schedule", headers=auth(user_tok))
+    assert res_502.status_code == 502
+
+    # 3. Test 504 upstream_timeout
+    async def mock_fetch_504(endpoint, access_token, params=None, client=None):
+        return 504, {"detail": "upstream_timeout"}
+
+    monkeypatch.setattr(sdu_mod, "fetch_sdu_data", mock_fetch_504)
+    res_504 = client.get("/api/sdu/schedule", headers=auth(user_tok))
+    assert res_504.status_code == 504
+
+

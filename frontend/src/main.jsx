@@ -209,6 +209,19 @@ const Icons = {
       <polyline points="18 15 12 9 6 15" />
     </svg>
   ),
+  Refresh: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <polyline points="23 4 23 10 17 10" />
+      <polyline points="1 20 1 14 7 14" />
+      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+    </svg>
+  ),
+  ArrowRight: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <line x1="5" y1="12" x2="19" y2="12" />
+      <polyline points="12 5 19 12 12 19" />
+    </svg>
+  ),
 }
 
 /* ─── Utility ─────────────────────────────────────────────────────── */
@@ -341,6 +354,27 @@ function Login({ onLogin }) {
   const [forgotMsg, setForgotMsg]   = useState('')
   const [forgotErr, setForgotErr]   = useState('')
   const [forgotBusy, setForgotBusy] = useState(false)
+  const [sduBusy, setSduBusy]       = useState(false)
+
+  const handleConnectSdu = async () => {
+    setSduBusy(true)
+    setError('')
+    try {
+      const callbackUri = window.location.origin + '/auth/sdu/callback'
+      const res = await api('/api/sdu/authorize-url', null, {
+        method: 'POST',
+        body: JSON.stringify({ redirect_uri: callbackUri })
+      })
+      if (res && res.url) {
+        window.location.href = res.url
+      } else {
+        throw new Error('Failed to obtain authorization URL')
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to initiate SDU authorization')
+      setSduBusy(false)
+    }
+  }
 
   const submit = async e => {
     e.preventDefault(); setBusy(true); setError('')
@@ -545,6 +579,24 @@ function Login({ onLogin }) {
             >
               Create Account
             </button>
+          </div>
+
+          {/* SDU Platform OAuth Button */}
+          <button
+            type="button"
+            className="sdu-connect-btn"
+            disabled={sduBusy || busy}
+            onClick={handleConnectSdu}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span className="sdu-badge">SDU</span>
+              <span>{sduBusy ? 'Connecting to SDU Platform…' : 'Connect with SDU Platform'}</span>
+            </div>
+            <Icons.ArrowRight size={17} color="#ffffff" />
+          </button>
+
+          <div className="login-divider">
+            <span>or continue with credentials</span>
           </div>
 
           {authMode === 'login' ? (
@@ -1751,6 +1803,317 @@ function AvatarMenu({ user, logout, token, onUpdateUser }) {
   )
 }
 
+/* ─── SDU LIVE TAB (Request-Time Freshness) ────────────────────────── */
+function SduLiveTab({ token, onConnect, onDisconnect, sduStatus }) {
+  const [subTab, setSubTab] = useState('schedule') // 'schedule' | 'transcript' | 'profile'
+  const [profile, setProfile] = useState(null)
+  const [schedule, setSchedule] = useState(null)
+  const [transcript, setTranscript] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null) // { message, isReconnect }
+  const [lastFetched, setLastFetched] = useState(null)
+
+  const loadLiveData = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      // 1. Fetch Profile
+      const profData = await api('/api/sdu/profile', token)
+      setProfile(profData)
+      if (profData?.fetched_at) setLastFetched(profData.fetched_at)
+
+      // 2. Fetch Schedule
+      try {
+        const schedData = await api('/api/sdu/schedule', token)
+        setSchedule(schedData.schedule || [])
+        if (schedData?.fetched_at) setLastFetched(schedData.fetched_at)
+      } catch (sErr) {
+        console.warn('Live schedule read:', sErr)
+      }
+
+      // 3. Fetch Transcript
+      try {
+        const transData = await api('/api/sdu/transcript', token)
+        setTranscript(transData.courses || [])
+        if (transData?.fetched_at) setLastFetched(transData.fetched_at)
+      } catch (tErr) {
+        console.warn('Live transcript read:', tErr)
+      }
+    } catch (err) {
+      const msg = err.message || 'Failed to fetch live data from SDU.'
+      const isRec = msg.includes('reconnect') || msg.includes('2fa') || msg.includes('expired')
+      setError({ message: msg, isReconnect: isRec })
+    } finally {
+      setLoading(false)
+    }
+  }, [token])
+
+  useEffect(() => {
+    if (sduStatus?.connected) {
+      loadLiveData()
+    }
+  }, [sduStatus?.connected, loadLiveData])
+
+  if (!sduStatus?.connected) {
+    return (
+      <div className="page-fade" style={{ maxWidth: 600, margin: '40px auto', textAlign: 'center' }}>
+        <div className="panel" style={{ padding: '36px 24px' }}>
+          <div className="sdu-badge" style={{ margin: '0 auto 12px auto', display: 'inline-block' }}>SDU PLATFORM</div>
+          <h2>Connect Your SDU Account</h2>
+          <p style={{ color: 'var(--text-secondary)', marginBottom: 24 }}>
+            Link your official SDU student account to access live schedules, full curriculum transcript, and portal profiles directly.
+          </p>
+          <button type="button" className="btn-primary" onClick={onConnect} style={{ margin: '0 auto', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <span className="sdu-badge">SDU</span> Connect SDU Platform
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (error && error.isReconnect) {
+    return (
+      <div className="page-fade" style={{ maxWidth: 600, margin: '40px auto', textAlign: 'center' }}>
+        <div className="panel" style={{ padding: '36px 24px' }}>
+          <div className="sdu-callback-badge sdu-badge-error">SDU RECONNECT REQUIRED</div>
+          <h2>SDU Session Renewal Needed</h2>
+          <p style={{ color: 'var(--text-secondary)', marginBottom: 24 }}>
+            {error.message || 'Your SDU Platform session has expired or requires 2FA confirmation. Please reconnect your account.'}
+          </p>
+          <button type="button" className="btn-primary" onClick={onConnect} style={{ margin: '0 auto', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <span className="sdu-badge">SDU</span> Reconnect SDU Platform
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="page-fade">
+      {/* Header bar */}
+      <div className="panel" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 14, marginBottom: 20 }}>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            <span className="sdu-badge">SDU LIVE</span>
+            <span style={{ fontSize: '.78rem', color: 'var(--text-muted)' }}>source: live_sdu</span>
+            {lastFetched && (
+              <span style={{ fontSize: '.75rem', color: '#10B981', fontWeight: 600 }}>
+                • Fetched {new Date(lastFetched).toLocaleTimeString()}
+              </span>
+            )}
+          </div>
+          <h2 style={{ margin: 0, fontSize: '1.25rem' }}>Live University Portal</h2>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={loadLiveData}
+            disabled={loading}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '.84rem' }}
+          >
+            <Icons.Refresh size={15} className={loading ? "spinning" : ""} />
+            {loading ? 'Fetching from SDU…' : 'Refresh Live'}
+          </button>
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={onDisconnect}
+            style={{ color: 'var(--danger)', fontSize: '.84rem' }}
+          >
+            Disconnect SDU
+          </button>
+        </div>
+      </div>
+
+      {/* Sub tabs: Schedule, Transcript, Profile */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+        <button
+          type="button"
+          onClick={() => setSubTab('schedule')}
+          className={`tab-btn ${subTab === 'schedule' ? 'tab-active' : ''}`}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+        >
+          <Icons.Calendar size={15} /> Schedule
+        </button>
+        <button
+          type="button"
+          onClick={() => setSubTab('transcript')}
+          className={`tab-btn ${subTab === 'transcript' ? 'tab-active' : ''}`}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+        >
+          <Icons.GraduationCap size={15} /> Transcript
+        </button>
+        <button
+          type="button"
+          onClick={() => setSubTab('profile')}
+          className={`tab-btn ${subTab === 'profile' ? 'tab-active' : ''}`}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+        >
+          <Icons.User size={15} /> Student Profile
+        </button>
+      </div>
+
+      {loading && !profile && !schedule && !transcript ? (
+        <div className="panel" style={{ padding: '40px 20px', textAlign: 'center' }}>
+          <div className="sdu-spinner" />
+          <h3 style={{ margin: '0 0 6px 0' }}>Querying live SDU data…</h3>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '.88rem', margin: 0 }}>
+            Fetching directly from SDU Platform on request (up to 90s budget).
+          </p>
+        </div>
+      ) : (
+        <>
+          {subTab === 'schedule' && (
+            <div className="panel">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                <div>
+                  <span className="eyebrow">Academic Term</span>
+                  <h3 style={{ margin: 0 }}>Live Class Schedule</h3>
+                </div>
+              </div>
+
+              {!schedule || schedule.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '36px 12px', color: 'var(--text-muted)' }}>
+                  <Icons.Calendar size={36} color="#D1D5DB" style={{ marginBottom: 8 }} />
+                  <p>No active schedule entries returned from SDU for this term.</p>
+                </div>
+              ) : (
+                <div style={{ overflowX: 'auto' }}>
+                  <table className="teacher-table" style={{ width: '100%' }}>
+                    <thead>
+                      <tr>
+                        <th>Course</th>
+                        <th>Type / Section</th>
+                        <th>Day / Time</th>
+                        <th>Room & Building</th>
+                        <th>Teacher</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {schedule.map((s, idx) => {
+                        const dayNames = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+                        const dayStr = dayNames[s.day_of_week] || s.weekday || 'Weekday'
+                        const timeStr = (s.start_time && s.end_time) ? `${s.start_time} - ${s.end_time}` : (s.times || '—')
+                        return (
+                          <tr key={idx}>
+                            <td>
+                              <b>{s.course_name}</b>
+                              <span style={{ display: 'block', fontSize: '.75rem', color: 'var(--text-muted)' }}>{s.course_code}</span>
+                            </td>
+                            <td>
+                              <span className="status-badge" style={{ background: '#F3F4F6', color: '#374151' }}>
+                                {s.lesson_type || 'Class'} · Sec {s.section || '1'}
+                              </span>
+                            </td>
+                            <td>
+                              <b>{dayStr}</b>, {timeStr}
+                            </td>
+                            <td>
+                              {s.building || ''} {s.room ? `Room ${s.room}` : (s.is_online ? 'Online' : '—')}
+                            </td>
+                            <td>{s.teacher || '—'}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {subTab === 'transcript' && (
+            <div className="panel">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                <div>
+                  <span className="eyebrow">Official Records</span>
+                  <h3 style={{ margin: 0 }}>Live Transcript</h3>
+                </div>
+              </div>
+
+              {!transcript || transcript.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '36px 12px', color: 'var(--text-muted)' }}>
+                  <Icons.GraduationCap size={36} color="#D1D5DB" style={{ marginBottom: 8 }} />
+                  <p>No transcript records returned from live SDU portal.</p>
+                </div>
+              ) : (
+                <div style={{ overflowX: 'auto' }}>
+                  <table className="teacher-table" style={{ width: '100%' }}>
+                    <thead>
+                      <tr>
+                        <th>Semester</th>
+                        <th>Course Code & Title</th>
+                        <th>Credits</th>
+                        <th>Final Grade</th>
+                        <th>Letter Grade</th>
+                        <th>Grade Point</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {transcript.map((c, idx) => (
+                        <tr key={idx}>
+                          <td><b>Sem {c.semester ?? '—'}</b></td>
+                          <td>
+                            <b>{c.course_name}</b>
+                            <span style={{ display: 'block', fontSize: '.75rem', color: 'var(--text-muted)' }}>{c.course_code}</span>
+                          </td>
+                          <td>{c.credits ?? c.ects ?? '—'}</td>
+                          <td><b>{c.grade != null ? `${c.grade}%` : '—'}</b></td>
+                          <td>
+                            <span className="status-badge" style={{ background: '#EEF2FF', color: 'var(--primary)', fontWeight: 700 }}>
+                              {c.letter_grade || '—'}
+                            </span>
+                          </td>
+                          <td>{c.grade_point != null ? c.grade_point.toFixed(2) : '—'}</td>
+                          <td>
+                            {c.passed === false ? (
+                              <span className="status-badge badge-warn">Unpassed</span>
+                            ) : (
+                              <span className="status-badge badge-ok">Passed</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {subTab === 'profile' && (
+            <div className="panel" style={{ maxWidth: 640 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20 }}>
+                <div className="avatar-btn" style={{ width: 56, height: 56, fontSize: '1.3rem' }}>
+                  {initials(profile?.fullname)}
+                </div>
+                <div>
+                  <h3 style={{ margin: 0 }}>{profile?.fullname || 'Student'}</h3>
+                  <span style={{ color: 'var(--text-secondary)', fontSize: '.88rem' }}>SDU ID: {profile?.student_id || '—'}</span>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 14 }}>
+                <div style={{ background: 'var(--paper)', padding: '12px 14px', borderRadius: 8 }}>
+                  <small style={{ color: 'var(--text-secondary)', display: 'block' }}>University Email</small>
+                  <b>{profile?.email || '—'}</b>
+                </div>
+                <div style={{ background: 'var(--paper)', padding: '12px 14px', borderRadius: 8 }}>
+                  <small style={{ color: 'var(--text-secondary)', display: 'block' }}>Source</small>
+                  <b style={{ color: 'var(--primary)' }}>{profile?.source || 'live_sdu'}</b>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 /* ─── STUDENT SHELL (tabs + nav) ─────────────────────────────────── */
 function Student({ token, user, logout, onUpdateUser }) {
   const [tab, setTab]                 = useState('dashboard')
@@ -1776,11 +2139,75 @@ function Student({ token, user, logout, onUpdateUser }) {
       .catch(() => {})
   }, [token])
 
+  // SDU Platform connection status
+  const [sduStatus, setSduStatus]     = useState(null)
+  const [sduSyncing, setSduSyncing]   = useState(false)
+  const [sduToast, setSduToast]       = useState('')
+
+  const checkSduStatus = useCallback(() => {
+    api('/api/sdu/status', token)
+      .then(s => setSduStatus(s))
+      .catch(() => {})
+  }, [token])
+
+  useEffect(() => {
+    checkSduStatus()
+  }, [checkSduStatus])
+
+  const handleSduSync = async () => {
+    if (sduSyncing) return
+    setSduSyncing(true)
+    setSduToast('')
+    try {
+      const res = await api('/api/sdu/sync', token, { method: 'POST' })
+      setSduStatus(prev => ({ ...prev, connected: true, updated_at: res.updated_at }))
+      setSduToast('SDU academic data synchronized!')
+      setTimeout(() => setSduToast(''), 3500)
+    } catch (e) {
+      if (e.message && (e.message.includes('reconnect') || e.message.includes('expired'))) {
+        setSduStatus({ connected: false })
+      }
+      setSduToast(e.message || 'Sync failed')
+      setTimeout(() => setSduToast(''), 4000)
+    } finally {
+      setSduSyncing(false)
+    }
+  }
+
+  const handleSduConnect = async () => {
+    try {
+      const callbackUri = window.location.origin + '/auth/sdu/callback'
+      const res = await api('/api/sdu/authorize-url', token, {
+        method: 'POST',
+        body: JSON.stringify({ redirect_uri: callbackUri })
+      })
+      if (res && res.url) {
+        window.location.href = res.url
+      }
+    } catch (e) {
+      alert(e.message)
+    }
+  }
+
+  const handleSduDisconnect = async () => {
+    if (!window.confirm('Are you sure you want to disconnect your SDU Platform account?')) return
+    try {
+      await api('/api/sdu/disconnect', token, { method: 'POST' })
+      setSduStatus({ connected: false })
+      if (tab === 'sdu') setTab('dashboard')
+      setSduToast('SDU Platform disconnected.')
+      setTimeout(() => setSduToast(''), 3500)
+    } catch (e) {
+      alert(e.message || 'Disconnect failed')
+    }
+  }
+
   const tabs = [
     { id: 'dashboard',  label: 'Dashboard'  },
     { id: 'grades',     label: 'Grades'     },
     { id: 'attendance', label: 'Attendance' },
     { id: 'alerts',     label: 'Alerts'     },
+    { id: 'sdu',        label: 'SDU Live'   },
   ]
 
   return (
@@ -1813,8 +2240,43 @@ function Student({ token, user, logout, onUpdateUser }) {
           </div>
         </div>
 
-        {/* Right: bell + avatar */}
-        <div className="nav-right">
+        {/* Right: SDU badge + bell + avatar */}
+        <div className="nav-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {sduStatus?.connected ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div
+                className="sdu-nav-badge"
+                onClick={() => setTab('sdu')}
+                style={{ cursor: 'pointer' }}
+                title={`Connected to SDU Platform. Click to view live schedule & transcript. Last updated: ${sduStatus.updated_at ? new Date(sduStatus.updated_at).toLocaleString() : 'Recently'}`}
+              >
+                <span className="sdu-dot" />
+                <span>SDU Connected</span>
+              </div>
+              <button
+                type="button"
+                className="icon-btn"
+                style={{ padding: '6px 8px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}
+                onClick={handleSduSync}
+                disabled={sduSyncing}
+                title="Sync latest data from SDU Platform"
+                aria-label="Sync SDU Data"
+              >
+                <Icons.Refresh size={14} color={sduSyncing ? "var(--primary)" : "var(--text-secondary)"} />
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="sdu-nav-btn"
+              onClick={handleSduConnect}
+              title="Connect your official SDU Platform account"
+            >
+              <span className="sdu-badge">SDU</span>
+              <span>Connect SDU</span>
+            </button>
+          )}
+
           <button
             className="notification-bell"
             onClick={() => setTab('alerts')}
@@ -1829,11 +2291,25 @@ function Student({ token, user, logout, onUpdateUser }) {
         </div>
       </nav>
 
+      {sduToast && (
+        <div style={{
+          position: 'fixed', bottom: 24, right: 24, zIndex: 9999,
+          background: '#111827', color: '#fff', padding: '12px 18px',
+          borderRadius: 10, fontSize: '.86rem', fontWeight: 600,
+          boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+          display: 'flex', alignItems: 'center', gap: 8
+        }}>
+          <Icons.CheckCircle size={16} color="#10B981" />
+          {sduToast}
+        </div>
+      )}
+
       <main className="content">
         {tab === 'dashboard'  && <DashboardTab  token={token} user={user} semester={semester} setSemester={setSemester} semestersList={semestersList} />}
         {tab === 'grades'     && <GradesTab     token={token} semester={semester} setSemester={setSemester} semestersList={semestersList} />}
         {tab === 'attendance' && <AttendanceTab token={token} semester={semester} setSemester={setSemester} semestersList={semestersList} />}
         {tab === 'alerts'     && <AlertsTab     token={token} onUnreadChange={setUnread} onSelectTab={setTab} />}
+        {tab === 'sdu'        && <SduLiveTab    token={token} onConnect={handleSduConnect} onDisconnect={handleSduDisconnect} sduStatus={sduStatus} />}
       </main>
     </div>
   )
@@ -2217,6 +2693,99 @@ function Teacher({ token, user, logout }) {
   )
 }
 
+/* ─── SDU OAUTH CALLBACK HANDLER ─────────────────────────────────── */
+function SduCallback({ onLogin }) {
+  const [status, setStatus] = useState('processing')
+  const [errorMsg, setErrorMsg] = useState('')
+  const calledRef = useRef(false)
+
+  useEffect(() => {
+    if (calledRef.current) return
+    calledRef.current = true
+
+    const params = new URLSearchParams(window.location.search)
+    const code = params.get('code')
+    const state = params.get('state')
+    const error = params.get('error')
+    const errorDesc = params.get('error_description')
+
+    if (error) {
+      setStatus('error')
+      setErrorMsg(errorDesc || `SDU authorization was canceled or denied (${error}).`)
+      return
+    }
+
+    if (!state) {
+      setStatus('error')
+      setErrorMsg('Missing state parameter in OAuth callback.')
+      return
+    }
+
+    let isMounted = true
+    const completeAuth = async () => {
+      try {
+        const callbackUri = window.location.origin + '/auth/sdu/callback'
+        const data = await api('/api/sdu/callback', null, {
+          method: 'POST',
+          body: JSON.stringify({
+            code,
+            state,
+            redirect_uri: callbackUri,
+            error,
+            error_description: errorDesc
+          })
+        })
+        if (isMounted) {
+          window.history.replaceState({}, '', '/')
+          onLogin(data)
+        }
+      } catch (err) {
+        if (isMounted) {
+          setStatus('error')
+          setErrorMsg(err.message || 'Failed to complete SDU connection.')
+        }
+      }
+    }
+
+    completeAuth()
+    return () => { isMounted = false }
+  }, [onLogin])
+
+  if (status === 'error') {
+    return (
+      <div className="sdu-callback-container">
+        <div className="sdu-callback-card">
+          <div className="sdu-callback-badge sdu-badge-error">SDU ERROR</div>
+          <h2>Authorization Failed</h2>
+          <p>{errorMsg}</p>
+          <button
+            type="button"
+            className="btn-primary"
+            style={{ padding: '10px 24px', fontSize: '.9rem', margin: '0 auto' }}
+            onClick={() => {
+              window.history.replaceState({}, '', '/')
+              window.location.href = '/'
+            }}
+          >
+            ← Return to Sign In
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="sdu-callback-container">
+      <div className="sdu-callback-card">
+        <div className="sdu-callback-badge">SDU PLATFORM</div>
+        <div className="sdu-spinner" />
+        <h2>Connecting SDU Platform…</h2>
+        <p>Verifying secure PKCE authorization, authenticating your university identity, and syncing your student grades, schedule, and attendance snapshot.</p>
+      </div>
+    </div>
+  )
+}
+
 /* ─── APP ROOT ───────────────────────────────────────────────────── */
 function App() {
   const [session, setSession] = useState(() => {
@@ -2237,6 +2806,12 @@ function App() {
     window.addEventListener('auth:expired', onAuthExpired)
     return () => window.removeEventListener('auth:expired', onAuthExpired)
   }, [])
+
+  // Check if currently on SDU OAuth callback URL
+  const isCallback = typeof window !== 'undefined' && window.location.pathname.startsWith('/auth/sdu/callback')
+  if (isCallback) {
+    return <SduCallback onLogin={login} />
+  }
 
   if (!session) return <Login onLogin={login} />
 

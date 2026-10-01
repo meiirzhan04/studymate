@@ -23,6 +23,21 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .repository import SQLiteRepository
+from . import sdu_client
+
+
+class SduAuthorizeRequest(BaseModel):
+    redirect_uri: Optional[str] = None
+    scope: Optional[str] = None
+
+
+class SduCallbackRequest(BaseModel):
+    code: Optional[str] = None
+    state: str
+    redirect_uri: Optional[str] = None
+    error: Optional[str] = None
+    error_description: Optional[str] = None
+
 
 
 Role = Literal["student", "teacher"]
@@ -135,6 +150,23 @@ def current_user(authorization: Annotated[Optional[str], Header()] = None) -> Us
         return User(id=payload["sub"], name=payload["name"], role=payload["role"], student_id=payload.get("student_id"), teacher_id=payload.get("teacher_id"))
     except (ValueError, KeyError, json.JSONDecodeError):
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+
+def optional_current_user(authorization: Annotated[Optional[str], Header()] = None) -> Optional[User]:
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    token = authorization[7:]
+    try:
+        body, signature = token.rsplit(".", 1)
+        if not hmac.compare_digest(signature, sign(body)):
+            return None
+        payload = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+        if payload["exp"] < time.time():
+            return None
+        return User(id=payload["sub"], name=payload["name"], role=payload["role"], student_id=payload.get("student_id"), teacher_id=payload.get("teacher_id"))
+    except Exception:
+        return None
+
 
 
 def require_role(role: Role):
@@ -435,6 +467,269 @@ def direct_reset(req: DirectResetRequest):
     if not success:
         raise HTTPException(status_code=404, detail="User with this email or ID not found")
     return {"ok": True, "message": "Password updated successfully! You can now sign in."}
+
+
+# ─── SDU PLATFORM OAUTH INTEGRATION ──────────────────────────────────────────
+
+@app.post("/api/sdu/authorize-url")
+async def sdu_authorize_url(
+    req: SduAuthorizeRequest,
+    request: Request,
+    user: Annotated[Optional[User], Depends(optional_current_user)] = None,
+):
+    redirect_uri = req.redirect_uri
+    if not redirect_uri:
+        origin = request.headers.get("origin")
+        if origin and ("localhost" in origin or "127.0.0.1" in origin):
+            redirect_uri = f"{origin.rstrip('/')}/auth/sdu/callback"
+        elif origin and "vercel" in origin:
+            redirect_uri = "https://studymate-mu-smoky.vercel.app/auth/sdu/callback"
+        else:
+            redirect_uri = "https://studymate-mu-smoky.vercel.app/auth/sdu/callback"
+
+    if redirect_uri not in sdu_client.ALLOWED_REDIRECT_URIS:
+        if not (redirect_uri.startswith("http://localhost:") or redirect_uri.startswith("http://127.0.0.1:") or redirect_uri.startswith("https://studymate-mu-smoky.vercel.app")):
+            raise HTTPException(status_code=400, detail="Invalid redirect_uri. Must match a registered OAuth callback URL.")
+
+    code_verifier, code_challenge, state = sdu_client.generate_pkce_pair()
+    user_id = user.id if user else None
+    expires_at = time.time() + 600
+
+    repo.create_sdu_oauth_attempt(state, code_verifier, redirect_uri, user_id, expires_at)
+    auth_url = sdu_client.get_authorize_url(
+        redirect_uri=redirect_uri,
+        state=state,
+        code_challenge=code_challenge,
+        scope=req.scope or sdu_client.DEFAULT_SCOPES
+    )
+    return {"url": auth_url, "state": state, "redirect_uri": redirect_uri}
+
+
+@app.post("/api/sdu/callback")
+async def sdu_callback(req: SduCallbackRequest):
+    if not req.state:
+        raise HTTPException(status_code=400, detail="Missing OAuth state parameter.")
+
+    attempt = repo.get_and_consume_sdu_oauth_attempt(req.state)
+    if not attempt:
+        raise HTTPException(status_code=400, detail="Unknown or invalid OAuth state.")
+    if attempt.get("_error") == "attempt_replayed":
+        raise HTTPException(status_code=400, detail="This OAuth attempt has already been consumed (replay detected).")
+    if attempt.get("_error") == "attempt_expired":
+        raise HTTPException(status_code=400, detail="OAuth attempt has expired. Please try connecting again.")
+
+    if req.error:
+        error_msg = req.error_description or f"SDU authorization was canceled or denied ({req.error})."
+        raise HTTPException(status_code=400, detail=error_msg)
+
+    if not req.code:
+        raise HTTPException(status_code=400, detail="Missing authorization code from provider.")
+
+    redirect_uri = attempt["redirect_uri"]
+    code_verifier = attempt["code_verifier"]
+
+    try:
+        token_data = await sdu_client.exchange_code_for_token(
+            code=req.code,
+            code_verifier=code_verifier,
+            redirect_uri=redirect_uri
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to exchange code with SDU: {str(exc)}")
+
+    access_token = token_data.get("access_token")
+    if not access_token:
+        raise HTTPException(status_code=400, detail="SDU token endpoint did not return an access_token.")
+
+    # Fetch student profile
+    status_code, profile_data = await sdu_client.fetch_sdu_data("profile", access_token)
+    if status_code != 200 or not isinstance(profile_data, dict):
+        raise HTTPException(status_code=400, detail="Failed to fetch student profile from SDU Platform.")
+
+    student_id = str(profile_data.get("student_id", "")).strip()
+    fullname = profile_data.get("fullname", "")
+    email = profile_data.get("email")
+
+    if attempt.get("user_id"):
+        user = repo.get_user_by_id(attempt["user_id"])
+        if not user:
+            raise HTTPException(status_code=404, detail="Bound local user account not found.")
+    else:
+        user = repo.find_or_create_sdu_user(student_id=student_id, fullname=fullname, email=email)
+
+    expires_in = token_data.get("expires_in", 2592000)
+    granted_scope = token_data.get("scope", "")
+    repo.save_sdu_connection(
+        user_id=user["id"],
+        access_token=access_token,
+        expires_at=time.time() + expires_in,
+        scope=granted_scope
+    )
+
+    # Initial snapshot sync
+    try:
+        _, sched_data = await sdu_client.fetch_sdu_data("schedule", access_token)
+        _, att_data = await sdu_client.fetch_sdu_data("attendance", access_token)
+        _, grades_data = await sdu_client.fetch_sdu_data("grades", access_token)
+        repo.sync_sdu_student_data(
+            user["id"],
+            profile=profile_data,
+            schedule=sched_data.get("schedule") if isinstance(sched_data, dict) else None,
+            grades=grades_data.get("grades") if isinstance(grades_data, dict) else None,
+            attendance=att_data.get("attendance") if isinstance(att_data, dict) else None,
+        )
+    except Exception:
+        pass
+
+    return {
+        "access_token": issue_token(user),
+        "token_type": "bearer",
+        "expires_in": 1800,
+        "user": user,
+        "sdu_connected": True,
+        "student_profile": {
+            "student_id": student_id,
+            "fullname": fullname,
+            "email": email
+        }
+    }
+
+
+@app.get("/api/sdu/status")
+def sdu_status(user: Annotated[User, Depends(current_user)]):
+    conn = repo.get_sdu_connection(user.id)
+    if not conn:
+        return {"connected": False}
+    if conn["expires_at"] < time.time():
+        return {"connected": False, "expired": True, "updated_at": conn["updated_at"]}
+    return {
+        "connected": True,
+        "scope": conn["scope"],
+        "expires_at": conn["expires_at"],
+        "updated_at": conn["updated_at"]
+    }
+
+
+@app.post("/api/sdu/sync")
+async def sdu_sync(user: Annotated[User, Depends(current_user)]):
+    conn = repo.get_sdu_connection(user.id)
+    if not conn:
+        raise HTTPException(status_code=400, detail="No SDU account connected.")
+    if conn["expires_at"] < time.time():
+        repo.delete_sdu_connection(user.id)
+        raise HTTPException(status_code=401, detail="SDU token has expired. Please reconnect.")
+
+    access_token = conn["access_token"]
+    status_code, profile_data = await sdu_client.fetch_sdu_data("profile", access_token)
+    if status_code == 401:
+        repo.delete_sdu_connection(user.id)
+        raise HTTPException(status_code=401, detail="SDU token revoked or expired. Please reconnect.")
+    if status_code == 403:
+        raise HTTPException(status_code=403, detail="Missing required SDU scope or account restricted.")
+
+    _, sched_data = await sdu_client.fetch_sdu_data("schedule", access_token)
+    _, att_data = await sdu_client.fetch_sdu_data("attendance", access_token)
+    _, grades_data = await sdu_client.fetch_sdu_data("grades", access_token)
+
+    res = repo.sync_sdu_student_data(
+        user.id,
+        profile=profile_data if isinstance(profile_data, dict) else {},
+        schedule=sched_data.get("schedule") if isinstance(sched_data, dict) else None,
+        grades=grades_data.get("grades") if isinstance(grades_data, dict) else None,
+        attendance=att_data.get("attendance") if isinstance(att_data, dict) else None,
+    )
+    return {"ok": True, "connected": True, "synced": True, "updated_at": res.get("updated_at")}
+
+
+def _handle_sdu_error_response(user_id: str, status_code: int, data: dict):
+    if status_code == 401:
+        repo.delete_sdu_connection(user_id)
+        raise HTTPException(status_code=401, detail="SDU token expired or revoked. Please reconnect.")
+    if status_code == 403:
+        raise HTTPException(status_code=403, detail="Missing required SDU scope or account restricted.")
+    if status_code == 409:
+        raise HTTPException(status_code=409, detail=data)
+    if status_code == 502:
+        raise HTTPException(status_code=502, detail="SDU portal upstream unavailable.")
+    if status_code == 504:
+        raise HTTPException(status_code=504, detail="SDU portal upstream timeout (90s budget exceeded).")
+    if status_code == 422:
+        raise HTTPException(status_code=422, detail=data)
+    if status_code != 200:
+        raise HTTPException(status_code=status_code, detail=data.get("detail", "SDU request failed"))
+
+
+@app.get("/api/sdu/profile")
+async def sdu_live_profile(user: Annotated[User, Depends(current_user)]):
+    conn = repo.get_sdu_connection(user.id)
+    if not conn:
+        raise HTTPException(status_code=400, detail="SDU account is not connected.")
+    if conn["expires_at"] < time.time():
+        repo.delete_sdu_connection(user.id)
+        raise HTTPException(status_code=401, detail="SDU token expired. Please reconnect.")
+
+    status_code, data = await sdu_client.fetch_sdu_data("profile", conn["access_token"])
+    _handle_sdu_error_response(user.id, status_code, data)
+    return data
+
+
+@app.get("/api/sdu/schedule")
+async def sdu_live_schedule(
+    user: Annotated[User, Depends(current_user)],
+    year: Optional[int] = None,
+    term: Optional[int] = None
+):
+    conn = repo.get_sdu_connection(user.id)
+    if not conn:
+        raise HTTPException(status_code=400, detail="SDU account is not connected.")
+    if conn["expires_at"] < time.time():
+        repo.delete_sdu_connection(user.id)
+        raise HTTPException(status_code=401, detail="SDU token expired. Please reconnect.")
+
+    params = {}
+    if year is not None and term is not None:
+        params["year"] = year
+        params["term"] = term
+    elif year is not None or term is not None:
+        raise HTTPException(status_code=422, detail="Year and term must be provided together.")
+
+    status_code, data = await sdu_client.fetch_sdu_data("schedule", conn["access_token"], params=params or None)
+    _handle_sdu_error_response(user.id, status_code, data)
+    return data
+
+
+@app.get("/api/sdu/transcript")
+async def sdu_live_transcript(
+    user: Annotated[User, Depends(current_user)],
+    semester: Optional[int] = None,
+    passed: Optional[bool] = None
+):
+    conn = repo.get_sdu_connection(user.id)
+    if not conn:
+        raise HTTPException(status_code=400, detail="SDU account is not connected.")
+    if conn["expires_at"] < time.time():
+        repo.delete_sdu_connection(user.id)
+        raise HTTPException(status_code=401, detail="SDU token expired. Please reconnect.")
+
+    params = {}
+    if semester is not None:
+        params["semester"] = semester
+    if passed is not None:
+        params["passed"] = str(passed).lower()
+
+    status_code, data = await sdu_client.fetch_sdu_data("transcript", conn["access_token"], params=params or None)
+    _handle_sdu_error_response(user.id, status_code, data)
+    return data
+
+
+@app.post("/api/sdu/disconnect")
+async def sdu_disconnect(user: Annotated[User, Depends(current_user)]):
+    conn = repo.get_sdu_connection(user.id)
+    if conn:
+        await sdu_client.revoke_token(conn["access_token"])
+        repo.delete_sdu_connection(user.id)
+    return {"ok": True, "message": "SDU account disconnected and token revoked successfully."}
+
 
 
 @app.put("/api/me/profile")

@@ -115,6 +115,21 @@ class SQLiteRepository:
                     notes TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS sdu_oauth_attempts (
+                    state TEXT PRIMARY KEY,
+                    code_verifier TEXT NOT NULL,
+                    user_id TEXT,
+                    redirect_uri TEXT NOT NULL,
+                    expires_at REAL NOT NULL,
+                    used INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS sdu_connections (
+                    user_id TEXT PRIMARY KEY REFERENCES users(id),
+                    access_token TEXT NOT NULL,
+                    expires_at REAL NOT NULL,
+                    scope TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
             # Check if the real SDU Information Systems curriculum is loaded
@@ -424,6 +439,13 @@ class SQLiteRepository:
                 return None
             return {key: row[key] for key in ("id", "name", "role", "student_id", "teacher_id")}
 
+    def get_user_by_id(self, user_id: str) -> dict | None:
+        with self.connect() as db:
+            row = db.execute("SELECT id, name, role, student_id, teacher_id FROM users WHERE id = ?", (user_id,)).fetchone()
+            if not row:
+                return None
+            return dict(row)
+
     def get_email_for_user(self, user_id: str) -> str | None:
         with self.connect() as db:
             row = db.execute(
@@ -675,3 +697,180 @@ class SQLiteRepository:
             db.execute("UPDATE password_reset_codes SET used = 1 WHERE id = ?", (row["id"],))
             db.commit()
             return True
+
+    def create_sdu_oauth_attempt(self, state: str, code_verifier: str, redirect_uri: str, user_id: str | None, expires_at: float):
+        with self.connect() as db:
+            db.execute(
+                "INSERT OR REPLACE INTO sdu_oauth_attempts (state, code_verifier, user_id, redirect_uri, expires_at, used) VALUES (?, ?, ?, ?, ?, 0)",
+                (state, code_verifier, user_id, redirect_uri, expires_at)
+            )
+            db.commit()
+
+    def get_and_consume_sdu_oauth_attempt(self, state: str) -> dict | None:
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM sdu_oauth_attempts WHERE state = ?", (state,)).fetchone()
+            if not row:
+                return None
+            res = dict(row)
+            if res["used"] == 1:
+                return {"_error": "attempt_replayed", **res}
+            if res["expires_at"] < time.time():
+                return {"_error": "attempt_expired", **res}
+            db.execute("UPDATE sdu_oauth_attempts SET used = 1 WHERE state = ?", (state,))
+            db.commit()
+            return res
+
+    def save_sdu_connection(self, user_id: str, access_token: str, expires_at: float, scope: str):
+        now = datetime.now(timezone.utc).isoformat()
+        with self.connect() as db:
+            existing = db.execute("SELECT user_id FROM sdu_connections WHERE user_id = ?", (user_id,)).fetchone()
+            if existing:
+                db.execute(
+                    "UPDATE sdu_connections SET access_token = ?, expires_at = ?, scope = ?, updated_at = ? WHERE user_id = ?",
+                    (access_token, expires_at, scope, now, user_id)
+                )
+            else:
+                db.execute(
+                    "INSERT INTO sdu_connections (user_id, access_token, expires_at, scope, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    (user_id, access_token, expires_at, scope, now)
+                )
+            db.commit()
+
+    def get_sdu_connection(self, user_id: str) -> dict | None:
+        with self.connect() as db:
+            row = db.execute("SELECT user_id, access_token, expires_at, scope, updated_at FROM sdu_connections WHERE user_id = ?", (user_id,)).fetchone()
+            if not row:
+                return None
+            return dict(row)
+
+    def delete_sdu_connection(self, user_id: str) -> bool:
+        with self.connect() as db:
+            cur = db.execute("DELETE FROM sdu_connections WHERE user_id = ?", (user_id,))
+            db.commit()
+            return cur.rowcount > 0
+
+    def find_or_create_sdu_user(self, student_id: str, fullname: str, email: str | None) -> dict:
+        clean_sid = student_id.strip()
+        clean_name = fullname.strip() or f"Student {clean_sid}"
+        clean_email = email.strip() if email else f"{clean_sid}@sdu.edu.kz"
+
+        with self.connect() as db:
+            row = db.execute(
+                """SELECT u.id, u.name, u.role, u.student_id, u.teacher_id 
+                   FROM users u
+                   WHERE u.student_id = ? 
+                   OR u.id IN (SELECT user_id FROM login_identifiers WHERE identifier = ? COLLATE NOCASE OR identifier = ? COLLATE NOCASE)""",
+                (clean_sid, clean_sid, clean_email)
+            ).fetchone()
+
+            if row:
+                u = dict(row)
+                if not u.get("student_id"):
+                    db.execute("UPDATE users SET student_id = ? WHERE id = ?", (clean_sid, u["id"]))
+                    u["student_id"] = clean_sid
+                if clean_name and (not u.get("name") or u["name"].startswith("Student ")):
+                    db.execute("UPDATE users SET name = ? WHERE id = ?", (clean_name, u["id"]))
+                    db.execute("UPDATE students SET name = ? WHERE id = ?", (clean_name, clean_sid))
+                    u["name"] = clean_name
+                db.execute("INSERT OR IGNORE INTO students (id, name, cohort, attendance, missing_assignments) VALUES (?, ?, 'SDU Student', 95.0, 0)",
+                           (clean_sid, clean_name))
+                db.execute("INSERT OR IGNORE INTO teacher_scope (teacher_id, student_id) VALUES ('t1', ?)", (clean_sid,))
+                if clean_email:
+                    db.execute("INSERT OR IGNORE INTO login_identifiers (identifier, user_id) VALUES (?, ?)", (clean_email, u["id"]))
+                db.commit()
+                return u
+
+            new_uid = f"u-{clean_sid}"
+            salt = secrets.token_hex(8)
+            random_pw = secrets.token_urlsafe(16)
+            pw_hash = hash_password(random_pw, salt)
+
+            db.execute(
+                "INSERT INTO users (id, name, role, student_id, teacher_id, password_salt, password_hash) VALUES (?, ?, 'student', ?, NULL, ?, ?)",
+                (new_uid, clean_name, clean_sid, salt, pw_hash)
+            )
+            db.execute("INSERT OR IGNORE INTO login_identifiers (identifier, user_id) VALUES (?, ?)", (clean_sid, new_uid))
+            if clean_email:
+                db.execute("INSERT OR IGNORE INTO login_identifiers (identifier, user_id) VALUES (?, ?)", (clean_email, new_uid))
+
+            db.execute(
+                "INSERT OR IGNORE INTO students (id, name, cohort, attendance, missing_assignments) VALUES (?, ?, 'SDU Student', 95.0, 0)",
+                (clean_sid, clean_name)
+            )
+            db.execute("INSERT OR IGNORE INTO teacher_scope (teacher_id, student_id) VALUES ('t1', ?)", (clean_sid,))
+            db.commit()
+
+            return {"id": new_uid, "name": clean_name, "role": "student", "student_id": clean_sid, "teacher_id": None}
+
+    def sync_sdu_student_data(self, user_id: str, profile: dict, schedule: list | None, grades: list | None, attendance: list | None) -> dict:
+        student_id = profile.get("student_id")
+        fullname = profile.get("fullname")
+        email = profile.get("email")
+
+        with self.connect() as db:
+            user = db.execute("SELECT id, name, student_id FROM users WHERE id = ?", (user_id,)).fetchone()
+            if not user:
+                return {"synced": False, "error": "User not found"}
+            sid = user["student_id"] or student_id
+
+            if fullname and (not user["name"] or user["name"].startswith("Student ")):
+                db.execute("UPDATE users SET name = ? WHERE id = ?", (fullname, user_id))
+                if sid:
+                    db.execute("UPDATE students SET name = ? WHERE id = ?", (fullname, sid))
+
+            if email:
+                db.execute("INSERT OR IGNORE INTO login_identifiers (identifier, user_id) VALUES (?, ?)", (email, user_id))
+
+            # Sync SDU attendance
+            # Note: SDU exposes absence_percent: SDU course absence percentage, not lesson-by-lesson history.
+            # Never label absence_percent as attendance percentage. Attendance = 100 - absence_percent.
+            if attendance and isinstance(attendance, list):
+                valid_att = [item for item in attendance if isinstance(item, dict) and item.get("absence_percent") is not None]
+                if valid_att and sid:
+                    avg_absence = sum(float(item["absence_percent"]) for item in valid_att) / len(valid_att)
+                    overall_att = round(max(0.0, min(100.0, 100.0 - avg_absence)), 1)
+                    db.execute("UPDATE students SET attendance = ? WHERE id = ?", (overall_att, sid))
+
+            # Sync SDU grades
+            if grades and isinstance(grades, list) and sid:
+                for g in grades:
+                    if not isinstance(g, dict):
+                        continue
+                    course_name = g.get("lesson")
+                    if not course_name:
+                        continue
+                    grade_val = g.get("grade")
+                    credits_val = g.get("credits") or g.get("ects") or 3
+                    code_val = f"SDU-{abs(hash(course_name)) % 900 + 100}"
+
+                    existing_grade = db.execute(
+                        "SELECT id, components_json FROM grades WHERE student_id = ? AND course = ?",
+                        (sid, course_name)
+                    ).fetchone()
+
+                    if existing_grade:
+                        if grade_val is not None:
+                            comps = [{"name": "Final Grade", "score": float(grade_val), "weight": 1.0}]
+                            db.execute(
+                                "UPDATE grades SET components_json = ? WHERE id = ?",
+                                (json.dumps(comps), existing_grade["id"])
+                            )
+                    else:
+                        comps = [{"name": "Coursework", "score": float(grade_val) if grade_val is not None else 85.0, "weight": 1.0}]
+                        db.execute(
+                            "INSERT INTO grades (student_id, semester, course, code, credits, components_json) VALUES (?, 'spring-2026', ?, ?, ?, ?)",
+                            (sid, course_name, code_val, credits_val, json.dumps(comps))
+                        )
+
+            # Record SDU sync notification
+            now = datetime.now(timezone.utc).isoformat()
+            if sid:
+                db.execute(
+                    "INSERT INTO notifications (student_id, type, title, detail, course, read, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)",
+                    (sid, "sdu_sync", "SDU Platform Data Synchronized", "Your profile, schedule, and attendance records were updated from SDU.", "SDU Portal", now)
+                )
+
+            db.execute("UPDATE sdu_connections SET updated_at = ? WHERE user_id = ?", (now, user_id))
+            db.commit()
+            return {"synced": True, "updated_at": now}
+
