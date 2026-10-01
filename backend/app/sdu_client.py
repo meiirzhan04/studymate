@@ -6,14 +6,19 @@ from typing import Optional
 import httpx
 
 SDU_ORIGIN = os.getenv("SDU_ORIGIN", "https://api-sdu.javazhan.tech").rstrip("/")
-SDU_CLIENT_ID = os.getenv("SDU_CLIENT_ID", "m5yNQp9knC_d-zBMINCWew")
+SDU_CLIENT_ID = os.getenv("SDU_CLIENT_ID", "Lmx-fAIZYvwviEy_ruf4NQ")
 DEFAULT_SCOPES = "profile:read profile:full academic-profile:read schedule:read grades-attendance:read courses:read transcript:read moodle:read"
 
 ALLOWED_REDIRECT_URIS = [
     "http://localhost:5173/auth/sdu/callback",
-    "http://127.0.0.1:5173/auth/sdu/callback",
+    "http://localhost:3000/auth/sdu/callback",
     "http://localhost:8000/auth/sdu/callback",
+    "http://127.0.0.1:5173/auth/sdu/callback",
+    "http://127.0.0.1:3000/auth/sdu/callback",
+    "http://127.0.0.1:8000/auth/sdu/callback",
     "https://studymate-mu-smoky.vercel.app/auth/sdu/callback",
+    "https://studymate.vercel.app/auth/sdu/callback",
+    "https://studymate-git-main-meiirzhans-projects.vercel.app/auth/sdu/callback",
     "https://studymate-knap.onrender.com/auth/sdu/callback",
 ]
 

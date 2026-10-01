@@ -22,6 +22,27 @@ const getApiBase = () => {
   return ''
 }
 
+const CANONICAL_SDU_CALLBACK = 'https://studymate-mu-smoky.vercel.app/auth/sdu/callback'
+
+const getSduCallbackUri = () => {
+  if (typeof window === 'undefined') return CANONICAL_SDU_CALLBACK
+  const origin = window.location.origin
+  const host = window.location.hostname
+  if (host === 'localhost' || host === '127.0.0.1') {
+    return `${origin}/auth/sdu/callback`
+  }
+  if (host.includes('onrender.com')) {
+    return 'https://studymate-knap.onrender.com/auth/sdu/callback'
+  }
+  if (host === 'studymate.vercel.app') {
+    return 'https://studymate.vercel.app/auth/sdu/callback'
+  }
+  if (host.includes('studymate-git-main')) {
+    return 'https://studymate-git-main-meiirzhans-projects.vercel.app/auth/sdu/callback'
+  }
+  return CANONICAL_SDU_CALLBACK
+}
+
 const api = async (path, token, options = {}) => {
   const base = getApiBase()
   let res
@@ -360,7 +381,7 @@ function Login({ onLogin }) {
     setSduBusy(true)
     setError('')
     try {
-      const callbackUri = window.location.origin + '/auth/sdu/callback'
+      const callbackUri = getSduCallbackUri()
       const res = await api('/api/sdu/authorize-url', null, {
         method: 'POST',
         body: JSON.stringify({ redirect_uri: callbackUri })
@@ -2178,7 +2199,7 @@ function Student({ token, user, logout, onUpdateUser }) {
 
   const handleSduConnect = async () => {
     try {
-      const callbackUri = window.location.origin + '/auth/sdu/callback'
+      const callbackUri = getSduCallbackUri()
       const res = await api('/api/sdu/authorize-url', token, {
         method: 'POST',
         body: JSON.stringify({ redirect_uri: callbackUri })
@@ -2745,7 +2766,7 @@ function SduCallback({ onLogin }) {
     let isMounted = true
     const completeAuth = async () => {
       try {
-        const callbackUri = window.location.origin + '/auth/sdu/callback'
+        const callbackUri = getSduCallbackUri()
         const data = await api('/api/sdu/callback', null, {
           method: 'POST',
           body: JSON.stringify({

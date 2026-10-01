@@ -477,7 +477,7 @@ async def sdu_authorize_url(
     request: Request,
     user: Annotated[Optional[User], Depends(optional_current_user)] = None,
 ):
-    redirect_uri = req.redirect_uri
+    redirect_uri = (req.redirect_uri or "").strip().rstrip("/")
     if not redirect_uri:
         origin = request.headers.get("origin")
         if origin and ("localhost" in origin or "127.0.0.1" in origin):
@@ -487,9 +487,16 @@ async def sdu_authorize_url(
         else:
             redirect_uri = "https://studymate-mu-smoky.vercel.app/auth/sdu/callback"
 
+    # If it is any vercel.app domain not explicitly listed, fallback to canonical registered URI
+    if "vercel.app" in redirect_uri and redirect_uri not in sdu_client.ALLOWED_REDIRECT_URIS:
+        redirect_uri = "https://studymate-mu-smoky.vercel.app/auth/sdu/callback"
+
+    # Ensure redirect_uri matches a registered endpoint
     if redirect_uri not in sdu_client.ALLOWED_REDIRECT_URIS:
-        if not (redirect_uri.startswith("http://localhost:") or redirect_uri.startswith("http://127.0.0.1:") or redirect_uri.startswith("https://studymate-mu-smoky.vercel.app")):
-            raise HTTPException(status_code=400, detail="Invalid redirect_uri. Must match a registered OAuth callback URL.")
+        if redirect_uri.startswith("http://localhost:") or redirect_uri.startswith("http://127.0.0.1:"):
+            pass
+        else:
+            redirect_uri = "https://studymate-mu-smoky.vercel.app/auth/sdu/callback"
 
     code_verifier, code_challenge, state = sdu_client.generate_pkce_pair()
     user_id = user.id if user else None
