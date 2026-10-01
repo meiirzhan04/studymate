@@ -722,6 +722,56 @@ async def sdu_live_transcript(
     return data
 
 
+@app.get("/api/sdu/attendance")
+async def sdu_live_attendance(
+    user: Annotated[User, Depends(current_user)],
+    year: Optional[int] = None,
+    term: Optional[int] = None
+):
+    conn = repo.get_sdu_connection(user.id)
+    if not conn:
+        raise HTTPException(status_code=400, detail="SDU account is not connected.")
+    if conn["expires_at"] < time.time():
+        repo.delete_sdu_connection(user.id)
+        raise HTTPException(status_code=401, detail="SDU token expired. Please reconnect.")
+
+    params = {}
+    if year is not None and term is not None:
+        params["year"] = year
+        params["term"] = term
+    elif year is not None or term is not None:
+        raise HTTPException(status_code=422, detail="Year and term must be provided together.")
+
+    status_code, data = await sdu_client.fetch_sdu_data("attendance", conn["access_token"], params=params or None)
+    _handle_sdu_error_response(user.id, status_code, data)
+    return data
+
+
+@app.get("/api/sdu/grades")
+async def sdu_live_grades(
+    user: Annotated[User, Depends(current_user)],
+    year: Optional[int] = None,
+    term: Optional[int] = None
+):
+    conn = repo.get_sdu_connection(user.id)
+    if not conn:
+        raise HTTPException(status_code=400, detail="SDU account is not connected.")
+    if conn["expires_at"] < time.time():
+        repo.delete_sdu_connection(user.id)
+        raise HTTPException(status_code=401, detail="SDU token expired. Please reconnect.")
+
+    params = {}
+    if year is not None and term is not None:
+        params["year"] = year
+        params["term"] = term
+    elif year is not None or term is not None:
+        raise HTTPException(status_code=422, detail="Year and term must be provided together.")
+
+    status_code, data = await sdu_client.fetch_sdu_data("grades", conn["access_token"], params=params or None)
+    _handle_sdu_error_response(user.id, status_code, data)
+    return data
+
+
 @app.post("/api/sdu/disconnect")
 async def sdu_disconnect(user: Annotated[User, Depends(current_user)]):
     conn = repo.get_sdu_connection(user.id)
