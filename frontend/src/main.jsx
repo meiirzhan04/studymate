@@ -630,15 +630,358 @@ const ProgressRing = ({ pct, size = 90, stroke = 8, color = '#6366F1' }) => {
   )
 }
 
-/* ─── Stat Metric Card ───────────────────────────────────────────── */
-const Metric = ({ label, value, detail, icon, tone = '', colorClass = 'metric-purple' }) => (
-  <article className={`metric ${colorClass} ${tone}`}>
-    <div className={`metric-icon metric-icon-${colorClass.replace('metric-', '')}`}>{icon}</div>
-    <span>{label}</span>
-    <strong>{value ?? '—'}</strong>
-    <small>{detail}</small>
-  </article>
-)
+/* ─── SHARED DESIGN SYSTEM COMPONENTS ────────────────────────────── */
+
+function timeAgo(isoDate) {
+  if (!isoDate) return ''
+  try {
+    const diff = Date.now() - new Date(isoDate).getTime()
+    const mins = Math.floor(diff / 60000)
+    if (mins < 1) return 'just now'
+    if (mins === 1) return '1 min ago'
+    if (mins < 60) return `${mins} min ago`
+    const hours = Math.floor(mins / 60)
+    if (hours === 1) return '1 hour ago'
+    if (hours < 24) return `${hours} hours ago`
+    const days = Math.floor(hours / 24)
+    if (days === 1) return 'yesterday'
+    if (days < 7) return `${days} days ago`
+    return new Date(isoDate).toLocaleDateString([], { month: 'short', day: 'numeric' })
+  } catch {
+    return ''
+  }
+}
+
+function PageHeader({ badge, title, subtitle, lastFetched, actions, className = '' }) {
+  return (
+    <header className={`page-head page-fade ${className}`}>
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
+          {badge && <span className="sdu-badge">{badge}</span>}
+          {lastFetched && (
+            <span style={{ fontSize: '.76rem', color: '#10B981', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <span className="sdu-dot pulse-dot" /> Live • Synced {new Date(lastFetched).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </span>
+          )}
+        </div>
+        <h1 style={{ margin: '0 0 6px 0' }}>{title}</h1>
+        {subtitle && <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '.92rem' }}>{subtitle}</p>}
+      </div>
+      {actions && <div className="page-head-actions">{actions}</div>}
+    </header>
+  )
+}
+
+function StatCard({ label, value, valueSuffix, subtext, icon, pillColor = 'pill-purple', badge, children, valueColor, className = '' }) {
+  return (
+    <article className={`stat-card-custom ${className}`}>
+      <div>
+        <div className="stat-card-head">
+          <span className="stat-card-label">{label}</span>
+          <div className={`stat-card-icon-pill ${pillColor}`}>
+            {icon}
+          </div>
+        </div>
+        <div className="stat-card-value" style={valueColor ? { color: valueColor } : undefined}>
+          {value ?? '—'}
+          {valueSuffix && <span style={{ fontSize: '1rem', color: 'var(--text-muted)', fontWeight: 600 }}> {valueSuffix}</span>}
+        </div>
+        {subtext && <div className="stat-card-subtext">{subtext}</div>}
+      </div>
+      {(children || badge) && (
+        <div style={{ marginTop: 14 }}>
+          {badge}
+          {children}
+        </div>
+      )}
+    </article>
+  )
+}
+
+function SearchInput({ value, onChange, placeholder = "Search...", onClear, className = "" }) {
+  return (
+    <div className={`search-input-wrap ${className}`}>
+      <span className="search-icon">
+        <Icons.Search size={16} />
+      </span>
+      <input
+        type="text"
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        aria-label={placeholder}
+      />
+      {value && (
+        <button
+          type="button"
+          className="search-clear-btn"
+          onClick={onClear || (() => onChange({ target: { value: '' } }))}
+          aria-label="Clear search"
+        >
+          <Icons.Close size={14} />
+        </button>
+      )}
+    </div>
+  )
+}
+
+function FilterChips({ options = [], value, onChange }) {
+  return (
+    <div className="filter-chips-group" role="tablist">
+      {options.map(opt => (
+        <button
+          key={opt.id}
+          type="button"
+          role="tab"
+          aria-selected={value === opt.id}
+          className={`filter-chip-btn ${value === opt.id ? 'active' : ''}`}
+          onClick={() => onChange(opt.id)}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function NotificationsDropdown({ token, unread, onUnreadChange, onSelectTab }) {
+  const [isOpen, setIsOpen] = useState(false)
+  const [notifs, setNotifs] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const wrapperRef = useRef(null)
+
+  const loadNotifs = useCallback(async () => {
+    if (!token) return
+    setLoading(true)
+    try {
+      const data = await api('/api/student/notifications', token)
+      setNotifs(data.items || [])
+      if (typeof data.unread_count === 'number') {
+        onUnreadChange(data.unread_count)
+      }
+    } catch (e) {
+      console.warn('Notifications fetch error:', e)
+    } finally {
+      setLoading(false)
+    }
+  }, [token, onUnreadChange])
+
+  useEffect(() => {
+    if (isOpen) {
+      loadNotifs()
+    }
+  }, [isOpen, loadNotifs])
+
+  useEffect(() => {
+    if (!isOpen) return
+
+    const handleKeyDown = e => {
+      if (e.key === 'Escape') {
+        setIsOpen(false)
+      }
+    }
+
+    const handleClickOutside = e => {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target)) {
+        setIsOpen(false)
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [isOpen])
+
+  const markRead = async (id, e) => {
+    if (e) e.stopPropagation()
+    try {
+      await api(`/api/student/notifications/${id}/read`, token, { method: 'POST' })
+      setNotifs(prev => (prev || []).map(n => n.id === id ? { ...n, read: true } : n))
+      onUnreadChange(prev => Math.max(0, prev - 1))
+    } catch (err) {
+      console.warn('Mark read error:', err)
+    }
+  }
+
+  const markAllRead = async () => {
+    if (!notifs) return
+    const unreadItems = notifs.filter(n => !n.read)
+    if (!unreadItems.length) return
+    try {
+      await Promise.all(unreadItems.map(n => api(`/api/student/notifications/${n.id}/read`, token, { method: 'POST' })))
+      setNotifs(prev => (prev || []).map(n => ({ ...n, read: true })))
+      onUnreadChange(0)
+    } catch (err) {
+      console.warn('Mark all read error:', err)
+    }
+  }
+
+  const getNotifIconInfo = type => {
+    switch (type) {
+      case 'low_grade':
+        return {
+          icon: <Icons.AlertTriangle size={16} />,
+          pill: 'pill-amber',
+        }
+      case 'low_attendance':
+        return {
+          icon: <Icons.Calendar size={16} />,
+          pill: 'pill-danger',
+        }
+      case 'critical':
+      case 'danger':
+        return {
+          icon: <Icons.AlertTriangle size={16} />,
+          pill: 'pill-danger',
+        }
+      case 'success':
+        return {
+          icon: <Icons.CheckCircle size={16} />,
+          pill: 'pill-emerald',
+        }
+      case 'info':
+      default:
+        return {
+          icon: <Icons.Bell size={16} />,
+          pill: 'pill-purple',
+        }
+    }
+  }
+
+  return (
+    <div className="notif-wrapper" ref={wrapperRef}>
+      <button
+        type="button"
+        className="notification-bell"
+        onClick={() => setIsOpen(prev => !prev)}
+        aria-label={`Notifications${unread > 0 ? `, ${unread} unread` : ''}`}
+        aria-expanded={isOpen}
+        aria-haspopup="dialog"
+      >
+        <Icons.Bell size={18} color="var(--text-secondary)" />
+        {unread > 0 && <span className="bell-badge">{unread}</span>}
+      </button>
+
+      {isOpen && (
+        <div className="notif-dropdown-panel page-fade" role="dialog" aria-label="Notifications panel">
+          <div className="notif-panel-header">
+            <h3>
+              <span>Notifications</span>
+              {unread > 0 && <span className="notif-unread-count-pill">{unread}</span>}
+            </h3>
+            {unread > 0 && (
+              <button type="button" className="btn-mark-all-text" onClick={markAllRead}>
+                Mark all as read
+              </button>
+            )}
+          </div>
+
+          <div className="notif-panel-body" aria-live="polite">
+            {loading && !notifs ? (
+              <div style={{ padding: '30px 16px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                <div className="sdu-spinner" style={{ margin: '0 auto 8px auto', width: 22, height: 22 }} />
+                <span style={{ fontSize: '.84rem' }}>Loading notifications…</span>
+              </div>
+            ) : !notifs || notifs.length === 0 ? (
+              <div className="notif-empty-state">
+                <Icons.CheckCircle size={32} color="var(--success)" />
+                <h4>You're all caught up!</h4>
+                <p>No new academic alerts or notifications.</p>
+              </div>
+            ) : (
+              notifs.map(n => {
+                const { icon, pill } = getNotifIconInfo(n.type)
+                return (
+                  <div
+                    key={n.id}
+                    className={`notif-item-v2 ${n.read ? '' : 'unread'}`}
+                    onClick={() => {
+                      if (!n.read) markRead(n.id)
+                      setIsOpen(false)
+                      if (onSelectTab) onSelectTab('alerts')
+                    }}
+                  >
+                    <div className={`notif-item-icon ${pill}`}>
+                      {icon}
+                    </div>
+
+                    <div className="notif-item-content">
+                      <div className="notif-item-title" title={n.title}>
+                        {n.title}
+                      </div>
+                      <div className="notif-item-msg" title={n.detail}>
+                        {n.detail}
+                      </div>
+                      <div className="notif-item-time">
+                        {timeAgo(n.created_at)}
+                      </div>
+                    </div>
+
+                    <div className="notif-item-right">
+                      {!n.read && <span className="notif-unread-dot" title="Unread" />}
+                      {!n.read && (
+                        <button
+                          type="button"
+                          className="notif-mark-btn"
+                          title="Mark as read"
+                          aria-label="Mark as read"
+                          onClick={e => markRead(n.id, e)}
+                        >
+                          <Icons.Check size={14} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )
+              })
+            )}
+          </div>
+
+          <div className="notif-panel-footer">
+            <button
+              type="button"
+              onClick={() => {
+                setIsOpen(false)
+                if (onSelectTab) onSelectTab('alerts')
+              }}
+            >
+              View all notifications →
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ─── Stat Metric Card (Legacy fallback modernized) ──────────────── */
+const Metric = ({ label, value, detail, icon, tone = '', colorClass = 'metric-purple' }) => {
+  const pillMap = {
+    'metric-purple': 'pill-purple',
+    'metric-green': 'pill-emerald',
+    'metric-blue': 'pill-blue',
+    'metric-warn': 'pill-amber',
+    'metric-danger': 'pill-danger',
+  }
+  const pill = pillMap[colorClass] || 'pill-purple'
+  return (
+    <article className={`stat-card-custom metric ${tone}`}>
+      <div>
+        <div className="stat-card-head">
+          <span className="stat-card-label">{label}</span>
+          <div className={`stat-card-icon-pill ${pill}`}>
+            {icon}
+          </div>
+        </div>
+        <div className="stat-card-value">{value ?? '—'}</div>
+        {detail && <div className="stat-card-subtext">{detail}</div>}
+      </div>
+    </article>
+  )
+}
 
 /* ─── REDESIGNED SIGN IN & CREATE ACCOUNT SCREEN ─────────────────── */
 function Login({ onLogin, theme, toggleTheme }) {
@@ -1917,6 +2260,7 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, onRefresh })
   const gpa = calcGPA(transcript)
   const totalCredits = calcCompletedCredits(transcript)
   const passedCount = transcript.filter(c => c.passed === true).length
+  const unpassedCount = transcript.length - passedCount
 
   const semesters = Array.from(new Set(transcript.map(c => c.semester).filter(Boolean))).sort((a, b) => a - b)
 
@@ -1932,6 +2276,11 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, onRefresh })
     }
     return true
   })
+
+  // Degree progress calculation (240 ECTS target)
+  const targetCredits = 240
+  const creditsPct = Math.min(100, Math.round(((totalCredits || 0) / targetCredits) * 100))
+  const passedPct = transcript.length > 0 ? Math.round((passedCount / transcript.length) * 100) : 0
 
   const exportCSV = () => {
     if (!transcript.length) return
@@ -1958,114 +2307,143 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, onRefresh })
 
   return (
     <div className="page-fade">
-      <header className="page-head" style={{ marginBottom: 20 }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-            <span className="sdu-badge">SDU TRANSCRIPT</span>
-            {sduData.lastFetched && (
-              <span style={{ fontSize: '.76rem', color: '#10B981', fontWeight: 600 }}>
-                • Fetched {new Date(sduData.lastFetched).toLocaleTimeString()}
-              </span>
-            )}
-          </div>
-          <h1>Official Transcript & Grades</h1>
-          <p>Complete academic curriculum records and grades fetched directly from SDU Platform.</p>
-        </div>
-        <div style={{ display: 'flex', gap: 10 }}>
-          <button type="button" className="btn-ghost" onClick={exportCSV} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <Icons.Download size={14} /> Export Transcript (CSV)
-          </button>
-          <button
-            type="button"
-            className="btn-ghost"
-            onClick={onRefresh}
-            disabled={sduLoading}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-          >
-            <Icons.Refresh size={14} className={sduLoading ? "spinning" : ""} />
-            {sduLoading ? 'Refreshing…' : 'Refresh'}
-          </button>
-        </div>
-      </header>
+      <PageHeader
+        badge="SDU TRANSCRIPT"
+        title="Official Transcript & Grades"
+        subtitle="Complete academic curriculum records and grades fetched directly from SDU Platform."
+        lastFetched={sduData.lastFetched}
+        actions={
+          <>
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={exportCSV}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            >
+              <Icons.Download size={14} /> Export CSV
+            </button>
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={onRefresh}
+              disabled={sduLoading}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            >
+              <Icons.Refresh size={14} className={sduLoading ? "spinning" : ""} />
+              {sduLoading ? 'Refreshing…' : 'Refresh'}
+            </button>
+          </>
+        }
+      />
 
-      <section className="metrics" style={{ marginBottom: 20 }}>
-        <Metric
-          label="Cumulative GPA"
-          value={gpa != null ? gpa.toFixed(2) : '—'}
-          detail="Official SDU 4.0 scale"
-          icon={<Icons.Target size={20} color="var(--primary)" />}
-          colorClass="metric-purple"
-        />
-        <Metric
-          label="Completed Credits"
-          value={`${totalCredits} ECTS`}
-          detail="Graduation requirements"
-          icon={<Icons.Book size={20} color="var(--success)" />}
-          colorClass="metric-green"
-        />
-        <Metric
-          label="Passed Courses"
-          value={`${passedCount} / ${transcript.length}`}
-          detail={`${transcript.length - passedCount} in progress / remaining`}
-          icon={<Icons.CheckCircle size={20} color="var(--success)" />}
-          colorClass="metric-green"
-        />
+      {/* 3 Stat Cards Responsive Grid (3 cols desktop, 2 tablet, 1 mobile) */}
+      <section className="stat-grid-3">
+        {/* Card 1: Cumulative GPA */}
+        <article className="stat-card-custom">
+          <div>
+            <div className="stat-card-head">
+              <span className="stat-card-label">Cumulative GPA</span>
+              <div className="stat-card-icon-pill pill-purple">
+                <Icons.Target size={18} />
+              </div>
+            </div>
+            <div className="gpa-gauge-row">
+              <div>
+                <div className="stat-card-value">
+                  {gpa != null ? gpa.toFixed(2) : '—'}
+                  <span style={{ fontSize: '1rem', color: 'var(--text-muted)', fontWeight: 600 }}> / 4.00</span>
+                </div>
+                <div className="stat-card-subtext">Official SDU 4.0 scale</div>
+              </div>
+              <GpaGauge gpa={gpa} maxGpa={4.0} />
+            </div>
+          </div>
+          <div style={{ marginTop: 14 }}>
+            <span className="gpa-trend-pill trend-positive">
+              <Icons.TrendingUp size={13} />
+              <span>{gpa >= 3.5 ? "Dean's List Eligible" : (gpa >= 2.0 ? 'Satisfactory Progress' : 'Academic Alert')}</span>
+            </span>
+          </div>
+        </article>
+
+        {/* Card 2: Completed Credits */}
+        <article className="stat-card-custom">
+          <div>
+            <div className="stat-card-head">
+              <span className="stat-card-label">Completed Credits</span>
+              <div className="stat-card-icon-pill pill-blue">
+                <Icons.Book size={18} />
+              </div>
+            </div>
+            <div className="stat-card-value">
+              {totalCredits} <span style={{ fontSize: '1.1rem', color: 'var(--text-muted)', fontWeight: 600 }}>ECTS</span>
+            </div>
+            <div className="stat-card-subtext">{totalCredits} / {targetCredits} ECTS required ({creditsPct}%)</div>
+          </div>
+          <div className="credits-bar-track" style={{ marginTop: 14 }}>
+            <div className="credits-bar-fill" style={{ width: `${creditsPct}%` }} />
+          </div>
+        </article>
+
+        {/* Card 3: Passed Courses */}
+        <article className="stat-card-custom">
+          <div>
+            <div className="stat-card-head">
+              <span className="stat-card-label">Passed Courses</span>
+              <div className="stat-card-icon-pill pill-emerald">
+                <Icons.CheckCircle size={18} />
+              </div>
+            </div>
+            <div className="stat-card-value">
+              {passedCount} <span style={{ fontSize: '1.1rem', color: 'var(--text-muted)', fontWeight: 600 }}>/ {transcript.length}</span>
+            </div>
+            <div className="stat-card-subtext">{unpassedCount} in progress / remaining ({passedPct}%)</div>
+          </div>
+          <div className="credits-bar-track" style={{ marginTop: 14 }}>
+            <div className="credits-bar-fill" style={{ width: `${passedPct}%`, background: 'var(--success)' }} />
+          </div>
+        </article>
       </section>
 
-      <div className="transcript-filter-bar">
-        <div className="search-input-box">
-          <span className="search-icon-pos"><Icons.Search size={15} /></span>
-          <input
-            type="text"
-            placeholder="Search course title or code..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
+      {/* Toolbar: Search on left, chips and semester select on right */}
+      <div className="toolbar-row">
+        <SearchInput
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          onClear={() => setSearch('')}
+          placeholder="Search course title or code…"
+        />
+
+        <div className="toolbar-controls">
+          {semesters.length > 0 && (
+            <select
+              value={semesterFilter}
+              onChange={e => setSemesterFilter(e.target.value)}
+              className="portal-select"
+              aria-label="Filter by semester"
+            >
+              <option value="all">All Semesters</option>
+              {semesters.map(s => (
+                <option key={s} value={s}>Semester {s}</option>
+              ))}
+            </select>
+          )}
+
+          <FilterChips
+            options={[
+              { id: 'all', label: 'All' },
+              { id: 'passed', label: `Passed (${passedCount})` },
+              { id: 'unpassed', label: `Unpassed (${unpassedCount})` },
+            ]}
+            value={statusFilter}
+            onChange={setStatusFilter}
           />
-        </div>
-
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-          <select
-            value={semesterFilter}
-            onChange={e => setSemesterFilter(e.target.value)}
-            style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border)', background: '#fff', fontSize: '.84rem', fontWeight: 600 }}
-          >
-            <option value="all">All Semesters</option>
-            {semesters.map(s => (
-              <option key={s} value={s}>Semester {s}</option>
-            ))}
-          </select>
-
-          <div style={{ display: 'flex', background: 'var(--paper)', padding: 3, borderRadius: 8 }}>
-            <button
-              type="button"
-              className={`day-pill-btn ${statusFilter === 'all' ? 'active' : ''}`}
-              onClick={() => setStatusFilter('all')}
-              style={{ padding: '5px 12px', fontSize: '.78rem' }}
-            >
-              All
-            </button>
-            <button
-              type="button"
-              className={`day-pill-btn ${statusFilter === 'passed' ? 'active' : ''}`}
-              onClick={() => setStatusFilter('passed')}
-              style={{ padding: '5px 12px', fontSize: '.78rem' }}
-            >
-              Passed ({passedCount})
-            </button>
-            <button
-              type="button"
-              className={`day-pill-btn ${statusFilter === 'unpassed' ? 'active' : ''}`}
-              onClick={() => setStatusFilter('unpassed')}
-              style={{ padding: '5px 12px', fontSize: '.78rem' }}
-            >
-              Unpassed ({transcript.length - passedCount})
-            </button>
-          </div>
         </div>
       </div>
 
-      <article className="panel" style={{ overflowX: 'auto', padding: 0 }}>
-        <table className="teacher-table" style={{ width: '100%', margin: 0 }}>
+      {/* Course list / table with modern portal styling */}
+      <div className="table-card-container" style={{ overflowX: 'auto' }}>
+        <table className="portal-table">
           <thead>
             <tr>
               <th style={{ paddingLeft: 20 }}>Sem</th>
@@ -2080,16 +2458,16 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, onRefresh })
           <tbody>
             {!filtered.length ? (
               <tr>
-                <td colSpan={7} style={{ textAlign: 'center', padding: '40px 16px', color: 'var(--text-muted)' }}>
+                <td colSpan={7} style={{ textAlign: 'center', padding: '48px 16px', color: 'var(--text-muted)' }}>
                   No courses found matching your filter criteria.
                 </td>
               </tr>
             ) : (
               filtered.map((c, idx) => (
                 <tr key={idx}>
-                  <td style={{ paddingLeft: 20, fontWeight: 700 }}>Sem {c.semester ?? '—'}</td>
+                  <td style={{ paddingLeft: 20, fontWeight: 700, color: 'var(--text-secondary)' }}>Sem {c.semester ?? '—'}</td>
                   <td>
-                    <b>{c.course_name}</b>
+                    <b style={{ color: 'var(--text-primary)' }}>{c.course_name}</b>
                     <span style={{ display: 'block', fontSize: '.76rem', color: 'var(--text-muted)' }}>{c.course_code}</span>
                   </td>
                   <td style={{ fontWeight: 600 }}>{c.credits ?? c.ects ?? '—'}</td>
@@ -2122,7 +2500,7 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, onRefresh })
             )}
           </tbody>
         </table>
-      </article>
+      </div>
     </div>
   )
 }
@@ -2149,69 +2527,134 @@ function AttendanceTab({ sduData, sduLoading, sduStatus, onConnect, onRefresh })
   const warningCourses = attendanceList.filter(a => Number(a.absence_percent) > 20).length
   const goodCourses = totalCourses - warningCourses
 
+  // Attendance health state
+  let attClass = 'state-safe'
+  let attLabel = 'Safe Status (≥90%)'
+  if (overallAtt < 75) {
+    attClass = 'state-danger'
+    attLabel = 'Critical Drop Risk (<75%)'
+  } else if (overallAtt < 90) {
+    attClass = 'state-caution'
+    attLabel = 'Caution (75–89%)'
+  }
+
+  const attColor = overallAtt >= 90 ? 'var(--success)' : (overallAtt >= 75 ? 'var(--warning)' : 'var(--danger)')
+  const attPill = overallAtt >= 90 ? 'pill-emerald' : (overallAtt >= 75 ? 'pill-amber' : 'pill-danger')
+
   return (
     <div className="page-fade">
-      <header className="page-head" style={{ marginBottom: 20 }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-            <span className="sdu-badge">SDU ATTENDANCE</span>
-            {sduData.lastFetched && (
-              <span style={{ fontSize: '.76rem', color: '#10B981', fontWeight: 600 }}>
-                • Fetched {new Date(sduData.lastFetched).toLocaleTimeString()}
-              </span>
-            )}
-          </div>
-          <h1>Course Attendance & Absences</h1>
-          <p>Official course absence metrics tracked directly from SDU University portal.</p>
-        </div>
-        <button
-          type="button"
-          className="btn-ghost"
-          onClick={onRefresh}
-          disabled={sduLoading}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-        >
-          <Icons.Refresh size={14} className={sduLoading ? "spinning" : ""} />
-          {sduLoading ? 'Refreshing…' : 'Refresh'}
-        </button>
-      </header>
+      <PageHeader
+        badge="SDU ATTENDANCE"
+        title="Course Attendance & Absences"
+        subtitle="Official course absence metrics tracked directly from SDU University portal."
+        lastFetched={sduData.lastFetched}
+        actions={
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={onRefresh}
+            disabled={sduLoading}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+          >
+            <Icons.Refresh size={14} className={sduLoading ? "spinning" : ""} />
+            {sduLoading ? 'Refreshing…' : 'Refresh'}
+          </button>
+        }
+      />
 
-      <section className="metrics" style={{ marginBottom: 24 }}>
-        <Metric
-          label="Overall Attendance"
-          value={`${overallAtt}%`}
-          detail="100% minus average absence"
-          icon={<Icons.Calendar size={20} color="#2563EB" />}
-          colorClass="metric-blue"
-        />
-        <Metric
-          label="Tracked Courses"
-          value={totalCourses}
-          detail="Live portal academic courses"
-          icon={<Icons.Book size={20} color="var(--primary)" />}
-          colorClass="metric-purple"
-        />
-        <Metric
-          label="Good Standing"
-          value={goodCourses}
-          detail="Absence within limits (≤ 20%)"
-          icon={<Icons.CheckCircle size={20} color="var(--success)" />}
-          colorClass="metric-green"
-        />
-        <Metric
-          label="Absence Warnings"
-          value={warningCourses}
-          detail={warningCourses ? 'Exceeding recommended limit' : 'All courses safe'}
-          icon={<Icons.AlertTriangle size={20} color={warningCourses ? "var(--danger)" : "var(--success)"} />}
-          tone={warningCourses ? 'warn' : ''}
-          colorClass={warningCourses ? 'metric-warn' : 'metric-green'}
-        />
+      {/* 4 Stat Cards Responsive Grid (4 cols desktop, 2 tablet, 1 mobile) */}
+      <section className="stat-grid-4">
+        {/* Card 1: Overall Attendance */}
+        <article className="stat-card-custom">
+          <div>
+            <div className="stat-card-head">
+              <span className="stat-card-label">Overall Attendance</span>
+              <div className={`stat-card-icon-pill ${attPill}`}>
+                <Icons.Calendar size={18} />
+              </div>
+            </div>
+            <div className="stat-card-value" style={{ color: attColor }}>
+              {overallAtt}%
+            </div>
+            <div className="stat-card-subtext">100% minus average absence</div>
+          </div>
+          <div className="att-health-row">
+            <span className={`att-badge-state ${attClass}`}>
+              {attLabel}
+            </span>
+            <span style={{ fontSize: '.76rem', color: 'var(--text-muted)' }}>Limit: 20% absence</span>
+          </div>
+        </article>
+
+        {/* Card 2: Tracked Courses */}
+        <article className="stat-card-custom">
+          <div>
+            <div className="stat-card-head">
+              <span className="stat-card-label">Tracked Courses</span>
+              <div className="stat-card-icon-pill pill-purple">
+                <Icons.Book size={18} />
+              </div>
+            </div>
+            <div className="stat-card-value">
+              {totalCourses} <span style={{ fontSize: '1rem', color: 'var(--text-muted)', fontWeight: 600 }}>Courses</span>
+            </div>
+            <div className="stat-card-subtext">Live portal academic courses</div>
+          </div>
+          <div className="next-class-hint-pill">
+            <Icons.Book size={13} color="var(--primary)" />
+            <span>Active semester enrollment</span>
+          </div>
+        </article>
+
+        {/* Card 3: Good Standing */}
+        <article className="stat-card-custom">
+          <div>
+            <div className="stat-card-head">
+              <span className="stat-card-label">Good Standing</span>
+              <div className="stat-card-icon-pill pill-emerald">
+                <Icons.CheckCircle size={18} />
+              </div>
+            </div>
+            <div className="stat-card-value">
+              {goodCourses} <span style={{ fontSize: '1rem', color: 'var(--text-muted)', fontWeight: 600 }}>Courses</span>
+            </div>
+            <div className="stat-card-subtext">Absence within limits (≤ 20%)</div>
+          </div>
+          <div className="next-class-hint-pill">
+            <Icons.CheckCircle size={13} color="var(--success)" />
+            <span>No immediate drop risk</span>
+          </div>
+        </article>
+
+        {/* Card 4: Absence Warnings */}
+        <article className="stat-card-custom">
+          <div>
+            <div className="stat-card-head">
+              <span className="stat-card-label">Absence Warnings</span>
+              <div className={`stat-card-icon-pill ${warningCourses > 0 ? 'pill-danger' : 'pill-emerald'}`}>
+                <Icons.AlertTriangle size={18} />
+              </div>
+            </div>
+            <div className="stat-card-value" style={{ color: warningCourses > 0 ? 'var(--danger)' : 'var(--success)' }}>
+              {warningCourses} <span style={{ fontSize: '1rem', color: 'var(--text-muted)', fontWeight: 600 }}>Courses</span>
+            </div>
+            <div className="stat-card-subtext">
+              {warningCourses ? 'Exceeding recommended limit' : 'All courses safe'}
+            </div>
+          </div>
+          <div className="next-class-hint-pill">
+            <Icons.AlertTriangle size={13} color={warningCourses > 0 ? "var(--danger)" : "var(--success)"} />
+            <span style={{ color: warningCourses > 0 ? 'var(--danger)' : 'inherit' }}>
+              {warningCourses > 0 ? 'Action required (>20% absence)' : 'Standing in good order'}
+            </span>
+          </div>
+        </article>
       </section>
 
       {!attendanceList.length ? (
-        <div style={{ padding: '60px 24px', textAlign: 'center', background: '#fff', borderRadius: 16, border: '1px solid var(--border)' }}>
-          <Icons.Calendar size={36} color="#CBD5E1" style={{ marginBottom: 12 }} />
-          <h3 style={{ margin: '0 0 6px', fontSize: '1.05rem', color: '#111827' }}>No attendance records found</h3>
+        <div className="panel" style={{ padding: '60px 24px', textAlign: 'center' }}>
+          <Icons.Calendar size={36} color="var(--text-muted)" style={{ marginBottom: 12 }} />
+          <h3 style={{ margin: '0 0 6px', fontSize: '1.05rem', color: 'var(--text-primary)' }}>No attendance records found</h3>
           <p style={{ margin: 0, fontSize: '.88rem', color: 'var(--text-secondary)' }}>
             SDU has not published absence entries for this term yet.
           </p>
@@ -2260,11 +2703,11 @@ function AttendanceTab({ sduData, sduLoading, sduStatus, onConnect, onRefresh })
         </div>
       )}
 
-      <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 14, padding: '20px 24px', display: 'flex', gap: 14, alignItems: 'flex-start' }}>
-        <div style={{ color: '#3B82F6', marginTop: 2 }}><Icons.Calendar size={22} /></div>
+      <div style={{ background: 'var(--surface-subtle)', border: '1px solid var(--border)', borderRadius: 14, padding: '20px 24px', display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+        <div style={{ color: 'var(--primary)', marginTop: 2 }}><Icons.Calendar size={22} /></div>
         <div>
-          <b style={{ fontSize: '.92rem', color: '#0F172A', display: 'block', marginBottom: 4 }}>SDU Attendance Contract & Regulation:</b>
-          <p style={{ margin: 0, fontSize: '.84rem', color: '#475569', lineHeight: 1.55 }}>
+          <b style={{ fontSize: '.92rem', color: 'var(--text-primary)', display: 'block', marginBottom: 4 }}>SDU Attendance Contract & Regulation:</b>
+          <p style={{ margin: 0, fontSize: '.84rem', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
             SDU University portal tracks the course absence percentage directly (not lesson-by-lesson log). StudyMate calculates your attendance rate as <b>100% minus the absence rate</b>. Reaching 25% course absence leads to automatic course drop (FX status).
           </p>
         </div>
@@ -2293,7 +2736,7 @@ function SduProfileTab({ sduData, sduLoading, sduStatus, onConnect, onDisconnect
         </div>
       </header>
 
-      <div className="panel" style={{ padding: '32px 28px', borderRadius: 20, border: '1px solid #CBD5E1', boxShadow: '0 12px 32px rgba(0,0,0,0.06)', position: 'relative', overflow: 'hidden' }}>
+      <div className="panel" style={{ padding: '32px 28px', borderRadius: 20, border: '1px solid var(--border)', boxShadow: 'var(--shadow-md)', position: 'relative', overflow: 'hidden' }}>
         <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 6, background: 'linear-gradient(90deg, #4F46E5, #06B6D4, #10B981)' }} />
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap', marginBottom: 24 }}>
@@ -2316,7 +2759,7 @@ function SduProfileTab({ sduData, sduLoading, sduStatus, onConnect, onDisconnect
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14, marginBottom: 24 }}>
           <div style={{ background: 'var(--bg)', padding: '14px 16px', borderRadius: 10, border: '1px solid var(--border)' }}>
             <small style={{ color: 'var(--text-muted)', display: 'block', marginBottom: 3 }}>Official University Email</small>
-            <b style={{ fontSize: '.9rem', color: '#111827' }}>{p.email || `${p.student_id || 'student'}@sdu.edu.kz`}</b>
+            <b style={{ fontSize: '.9rem', color: 'var(--text-primary)' }}>{p.email || `${p.student_id || 'student'}@sdu.edu.kz`}</b>
           </div>
           <div style={{ background: 'var(--bg)', padding: '14px 16px', borderRadius: 10, border: '1px solid var(--border)' }}>
             <small style={{ color: 'var(--text-muted)', display: 'block', marginBottom: 3 }}>Cumulative GPA</small>
@@ -2324,17 +2767,17 @@ function SduProfileTab({ sduData, sduLoading, sduStatus, onConnect, onDisconnect
           </div>
           <div style={{ background: 'var(--bg)', padding: '14px 16px', borderRadius: 10, border: '1px solid var(--border)' }}>
             <small style={{ color: 'var(--text-muted)', display: 'block', marginBottom: 3 }}>Portal Data Origin</small>
-            <b style={{ fontSize: '.9rem', color: '#059669' }}>api-sdu.javazhan.tech</b>
+            <b style={{ fontSize: '.9rem', color: 'var(--success)' }}>api-sdu.javazhan.tech</b>
           </div>
           <div style={{ background: 'var(--bg)', padding: '14px 16px', borderRadius: 10, border: '1px solid var(--border)' }}>
             <small style={{ color: 'var(--text-muted)', display: 'block', marginBottom: 3 }}>Last Portal Query</small>
-            <b style={{ fontSize: '.84rem', color: '#111827' }}>
+            <b style={{ fontSize: '.84rem', color: 'var(--text-primary)' }}>
               {sduData.lastFetched ? new Date(sduData.lastFetched).toLocaleTimeString() : 'Recently'}
             </b>
           </div>
         </div>
 
-        <div style={{ background: '#F8FAFC', border: '1px solid var(--border)', borderRadius: 12, padding: '14px 18px', marginBottom: 24, fontSize: '.82rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+        <div style={{ background: 'var(--surface-subtle)', border: '1px solid var(--border)', borderRadius: 12, padding: '14px 18px', marginBottom: 24, fontSize: '.82rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
           <b>Security & Authorization Scope:</b> Connected via OAuth 2.0 PKCE (S256). Authorized scopes: <code>profile:read</code>, <code>schedule:read</code>, <code>grades-attendance:read</code>, <code>transcript:read</code>. Token stored securely on the server.
         </div>
 
@@ -2354,7 +2797,7 @@ function SduProfileTab({ sduData, sduLoading, sduStatus, onConnect, onDisconnect
             type="button"
             className="btn-ghost"
             onClick={onDisconnect}
-            style={{ color: 'var(--danger)', borderColor: '#FECDD3', background: '#FFF1F2', fontSize: '.88rem' }}
+            style={{ color: 'var(--danger)', borderColor: 'var(--danger-border)', background: 'var(--danger-dim)', fontSize: '.88rem' }}
           >
             Disconnect SDU Account
           </button>
@@ -2408,99 +2851,135 @@ function AlertsTab({ token, onUnreadChange, onSelectTab }) {
 
   const unreadCount = notifs.filter(n => !n.read).length
 
-  const typeIcon = t =>
-    t === 'low_grade' ? <Icons.AlertTriangle size={16} /> :
-    t === 'low_attendance' ? <Icons.Calendar size={16} /> :
-    <Icons.Bell size={16} />
-
-  const typeIconClass = t =>
-    t === 'low_grade' ? 'notif-icon-warn' : t === 'low_attendance' ? 'notif-icon-att' : 'notif-icon-bell'
-
-  const fmt = iso => {
-    try {
-      return new Intl.DateTimeFormat('en', {
-        month: 'short', day: 'numeric',
-        hour: '2-digit', minute: '2-digit'
-      }).format(new Date(iso))
-    } catch { return iso }
+  const getNotifIconInfo = type => {
+    switch (type) {
+      case 'low_grade':
+        return {
+          icon: <Icons.AlertTriangle size={18} />,
+          pill: 'pill-amber',
+        }
+      case 'low_attendance':
+        return {
+          icon: <Icons.Calendar size={18} />,
+          pill: 'pill-danger',
+        }
+      case 'critical':
+      case 'danger':
+        return {
+          icon: <Icons.AlertTriangle size={18} />,
+          pill: 'pill-danger',
+        }
+      case 'success':
+        return {
+          icon: <Icons.CheckCircle size={18} />,
+          pill: 'pill-emerald',
+        }
+      case 'info':
+      default:
+        return {
+          icon: <Icons.Bell size={18} />,
+          pill: 'pill-purple',
+        }
+    }
   }
 
   return (
-    <>
-      <header className="page-head page-fade">
-        <div>
-          <span className="eyebrow">Alerts &amp; Notifications</span>
-          <h1>Notifications</h1>
-          <p>{unreadCount > 0
-            ? `${unreadCount} unread notification${unreadCount > 1 ? 's' : ''}`
-            : 'All caught up!'
-          }</p>
-        </div>
-        {unreadCount > 0 && (
-          <button className="btn-markall" onClick={markAll} disabled={marking} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            {marking ? 'Marking…' : <><Icons.Check size={14} /> Mark all read</>}
-          </button>
-        )}
-      </header>
-
-      <div className="notif-list page-fade">
-        {notifs.length === 0
-          ? (
-            <article className="panel">
-              <p className="empty" style={{ padding: '40px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                <Icons.Bell size={18} color="var(--text-secondary)" /> No notifications yet.
-              </p>
-            </article>
+    <div className="page-fade">
+      <PageHeader
+        badge="SDU NOTIFICATIONS"
+        title="Academic Alerts & Notifications"
+        subtitle={unreadCount > 0 ? `${unreadCount} unread academic notification${unreadCount > 1 ? 's' : ''}` : 'All caught up! No unread notifications.'}
+        actions={
+          unreadCount > 0 && (
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={markAll}
+              disabled={marking}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            >
+              <Icons.Check size={14} /> {marking ? 'Marking…' : 'Mark all read'}
+            </button>
           )
-          : notifs.map(n => (
+        }
+      />
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 840 }}>
+        {notifs.length === 0 ? (
+          <article className="panel" style={{ padding: '60px 20px', textAlign: 'center' }}>
+            <Icons.CheckCircle size={36} color="var(--success)" style={{ marginBottom: 12 }} />
+            <h3 style={{ margin: '0 0 6px', fontSize: '1.05rem', color: 'var(--text-primary)' }}>You're all caught up!</h3>
+            <p style={{ margin: 0, fontSize: '.88rem', color: 'var(--text-secondary)' }}>
+              No notifications or academic warnings on your account.
+            </p>
+          </article>
+        ) : (
+          notifs.map(n => {
+            const { icon, pill } = getNotifIconInfo(n.type)
+            return (
               <div
                 key={n.id}
-                className={`notif-item ${n.read ? 'notif-read' : 'notif-unread'}`}
+                className={`notif-item-v2 ${n.read ? '' : 'unread'}`}
+                style={{ padding: '16px 20px', border: '1px solid var(--border)', background: n.read ? 'var(--surface)' : 'var(--primary-dim)' }}
                 onClick={() => !n.read && markRead(n.id)}
-                title={n.read ? '' : 'Click to mark as read'}
               >
-                <div className={`notif-icon-circle ${typeIconClass(n.type)}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  {typeIcon(n.type)}
+                <div className={`notif-item-icon ${pill}`} style={{ width: 42, height: 42 }}>
+                  {icon}
                 </div>
-                <div className="notif-body">
-                  <div className="notif-title">{n.title}</div>
-                  <div className="notif-detail">{n.detail}</div>
-                  <div className="notif-meta">
-                    {n.course && <span className="notif-course">{n.course}</span>}
-                    <span className="notif-time">{fmt(n.created_at)}</span>
+                <div className="notif-item-content">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                    <div className="notif-item-title" style={{ fontSize: '.95rem' }}>{n.title}</div>
+                    <span className="notif-item-time" style={{ margin: 0 }}>{timeAgo(n.created_at)}</span>
                   </div>
-                  <div className="notif-actions" onClick={e => e.stopPropagation()}>
+                  <div className="notif-item-msg" style={{ WebkitLineClamp: 3, fontSize: '.86rem', marginTop: 4 }}>
+                    {n.detail}
+                  </div>
+                  {n.course && (
+                    <div style={{ marginTop: 8 }}>
+                      <span className="badge-chip"><code>{n.course}</code></span>
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }} onClick={e => e.stopPropagation()}>
                     <button
                       type="button"
                       className="notif-action-btn"
-                      onClick={() => onSelectTab && onSelectTab('grades')}
+                      onClick={() => onSelectTab && onSelectTab('transcript')}
                       style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
                     >
-                      <Icons.Chart size={13} /> View Grade Breakdown
+                      <Icons.Chart size={13} /> View Grades
                     </button>
                     <a
                       className="notif-action-btn"
-                      href={`mailto:teacher@univ.edu?subject=Regarding ${encodeURIComponent(n.course || 'Academic Alert')}`}
+                      href={`mailto:advisor@sdu.edu.kz?subject=Regarding ${encodeURIComponent(n.course || 'Academic Alert')}`}
                       style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
                     >
                       <Icons.Mail size={13} /> Contact Instructor
                     </a>
-                    <button
-                      type="button"
-                      className="notif-action-btn"
-                      onClick={() => alert(`Academic Tutoring Center:\nDrop-in tutoring for ${n.course || 'your subjects'} is available Monday–Thursday 14:00–18:00 in Room 302.`)}
-                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                    >
-                      <Icons.Book size={13} /> Book Tutoring
-                    </button>
                   </div>
                 </div>
-                {!n.read && <span className="unread-dot" />}
+                <div className="notif-item-right">
+                  {!n.read && <span className="notif-unread-dot" title="Unread" />}
+                  {!n.read && (
+                    <button
+                      type="button"
+                      className="notif-mark-btn"
+                      title="Mark as read"
+                      aria-label="Mark as read"
+                      onClick={e => {
+                        e.stopPropagation()
+                        markRead(n.id)
+                      }}
+                    >
+                      <Icons.Check size={14} />
+                    </button>
+                  )}
+                </div>
               </div>
-            ))
-        }
+            )
+          })
+        )}
       </div>
-    </>
+    </div>
   )
 }
 
@@ -2816,16 +3295,12 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
 
           {toggleTheme && <ThemeToggle theme={theme} toggleTheme={toggleTheme} />}
 
-          <button
-            className="notification-bell"
-            onClick={() => setTab('alerts')}
-            title="Notifications"
-            aria-label={`Notifications${unread > 0 ? `, ${unread} unread` : ''}`}
-            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
-          >
-            <Icons.Bell size={18} color="var(--text-secondary)" />
-            {unread > 0 && <span className="bell-badge">{unread}</span>}
-          </button>
+          <NotificationsDropdown
+            token={token}
+            unread={unread}
+            onUnreadChange={setUnread}
+            onSelectTab={setTab}
+          />
           <AvatarMenu user={user} logout={logout} token={token} onUpdateUser={onUpdateUser} />
         </div>
       </nav>
