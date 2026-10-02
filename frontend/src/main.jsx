@@ -1023,16 +1023,17 @@ function WhatIfModal({ token, courses, onClose }) {
 /* ─── SDU DATA CALCULATORS & HELPERS ──────────────────────────────── */
 function calcGPA(transcript) {
   if (!transcript || !transcript.length) return null
-  const graded = transcript.filter(c => c.grade_point != null && (c.credits || c.ects))
+  const graded = transcript.filter(c => c.grade_point != null && !isNaN(Number(c.grade_point)) && (c.credits || c.ects))
   if (!graded.length) return null
-  const totalCredits = graded.reduce((sum, c) => sum + (c.credits || c.ects || 3), 0)
-  const totalPoints = graded.reduce((sum, c) => sum + (c.grade_point * (c.credits || c.ects || 3)), 0)
-  return totalCredits > 0 ? (totalPoints / totalCredits) : null
+  const totalCredits = graded.reduce((sum, c) => sum + Number(c.credits || c.ects || 3), 0)
+  const totalPoints = graded.reduce((sum, c) => sum + (Number(c.grade_point) * Number(c.credits || c.ects || 3)), 0)
+  const res = totalCredits > 0 ? (totalPoints / totalCredits) : null
+  return (res != null && !isNaN(res)) ? res : null
 }
 
 function calcOverallAttendance(attendanceList) {
   if (!attendanceList || !attendanceList.length) return 100.0
-  const valid = attendanceList.filter(a => a.absence_percent != null)
+  const valid = attendanceList.filter(a => a.absence_percent != null && !isNaN(Number(a.absence_percent)))
   if (!valid.length) return 100.0
   const avgAbsence = valid.reduce((sum, a) => sum + Number(a.absence_percent), 0) / valid.length
   return Math.max(0, Math.min(100, Math.round((100 - avgAbsence) * 10) / 10))
@@ -1042,7 +1043,7 @@ function calcCompletedCredits(transcript) {
   if (!transcript || !transcript.length) return 0
   return transcript
     .filter(c => c.passed === true)
-    .reduce((sum, c) => sum + (c.credits || c.ects || 0), 0)
+    .reduce((sum, c) => sum + Number(c.credits || c.ects || 0), 0)
 }
 
 function getGradePillClass(letter) {
@@ -1327,6 +1328,16 @@ function ScheduleTab({ sduData, sduLoading, sduStatus, onConnect, onRefresh }) {
     return <SduOnboardCard onConnect={onConnect} />
   }
 
+  if (sduLoading && (!sduData.schedule || !sduData.schedule.length)) {
+    return (
+      <div className="page-fade" style={{ textAlign: 'center', padding: '60px 20px' }}>
+        <div className="sdu-spinner" style={{ margin: '0 auto 20px auto', width: 36, height: 36 }} />
+        <h2 style={{ fontSize: '1.25rem', marginBottom: 8 }}>Loading Class Schedule…</h2>
+        <p style={{ color: 'var(--text-muted)', fontSize: '.88rem' }}>Fetching live weekly timetable directly from SDU Platform.</p>
+      </div>
+    )
+  }
+
   const schedule = sduData.schedule || []
   const days = [
     { id: 'all', label: 'All Days' },
@@ -1436,6 +1447,16 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, onRefresh })
     return <SduOnboardCard onConnect={onConnect} />
   }
 
+  if (sduLoading && (!sduData.transcript || !sduData.transcript.length)) {
+    return (
+      <div className="page-fade" style={{ textAlign: 'center', padding: '60px 20px' }}>
+        <div className="sdu-spinner" style={{ margin: '0 auto 20px auto', width: 36, height: 36 }} />
+        <h2 style={{ fontSize: '1.25rem', marginBottom: 8 }}>Loading Official Transcript & Grades…</h2>
+        <p style={{ color: 'var(--text-muted)', fontSize: '.88rem' }}>Fetching real curriculum and course grade data directly from SDU Platform.</p>
+      </div>
+    )
+  }
+
   const transcript = sduData.transcript || []
   const gpa = calcGPA(transcript)
   const totalCredits = calcCompletedCredits(transcript)
@@ -1464,9 +1485,9 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, onRefresh })
       `"${c.course_code ?? ''}"`,
       `"${c.course_name ?? ''}"`,
       c.credits ?? c.ects ?? '',
-      c.grade ?? '',
+      c.grade_percent ?? c.grade ?? '',
       `"${c.letter_grade ?? ''}"`,
-      c.grade_point ?? '',
+      c.grade_point != null && !isNaN(Number(c.grade_point)) ? Number(c.grade_point).toFixed(2) : (c.grade_point ?? ''),
       c.passed ? 'Passed' : 'Unpassed'
     ])
     const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n')
@@ -1616,13 +1637,23 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, onRefresh })
                     <span style={{ display: 'block', fontSize: '.76rem', color: 'var(--text-muted)' }}>{c.course_code}</span>
                   </td>
                   <td style={{ fontWeight: 600 }}>{c.credits ?? c.ects ?? '—'}</td>
-                  <td><b>{c.grade != null ? `${c.grade}%` : '—'}</b></td>
+                  <td>
+                    <b>
+                      {c.grade_percent != null
+                        ? `${c.grade_percent}%`
+                        : (c.grade != null ? (typeof c.grade === 'number' ? `${c.grade}%` : c.grade) : '—')}
+                    </b>
+                  </td>
                   <td>
                     <span className={`grade-pill ${getGradePillClass(c.letter_grade)}`}>
                       {c.letter_grade || '—'}
                     </span>
                   </td>
-                  <td style={{ fontWeight: 600 }}>{c.grade_point != null ? c.grade_point.toFixed(2) : '—'}</td>
+                  <td style={{ fontWeight: 600 }}>
+                    {c.grade_point != null && !isNaN(Number(c.grade_point))
+                      ? Number(c.grade_point).toFixed(2)
+                      : (c.grade_point || '—')}
+                  </td>
                   <td style={{ paddingRight: 20 }}>
                     {c.passed === false ? (
                       <span className="status-badge badge-warn">Unpassed</span>
@@ -1644,6 +1675,16 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, onRefresh })
 function AttendanceTab({ sduData, sduLoading, sduStatus, onConnect, onRefresh }) {
   if (!sduStatus?.connected) {
     return <SduOnboardCard onConnect={onConnect} />
+  }
+
+  if (sduLoading && (!sduData.attendance || !sduData.attendance.length)) {
+    return (
+      <div className="page-fade" style={{ textAlign: 'center', padding: '60px 20px' }}>
+        <div className="sdu-spinner" style={{ margin: '0 auto 20px auto', width: 36, height: 36 }} />
+        <h2 style={{ fontSize: '1.25rem', marginBottom: 8 }}>Loading Live Attendance Records…</h2>
+        <p style={{ color: 'var(--text-muted)', fontSize: '.88rem' }}>Fetching real absence rates and course hours from SDU Platform.</p>
+      </div>
+    )
   }
 
   const attendanceList = sduData.attendance || []
@@ -2174,14 +2215,14 @@ function Student({ token, user, logout, onUpdateUser }) {
         setSduStatus({ connected: false })
       }
 
-      setSduData({
-        profile: prof,
-        schedule: sched,
-        transcript: trans,
-        attendance: att,
+      setSduData(prev => ({
+        profile: prof || prev.profile,
+        schedule: sched.length ? sched : prev.schedule,
+        transcript: trans.length ? trans : prev.transcript,
+        attendance: att.length ? att : prev.attendance,
         lastFetched: lastF,
         error: anyErr?.reason?.message || null,
-      })
+      }))
     } catch (e) {
       console.warn('SDU Live Load Error:', e)
     } finally {
