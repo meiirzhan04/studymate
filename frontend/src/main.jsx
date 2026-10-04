@@ -74,7 +74,21 @@ const api = async (path, token, options = {}) => {
     }
   }
 
-  if (!res.ok) throw new Error(body.detail || `Request failed (${res.status})`)
+  if (!res.ok) {
+    let msg = `Request failed (${res.status})`
+    if (typeof body.detail === 'string') {
+      msg = body.detail
+    } else if (typeof body.message === 'string') {
+      msg = body.message
+    } else if (typeof body.error === 'string') {
+      msg = body.error
+    } else if (body.detail && typeof body.detail === 'object') {
+      msg = Array.isArray(body.detail)
+        ? body.detail.map(d => d.msg || JSON.stringify(d)).join('; ')
+        : (body.detail.message || JSON.stringify(body.detail))
+    }
+    throw new Error(msg)
+  }
   return body
 }
 
@@ -1094,21 +1108,7 @@ function Login({ onLogin, theme, toggleTheme }) {
         setForgotEmail(res.target_email)
       }
       setResetCode('')
-      if (!res.sent_via_email && res._demo_code) {
-        try {
-          await fetch('/api/send-email', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              to: res.target_email || forgotEmail.trim(),
-              code: res._demo_code
-            })
-          })
-        } catch (relayErr) {
-          console.warn('Vercel mail relay client fallback:', relayErr)
-        }
-      }
-      setForgotMsg(res.message || 'Verification code sent to your email!')
+      setForgotMsg(res.message || 'Verification code sent to your email! Please check your inbox.')
       setForgotStep(2)
     } catch (err) {
       setForgotErr(err.message)
@@ -3867,4 +3867,96 @@ function App() {
   )
 }
 
-createRoot(document.getElementById('root')).render(<App />)
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error("StudyMate ErrorBoundary caught unhandled error:", error, errorInfo);
+  }
+
+  handleReload = () => {
+    window.location.reload();
+  };
+
+  handleReset = () => {
+    this.setState({ hasError: false, error: null });
+  };
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{
+          minHeight: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'var(--bg, #0F172A)',
+          color: 'var(--text, #F8FAFC)',
+          padding: 24,
+          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+        }}>
+          <div style={{
+            maxWidth: 480,
+            width: '100%',
+            background: 'var(--surface, #1E293B)',
+            border: '1px solid var(--border, #334155)',
+            borderRadius: 16,
+            padding: 32,
+            textAlign: 'center',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)'
+          }}>
+            <div style={{
+              width: 56,
+              height: 56,
+              borderRadius: 16,
+              background: 'rgba(239, 68, 68, 0.15)',
+              color: '#EF4444',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              margin: '0 auto 20px auto'
+            }}>
+              <Icons.AlertTriangle size={28} />
+            </div>
+            <h2 style={{ fontSize: '1.3rem', fontWeight: 700, margin: '0 0 10px 0' }}>Something went wrong</h2>
+            <p style={{ color: 'var(--text-secondary, #94A3B8)', fontSize: '0.9rem', lineHeight: 1.5, margin: '0 0 24px 0' }}>
+              StudyMate encountered an unexpected display error. Your academic data is safe on the server.
+            </p>
+            <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+              <button
+                type="button"
+                onClick={this.handleReset}
+                className="btn-ghost"
+                style={{ padding: '10px 18px', borderRadius: 10, cursor: 'pointer' }}
+              >
+                Try Again
+              </button>
+              <button
+                type="button"
+                onClick={this.handleReload}
+                className="btn-primary"
+                style={{ padding: '10px 20px', borderRadius: 10, cursor: 'pointer' }}
+              >
+                Reload Portal
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+createRoot(document.getElementById('root')).render(
+  <ErrorBoundary>
+    <App />
+  </ErrorBoundary>
+)

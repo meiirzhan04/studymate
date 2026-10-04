@@ -1,9 +1,21 @@
 import nodemailer from 'nodemailer';
 
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  const allowedOrigins = [
+    'https://studymate-mu-smoky.vercel.app',
+    'https://studymate.vercel.app',
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'http://localhost:3000',
+  ];
+  const origin = req.headers.origin;
+  if (origin && (allowedOrigins.includes(origin) || origin.endsWith('.vercel.app'))) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  } else {
+    res.setHeader('Access-Control-Allow-Origin', 'https://studymate-mu-smoky.vercel.app');
+  }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Mailer-Secret');
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
@@ -13,27 +25,47 @@ export default async function handler(req, res) {
     return res.status(405).json({ ok: false, error: 'Method not allowed' });
   }
 
+  // Internal secret check if configured in environment
+  const expectedSecret = process.env.MAILER_SECRET_KEY;
+  if (expectedSecret) {
+    const providedSecret = req.headers['x-mailer-secret'];
+    if (providedSecret !== expectedSecret) {
+      return res.status(403).json({ ok: false, error: 'Unauthorized mailer request' });
+    }
+  }
+
   const { to, code } = req.body || {};
-  if (!to || !code) {
-    return res.status(400).json({ ok: false, error: 'Missing recipient email (to) or verification code' });
+  if (!to || !code || !/^\d{6}$/.test(String(code).trim())) {
+    return res.status(400).json({ ok: false, error: 'Missing or invalid recipient email (to) or 6-digit verification code' });
+  }
+
+  const cleanCode = String(code).trim();
+  const gmailUser = process.env.GMAIL_USER || process.env.SMTP_USER;
+  const gmailPass = process.env.GMAIL_APP_PASSWORD || process.env.SMTP_PASSWORD;
+
+  if (!gmailUser || !gmailPass) {
+    return res.status(500).json({
+      ok: false,
+      error: 'SMTP credentials are not configured on this server environment.',
+    });
   }
 
   try {
     const transporter = nodemailer.createTransport({
-      host: 'smtp.gmail.com',
-      port: 465,
+      host: process.env.SMTP_HOST || 'smtp.gmail.com',
+      port: Number(process.env.SMTP_PORT) || 465,
       secure: true,
       auth: {
-        user: 'amirzhanmeirzhan5@gmail.com',
-        pass: 'ewsadvktcjdwcjlt',
+        user: gmailUser,
+        pass: gmailPass.replace(/\s+/g, ''),
       },
     });
 
     const mailOptions = {
-      from: '"StudyMate Portal" <amirzhanmeirzhan5@gmail.com>',
+      from: `"StudyMate Portal" <${gmailUser}>`,
       to: to,
-      subject: `StudyMate - Password Reset Code: ${code}`,
-      text: `Hello!\n\nYour 6-digit password reset verification code is:\n\n  ${code}\n\nThis code will expire in 15 minutes.\nIf you did not request this password reset, please ignore this email.\n\n— StudyMate Academic Team`,
+      subject: `StudyMate - Password Reset Code: ${cleanCode}`,
+      text: `Hello!\n\nYour 6-digit password reset verification code is:\n\n  ${cleanCode}\n\nThis code will expire in 15 minutes.\nIf you did not request this password reset, please ignore this email.\n\n— StudyMate Academic Team`,
       html: `
         <!DOCTYPE html>
         <html>
@@ -58,17 +90,19 @@ export default async function handler(req, res) {
             </div>
             <h2 style="margin: 0 0 12px; font-size: 20px; color: #111827;">Password Reset Verification</h2>
             <p style="margin: 0 0 16px; color: #4B5563; font-size: 15px; line-height: 1.5;">
-              You requested a password reset for your StudyMate account. Use this 6-digit verification code to proceed:
+              You requested to reset your password for your <strong>StudyMate</strong> account. Use the verification code below to proceed:
             </p>
             <div class="code-box">
-              <div class="code">${code}</div>
+              <div class="code">${cleanCode}</div>
             </div>
-            <p style="margin: 0; color: #6B7280; font-size: 13px;">
-              ⏱ This code is valid for <b>15 minutes</b>. Never share this code with anyone.
+            <p style="margin: 0 0 8px; color: #6B7280; font-size: 13px; line-height: 1.4;">
+              ⏱ <strong>Note:</strong> This verification code is single-use and will expire in 15 minutes.
+            </p>
+            <p style="margin: 0; color: #9CA3AF; font-size: 12px; line-height: 1.4;">
+              If you didn't initiate this request, you can safely disregard this email. Your password will remain unchanged.
             </p>
             <div class="footer">
-              If you didn't request this code, you can safely ignore this email.<br>
-              © 2026 StudyMate Portal
+              StudyMate Academic Performance Monitor &bull; SDU Student Portal
             </div>
           </div>
         </body>
@@ -76,10 +110,10 @@ export default async function handler(req, res) {
       `,
     };
 
-    await transporter.sendMail(mailOptions);
-    return res.status(200).json({ ok: true, message: `Email delivered successfully to ${to}` });
-  } catch (error) {
-    console.error('Email send error:', error);
-    return res.status(500).json({ ok: false, error: error.message });
+    const info = await transporter.sendMail(mailOptions);
+    return res.status(200).json({ ok: true, messageId: info.messageId });
+  } catch (err) {
+    console.error('Mail delivery failure:', err);
+    return res.status(500).json({ ok: false, error: 'Internal mail delivery failure' });
   }
 }

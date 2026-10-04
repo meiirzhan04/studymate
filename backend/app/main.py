@@ -17,8 +17,9 @@ from pathlib import Path
 from typing import Annotated, Literal, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status, Request
+import logging
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -58,9 +59,9 @@ class RegisterRequest(BaseModel):
 
 
 class WhatIfRequest(BaseModel):
-    course_code: str
-    target_score: float
-    component_name: str
+    course_code: str = Field(min_length=1, max_length=20)
+    target_score: float = Field(ge=0.0, le=100.0)
+    component_name: str = Field(min_length=1, max_length=100)
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -86,11 +87,6 @@ class UpdateProfileRequest(BaseModel):
     name: str = Field(min_length=2, max_length=100)
 
 
-class DirectResetRequest(BaseModel):
-    email: str = Field(min_length=3, max_length=120)
-    new_password: str = Field(min_length=6, max_length=200)
-
-
 class InterventionRequest(BaseModel):
     action_type: str = Field(min_length=2, max_length=50)
     notes: str = Field(min_length=3, max_length=500)
@@ -105,7 +101,11 @@ class User(BaseModel):
 
 
 repo = SQLiteRepository()
-SECRET = os.getenv("AUTH_SECRET", "development-only-secret")
+SECRET = os.getenv("AUTH_SECRET")
+if not SECRET:
+    if os.getenv("APP_ENV") == "production" or os.getenv("RENDER"):
+        raise RuntimeError("AUTH_SECRET environment variable must be set in production")
+    SECRET = "development-only-secret"
 
 
 def weighted_score(record: dict) -> Optional[float]:
@@ -228,11 +228,20 @@ if os.getenv("FRONTEND_URL"):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
-    allow_origin_regex=r"https://.*",
+    allow_origin_regex=r"https://studymate[a-zA-Z0-9\-_]*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logging.getLogger("uvicorn.error").error(f"Unhandled error on {request.method} {request.url.path}: {str(exc)}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An internal server error occurred. Please try again later.", "code": "internal_error"}
+    )
 
 
 @app.get("/health")
@@ -285,10 +294,18 @@ def send_gmail_code(to_email: str, code: str) -> tuple[bool, str]:
     try:
         relay_url = os.getenv("EMAIL_RELAY_URL", "https://studymate-mu-smoky.vercel.app/api/send-email")
         req_payload = json.dumps({"to": to_email, "code": code}).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "StudyMate-Backend/1.0"
+        }
+        mailer_secret = os.getenv("MAILER_SECRET_KEY")
+        if mailer_secret:
+            headers["X-Mailer-Secret"] = mailer_secret
+
         h_req = urllib.request.Request(
             relay_url,
             data=req_payload,
-            headers={"Content-Type": "application/json", "User-Agent": "StudyMate-Backend/1.0"}
+            headers=headers
         )
         with urllib.request.urlopen(h_req, timeout=12) as resp:
             if resp.status == 200:
@@ -297,13 +314,13 @@ def send_gmail_code(to_email: str, code: str) -> tuple[bool, str]:
         pass
 
     # 2. Direct SMTP fallback (SSL on 465 or STARTTLS on 587)
-    smtp_user = os.getenv("GMAIL_USER") or os.getenv("SMTP_USER") or "amirzhanmeirzhan5@gmail.com"
-    raw_pass = os.getenv("GMAIL_APP_PASSWORD") or os.getenv("SMTP_PASSWORD") or "ewsa dvkt cjdw cjlt"
+    smtp_user = os.getenv("GMAIL_USER") or os.getenv("SMTP_USER")
+    raw_pass = os.getenv("GMAIL_APP_PASSWORD") or os.getenv("SMTP_PASSWORD")
+    if not smtp_user or not raw_pass:
+        return False, "SMTP credentials not configured"
+
     smtp_pass = raw_pass.replace(" ", "").strip()
     smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
-
-    if not smtp_user or not smtp_pass:
-        return False, "SMTP credentials not configured"
 
     try:
         msg = MIMEMultipart("alternative")
@@ -381,12 +398,14 @@ def send_gmail_code(to_email: str, code: str) -> tuple[bool, str]:
 
 @app.post("/api/auth/register")
 def register(req: RegisterRequest):
+    # Security: public registration cannot create teacher accounts
+    forced_role = "student"
     try:
         user = repo.create_user(
             name=req.name,
             identifier=req.identifier,
             password=req.password,
-            role=req.role,
+            role=forced_role,
             cohort=req.cohort or "CS-2026",
             email=req.email
         )
@@ -410,12 +429,7 @@ def send_reset_code(req: SendCodeRequest):
     target_email = clean_email
     if "@" not in clean_email:
         found_email = repo.get_email_for_user(user["id"])
-        if clean_email == "240103118":
-            target_email = "amirzhanmeirzhan5@gmail.com"
-        elif clean_email == "240103188":
-            target_email = found_email if (found_email and "@sdu.edu.kz" not in found_email and "@univ.edu" not in found_email) else "amirzhanmeirzhan5@gmail.com"
-        else:
-            target_email = found_email or "amirzhanmeirzhan5@gmail.com"
+        target_email = found_email or "amirzhanmeirzhan5@gmail.com"
 
     code = f"{secrets.randbelow(900000) + 100000}"
     expires_at = time.time() + 900
@@ -429,15 +443,13 @@ def send_reset_code(req: SendCodeRequest):
             "ok": True,
             "message": f"6-digit verification code sent to {target_email}!",
             "sent_via_email": True,
-            "target_email": target_email,
-            "_demo_code": code
+            "target_email": target_email
         }
     else:
         return {
             "ok": True,
-            "message": f"Verification code generated for {target_email}! (Check inbox or spam)",
+            "message": f"Verification code generated for {target_email}! Please check your email inbox and spam folder.",
             "sent_via_email": False,
-            "_demo_code": code,
             "target_email": target_email,
             "smtp_note": detail
         }
@@ -459,14 +471,6 @@ def verify_reset_code(req: VerifyCodeRequest):
         "ok": True,
         "message": "Password updated successfully! You can now sign in."
     }
-
-
-@app.post("/api/auth/direct-reset")
-def direct_reset(req: DirectResetRequest):
-    success = repo.direct_reset_password(req.email, req.new_password)
-    if not success:
-        raise HTTPException(status_code=404, detail="User with this email or ID not found")
-    return {"ok": True, "message": "Password updated successfully! You can now sign in."}
 
 
 # ─── SDU PLATFORM OAUTH INTEGRATION ──────────────────────────────────────────
@@ -920,17 +924,29 @@ def grades_whatif(user: Annotated[User, Depends(require_role("student"))], req: 
                 
     if not target_comp:
         raise HTTPException(status_code=404, detail="Component not found")
-        
-    weight = target_comp["weight"]
-    needed_score = (req.target_score - other_score) / weight
-    needed_score = round(needed_score, 1)
-    
-    feasible = needed_score <= 100.0
-    
+
+    weight = target_comp.get("weight", 0.0)
+    if weight <= 0:
+        raise HTTPException(status_code=400, detail="Component weight must be greater than zero.")
+
+    raw_needed = (req.target_score - other_score) / weight
+    needed_score = round(raw_needed, 1)
+
+    if needed_score <= 0.0:
+        needed_score = 0.0
+        feasible = True
+        message = f"You have already achieved {req.target_score}%. Even with 0% on {req.component_name}, your target is secured!"
+    elif needed_score <= 100.0:
+        feasible = True
+        message = f"You need at least {needed_score}% on {req.component_name} to reach {req.target_score}%"
+    else:
+        feasible = False
+        message = f"Mathematically unachievable: you would need {needed_score}% (exceeding 100%) on {req.component_name} to reach {req.target_score}%."
+
     return {
         "needed_score": needed_score,
         "feasible": feasible,
-        "message": f"You need at least {needed_score}% on {req.component_name} to reach {req.target_score}%"
+        "message": message
     }
 
 

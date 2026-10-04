@@ -55,15 +55,9 @@ def test_sdu_student_240103120_login():
     assert all(row["student_id"] == "240103120" for row in body["courses"])
 
 
-def test_direct_reset_password():
+def test_direct_reset_password_endpoint_is_blocked():
     res = client.post("/api/auth/direct-reset", json={"email": "240103118", "new_password": "testNewPassword456"})
-    assert res.status_code == 200
-    # verify login with new password
-    t = token("240103118", "testNewPassword456")
-    assert t is not None
-    # reset back to studymate2026
-    res2 = client.post("/api/auth/direct-reset", json={"email": "240103118", "new_password": "studymate2026"})
-    assert res2.status_code == 200
+    assert res.status_code in (404, 405)
 
 
 def test_teacher_intervention_flow():
@@ -112,13 +106,33 @@ def test_user_self_registration_flow():
     assert len(dash["courses"]) > 0
 
 
+def test_public_registration_cannot_escalate_to_teacher():
+    unique_id = f"imposter_{secrets.token_hex(4)}@univ.edu"
+    res = client.post("/api/auth/register", json={
+        "name": "Imposter User",
+        "identifier": unique_id,
+        "password": "securepassword123",
+        "role": "teacher"
+    })
+    assert res.status_code == 200
+    # Must be forced to student
+    assert res.json()["user"]["role"] == "student"
+
+
 def test_6_digit_code_reset_flow():
+    from app.main import repo
     # Request 6-digit code for 240103118
     send_res = client.post("/api/auth/send-reset-code", json={"email": "240103118"})
     assert send_res.status_code == 200
     data = send_res.json()
     assert data["ok"] is True
-    code = data.get("_demo_code")
+    # The API should NOT leak _demo_code in the public response
+    assert "_demo_code" not in data
+
+    # Retrieve code from secure DB store as an authentic user would receive it via email
+    with repo.connect() as db:
+        row = db.execute("SELECT code FROM password_reset_codes WHERE email = '240103118' ORDER BY id DESC").fetchone()
+        code = row["code"]
     assert code is not None and len(code) == 6
 
     # Verify and set new password
@@ -135,7 +149,7 @@ def test_6_digit_code_reset_flow():
     assert t is not None
 
     # Reset back to studymate2026
-    client.post("/api/auth/direct-reset", json={"email": "240103118", "new_password": "studymate2026"})
+    repo.direct_reset_password("240103118", "studymate2026")
 
 
 def test_profile_name_update():
@@ -144,14 +158,18 @@ def test_profile_name_update():
     assert res.status_code == 200
     assert res.json()["name"] == "Meirzhan Updated"
 
+
 def test_reset_code_flow_user_118():
+    from app.main import repo
     # 1. Request reset code
     res = client.post("/api/auth/send-reset-code", json={"email": "240103118"})
     assert res.status_code == 200
     data = res.json()
     assert data["ok"] is True
-    assert "_demo_code" in data
-    code = data["_demo_code"]
+    assert "_demo_code" not in data
+
+    with repo.connect() as db:
+        code = db.execute("SELECT code FROM password_reset_codes WHERE email = '240103118' ORDER BY id DESC").fetchone()["code"]
 
     # 2. Reset password using the code
     res_reset = client.post("/api/auth/verify-reset-code", json={
@@ -166,18 +184,20 @@ def test_reset_code_flow_user_118():
     assert res_login.status_code == 200
 
     # 4. Restore original password
-    client.post("/api/auth/send-reset-code", json={"email": "240103118"})
-    from app.main import repo
-    repo.reset_password_with_code("240103118", repo.connect().execute("SELECT code FROM password_reset_codes WHERE email = '240103118'").fetchone()["code"], "studymate2026")
+    repo.direct_reset_password("240103118", "studymate2026")
 
 
 def test_reset_code_flow_friend_188():
+    from app.main import repo
     # 1. Request reset code for 240103188
     res = client.post("/api/auth/send-reset-code", json={"email": "240103188"})
     assert res.status_code == 200
     data = res.json()
     assert data["ok"] is True
-    code = data["_demo_code"]
+    assert "_demo_code" not in data
+
+    with repo.connect() as db:
+        code = db.execute("SELECT code FROM password_reset_codes WHERE email = '240103188' ORDER BY id DESC").fetchone()["code"]
 
     # 2. Reset password
     res_reset = client.post("/api/auth/verify-reset-code", json={
@@ -192,13 +212,7 @@ def test_reset_code_flow_friend_188():
     assert res_login.status_code == 200
 
     # 4. Restore original password
-    from app.main import repo
-    from app.repository import hash_password
-    salt = repo.connect().execute("SELECT password_salt FROM users WHERE student_id = '240103188'").fetchone()["password_salt"]
-    h = hash_password("studymate2026", salt)
-    with repo.connect() as db:
-        db.execute("UPDATE users SET password_hash = ? WHERE student_id = '240103188'", (h,))
-        db.commit()
+    repo.direct_reset_password("240103188", "studymate2026")
 
 
 # ─── SDU PLATFORM OAUTH VERIFICATION TESTS ───────────────────────────────────
