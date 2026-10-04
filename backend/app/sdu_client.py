@@ -117,6 +117,36 @@ async def revoke_token(access_token: str, client: Optional[httpx.AsyncClient] = 
         return False
 
 
+_AVAILABILITY_CACHE: dict = {"checked_at": 0.0, "available": None}
+_AVAILABILITY_TTL_SECONDS = 30.0
+
+
+async def check_sdu_available(force: bool = False) -> bool:
+    """
+    Lightweight reachability probe for the SDU Platform.
+    Any HTTP response (even 404) means the server is up; only network errors /
+    timeouts count as unavailable. Cached for 30s so repeated clicks stay fast.
+    """
+    import time as _time
+
+    now = _time.time()
+    cached = _AVAILABILITY_CACHE["available"]
+    if not force and cached is not None and now - _AVAILABILITY_CACHE["checked_at"] < _AVAILABILITY_TTL_SECONDS:
+        return cached
+
+    available = False
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(4.0, connect=4.0)) as probe:
+            await probe.get(f"{SDU_ORIGIN}/", follow_redirects=False)
+        available = True
+    except Exception:
+        available = False
+
+    _AVAILABILITY_CACHE["available"] = available
+    _AVAILABILITY_CACHE["checked_at"] = now
+    return available
+
+
 async def fetch_sdu_data(endpoint: str, access_token: str, params: Optional[dict] = None, client: Optional[httpx.AsyncClient] = None) -> tuple[int, dict]:
     """
     Live GET to SDU integration API endpoints with Authorization: Bearer <access_token>.

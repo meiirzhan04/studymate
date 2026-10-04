@@ -1039,12 +1039,45 @@ function Login({ onLogin, theme, toggleTheme }) {
         body: JSON.stringify({ redirect_uri: callbackUri })
       })
       if (res && res.url) {
+        if (res.sdu_available === false) {
+          // External SDU portal (api-sdu.javazhan.tech) is offline.
+          // Automatically connect student in Demo SDU Mode so they aren't blocked by timeout!
+          const demoRes = await api('/api/sdu/demo-connect', null, { method: 'POST' })
+          if (demoRes && demoRes.access_token) {
+            onLogin(demoRes)
+            return
+          }
+        }
         window.location.href = res.url
       } else {
         throw new Error('Failed to obtain authorization URL')
       }
     } catch (err) {
+      // If network failure occurred reaching authorize-url, try demo-connect fallback
+      try {
+        const demoRes = await api('/api/sdu/demo-connect', null, { method: 'POST' })
+        if (demoRes && demoRes.access_token) {
+          onLogin(demoRes)
+          return
+        }
+      } catch {}
       setError(err.message || 'Failed to initiate SDU authorization')
+      setSduBusy(false)
+    }
+  }
+
+  const handleConnectDemo = async () => {
+    setSduBusy(true)
+    setError('')
+    try {
+      const demoRes = await api('/api/sdu/demo-connect', null, { method: 'POST' })
+      if (demoRes && demoRes.access_token) {
+        onLogin(demoRes)
+      } else {
+        throw new Error('Failed to start Demo SDU session')
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to start Demo SDU session')
       setSduBusy(false)
     }
   }
@@ -1231,19 +1264,35 @@ function Login({ onLogin, theme, toggleTheme }) {
             {toggleTheme && <ThemeToggle theme={theme} toggleTheme={toggleTheme} />}
           </div>
 
-          {/* SDU Platform OAuth Hero Button (Primary Action) */}
-          <button
-            type="button"
-            className="sdu-primary-hero-btn"
-            disabled={sduBusy || busy}
-            onClick={handleConnectSdu}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span className="sdu-badge" style={{ background: '#fff', color: '#0B4F6C', fontWeight: 900 }}>SDU</span>
-              <span>{sduBusy ? 'Connecting to SDU Platform…' : 'Connect with SDU Platform'}</span>
-            </div>
-            <Icons.ArrowRight size={18} color="#ffffff" />
-          </button>
+          {/* SDU Platform Hero Actions */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 4 }}>
+            <button
+              type="button"
+              className="sdu-primary-hero-btn"
+              disabled={sduBusy || busy}
+              onClick={handleConnectSdu}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span className="sdu-badge" style={{ background: '#fff', color: '#0B4F6C', fontWeight: 900 }}>SDU</span>
+                <span>{sduBusy ? 'Connecting to SDU Platform…' : 'Connect with SDU Platform'}</span>
+              </div>
+              <Icons.ArrowRight size={18} color="#ffffff" />
+            </button>
+
+            <button
+              type="button"
+              className="sdu-demo-hero-btn"
+              disabled={sduBusy || busy}
+              onClick={handleConnectDemo}
+              title="Instant access with realistic SDU student dataset (use when api-sdu.javazhan.tech is offline)"
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: '1rem' }}>⚡</span>
+                <span>Try with Demo SDU Data (Offline Mode)</span>
+              </div>
+              <Icons.ArrowRight size={15} />
+            </button>
+          </div>
 
           <div className="login-divider">
             <span>or continue with credentials</span>
@@ -1729,7 +1778,7 @@ function getGradePillClass(letter) {
 }
 
 /* ─── SDU ONBOARDING / DISCONNECTED CARD ──────────────────────────── */
-function SduOnboardCard({ onConnect }) {
+function SduOnboardCard({ onConnect, onConnectDemo }) {
   return (
     <div className="sdu-onboard-card page-fade">
       <div className="sdu-onboard-icon">
@@ -1759,30 +1808,43 @@ function SduOnboardCard({ onConnect }) {
         </div>
       </div>
 
-      <button
-        type="button"
-        className="sdu-connect-btn"
-        onClick={onConnect}
-        style={{ margin: '0 auto', maxWidth: 360, padding: '14px 24px', fontSize: '.95rem' }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span className="sdu-badge">SDU</span>
-          <span>Connect with SDU Platform</span>
-        </div>
-        <Icons.ArrowRight size={18} color="#ffffff" />
-      </button>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 360, margin: '0 auto' }}>
+        <button
+          type="button"
+          className="sdu-connect-btn"
+          onClick={onConnect}
+          style={{ width: '100%', padding: '14px 24px', fontSize: '.95rem' }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span className="sdu-badge">SDU</span>
+            <span>Connect with SDU Platform</span>
+          </div>
+          <Icons.ArrowRight size={18} color="#ffffff" />
+        </button>
+
+        {onConnectDemo && (
+          <button
+            type="button"
+            className="sdu-demo-hero-btn"
+            onClick={onConnectDemo}
+            style={{ width: '100%', justifyContent: 'center', textAlign: 'center', gap: 8, padding: '11px 16px' }}
+          >
+            <span>⚡ Connect with Demo SDU (Offline Mode)</span>
+          </button>
+        )}
+      </div>
 
       <div style={{ marginTop: 20, fontSize: '.78rem', color: 'var(--text-muted)' }}>
-        Direct SDU Platform OAuth 2.0 PKCE. Your password is entered only on SDU and never seen or stored by StudyMate.
+        Direct SDU Platform OAuth 2.0 PKCE. If the external university server is offline, Demo mode is automatically provided so your workflow is never blocked.
       </div>
     </div>
   )
 }
 
 /* ─── LIVE DASHBOARD TAB ─────────────────────────────────────────── */
-function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, onRefresh, user, setTab }) {
+function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo, onRefresh, user, setTab }) {
   if (!sduStatus?.connected) {
-    return <SduOnboardCard onConnect={onConnect} />
+    return <SduOnboardCard onConnect={onConnect} onConnectDemo={onConnectDemo} />
   }
 
   if (sduLoading && !sduData.transcript && !sduData.schedule) {
@@ -2100,11 +2162,11 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, onRefresh, us
 }
 
 /* ─── LIVE SCHEDULE TAB ──────────────────────────────────────────── */
-function ScheduleTab({ sduData, sduLoading, sduStatus, onConnect, onRefresh }) {
+function ScheduleTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo, onRefresh }) {
   const [selectedDay, setSelectedDay] = useState('all')
 
   if (!sduStatus?.connected) {
-    return <SduOnboardCard onConnect={onConnect} />
+    return <SduOnboardCard onConnect={onConnect} onConnectDemo={onConnectDemo} />
   }
 
   if (sduLoading && (!sduData.schedule || !sduData.schedule.length)) {
@@ -2237,13 +2299,13 @@ function ScheduleTab({ sduData, sduLoading, sduStatus, onConnect, onRefresh }) {
 }
 
 /* ─── LIVE TRANSCRIPT & GRADES TAB ───────────────────────────────── */
-function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, onRefresh }) {
+function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo, onRefresh }) {
   const [semesterFilter, setSemesterFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
   const [search, setSearch] = useState('')
 
   if (!sduStatus?.connected) {
-    return <SduOnboardCard onConnect={onConnect} />
+    return <SduOnboardCard onConnect={onConnect} onConnectDemo={onConnectDemo} />
   }
 
   if (sduLoading && (!sduData.transcript || !sduData.transcript.length)) {
@@ -2506,9 +2568,9 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, onRefresh })
 }
 
 /* ─── LIVE ATTENDANCE TAB ────────────────────────────────────────── */
-function AttendanceTab({ sduData, sduLoading, sduStatus, onConnect, onRefresh }) {
+function AttendanceTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo, onRefresh }) {
   if (!sduStatus?.connected) {
-    return <SduOnboardCard onConnect={onConnect} />
+    return <SduOnboardCard onConnect={onConnect} onConnectDemo={onConnectDemo} />
   }
 
   if (sduLoading && (!sduData.attendance || !sduData.attendance.length)) {
@@ -2717,9 +2779,9 @@ function AttendanceTab({ sduData, sduLoading, sduStatus, onConnect, onRefresh })
 }
 
 /* ─── LIVE SDU PROFILE TAB ───────────────────────────────────────── */
-function SduProfileTab({ sduData, sduLoading, sduStatus, onConnect, onDisconnect, onRefresh, user }) {
+function SduProfileTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo, onDisconnect, onRefresh, user }) {
   if (!sduStatus?.connected) {
-    return <SduOnboardCard onConnect={onConnect} />
+    return <SduOnboardCard onConnect={onConnect} onConnectDemo={onConnectDemo} />
   }
 
   const p = sduData.profile || {}
@@ -2746,8 +2808,8 @@ function SduProfileTab({ sduData, sduLoading, sduStatus, onConnect, onDisconnect
           <div style={{ flex: 1 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
               <h2 style={{ margin: 0, fontSize: '1.35rem' }}>{p.fullname || user.name}</h2>
-              <span className="status-badge badge-ok" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                <span className="sdu-dot" /> SDU Active
+              <span className={`status-badge ${sduStatus?.demo_mode ? 'badge-warn' : 'badge-ok'}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <span className="sdu-dot" style={sduStatus?.demo_mode ? { background: '#F59E0B' } : {}} /> {sduStatus?.demo_mode ? 'SDU Demo Mode' : 'SDU Active'}
               </span>
             </div>
             <span style={{ color: 'var(--text-secondary)', fontSize: '.9rem', fontWeight: 600 }}>
@@ -2767,7 +2829,9 @@ function SduProfileTab({ sduData, sduLoading, sduStatus, onConnect, onDisconnect
           </div>
           <div style={{ background: 'var(--bg)', padding: '14px 16px', borderRadius: 10, border: '1px solid var(--border)' }}>
             <small style={{ color: 'var(--text-muted)', display: 'block', marginBottom: 3 }}>Portal Data Origin</small>
-            <b style={{ fontSize: '.9rem', color: 'var(--success)' }}>api-sdu.javazhan.tech</b>
+            <b style={{ fontSize: '.9rem', color: sduStatus?.demo_mode ? 'var(--warning, #F59E0B)' : 'var(--success, #10B981)' }}>
+              {sduStatus?.demo_mode ? 'Demo SDU Dataset (Portal Offline)' : 'api-sdu.javazhan.tech (Live)'}
+            </b>
           </div>
           <div style={{ background: 'var(--bg)', padding: '14px 16px', borderRadius: 10, border: '1px solid var(--border)' }}>
             <small style={{ color: 'var(--text-muted)', display: 'block', marginBottom: 3 }}>Last Portal Query</small>
@@ -3181,10 +3245,49 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
         body: JSON.stringify({ redirect_uri: callbackUri })
       })
       if (res && res.url) {
+        if (res.sdu_available === false) {
+          // External portal offline; connect to demo mode seamlessly
+          const demoRes = await api('/api/sdu/demo-connect', token, { method: 'POST' })
+          if (demoRes && demoRes.ok) {
+            setSduStatus({ connected: true, demo_mode: true, updated_at: new Date().toISOString() })
+            await loadSduLiveData()
+            setSduToast('Connected to Demo SDU (external server offline)')
+            setTimeout(() => setSduToast(''), 4000)
+            return
+          }
+        }
         window.location.href = res.url
       }
     } catch (e) {
+      // If error obtaining url, attempt demo fallback
+      try {
+        const demoRes = await api('/api/sdu/demo-connect', token, { method: 'POST' })
+        if (demoRes && demoRes.ok) {
+          setSduStatus({ connected: true, demo_mode: true, updated_at: new Date().toISOString() })
+          await loadSduLiveData()
+          setSduToast('Connected to Demo SDU')
+          setTimeout(() => setSduToast(''), 4000)
+          return
+        }
+      } catch {}
       alert(e.message)
+    }
+  }
+
+  const handleSduDemoConnect = async () => {
+    try {
+      setSduLoading(true)
+      const demoRes = await api('/api/sdu/demo-connect', token, { method: 'POST' })
+      if (demoRes && demoRes.ok) {
+        setSduStatus({ connected: true, demo_mode: true, updated_at: new Date().toISOString() })
+        await loadSduLiveData()
+        setSduToast('Connected to Demo SDU Platform!')
+        setTimeout(() => setSduToast(''), 4000)
+      }
+    } catch (e) {
+      alert(e.message || 'Demo connect failed')
+    } finally {
+      setSduLoading(false)
     }
   }
 
@@ -3193,9 +3296,9 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
     setSduToast('')
     try {
       const res = await api('/api/sdu/sync', token, { method: 'POST' })
-      setSduStatus(prev => ({ ...prev, connected: true, updated_at: res.updated_at }))
+      setSduStatus(prev => ({ ...prev, connected: true, demo_mode: res.demo_mode ?? prev.demo_mode, updated_at: res.updated_at }))
       await loadSduLiveData()
-      setSduToast('SDU Platform synchronized!')
+      setSduToast(res.demo_mode ? 'Demo SDU data updated!' : 'SDU Platform synchronized!')
       setTimeout(() => setSduToast(''), 3500)
     } catch (e) {
       if (e.message && (e.message.includes('reconnect') || e.message.includes('expired'))) {
@@ -3212,7 +3315,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
     if (!window.confirm('Are you sure you want to disconnect your SDU Platform account?')) return
     try {
       await api('/api/sdu/disconnect', token, { method: 'POST' })
-      setSduStatus({ connected: false })
+      setSduStatus({ connected: false, demo_mode: false })
       setSduData({ profile: null, schedule: null, transcript: null, attendance: null, lastFetched: null, error: null })
       setTab('dashboard')
       setSduToast('SDU Platform disconnected.')
@@ -3264,11 +3367,11 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
               <div
                 className="sdu-nav-badge"
                 onClick={() => setTab('profile')}
-                style={{ cursor: 'pointer' }}
-                title={`Connected to SDU Platform. Last updated: ${sduStatus.updated_at ? new Date(sduStatus.updated_at).toLocaleString() : 'Recently'}`}
+                style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
+                title={sduStatus?.demo_mode ? 'Connected via Demo SDU (external server offline)' : `Connected to SDU Platform. Last updated: ${sduStatus.updated_at ? new Date(sduStatus.updated_at).toLocaleString() : 'Recently'}`}
               >
-                <span className="sdu-dot pulse-dot" />
-                <span>SDU Connected</span>
+                <span className={`sdu-dot ${sduStatus?.demo_mode ? 'amber-dot' : 'pulse-dot'}`} style={sduStatus?.demo_mode ? { background: '#F59E0B', boxShadow: '0 0 6px rgba(245, 158, 11, 0.6)' } : {}} />
+                <span>{sduStatus?.demo_mode ? 'SDU Demo Mode' : 'SDU Connected'}</span>
               </div>
               <button
                 type="button"
@@ -3319,11 +3422,11 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
       )}
 
       <main className="content">
-        {tab === 'dashboard'  && <DashboardTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRefresh={loadSduLiveData} user={user} setTab={setTab} />}
-        {tab === 'schedule'   && <ScheduleTab  sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRefresh={loadSduLiveData} />}
-        {tab === 'transcript' && <TranscriptTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRefresh={loadSduLiveData} />}
-        {tab === 'attendance' && <AttendanceTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRefresh={loadSduLiveData} />}
-        {tab === 'profile'    && <SduProfileTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onDisconnect={handleSduDisconnect} onRefresh={loadSduLiveData} user={user} />}
+        {tab === 'dashboard'  && <DashboardTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onConnectDemo={handleSduDemoConnect} onRefresh={loadSduLiveData} user={user} setTab={setTab} />}
+        {tab === 'schedule'   && <ScheduleTab  sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onConnectDemo={handleSduDemoConnect} onRefresh={loadSduLiveData} />}
+        {tab === 'transcript' && <TranscriptTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onConnectDemo={handleSduDemoConnect} onRefresh={loadSduLiveData} />}
+        {tab === 'attendance' && <AttendanceTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onConnectDemo={handleSduDemoConnect} onRefresh={loadSduLiveData} />}
+        {tab === 'profile'    && <SduProfileTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onConnectDemo={handleSduDemoConnect} onDisconnect={handleSduDisconnect} onRefresh={loadSduLiveData} user={user} />}
         {tab === 'alerts'     && <AlertsTab    token={token} onUnreadChange={setUnread} onSelectTab={setTab} />}
       </main>
     </div>
@@ -3773,17 +3876,38 @@ function SduCallback({ onLogin }) {
           <div className="sdu-callback-badge sdu-badge-error">SDU ERROR</div>
           <h2>Authorization Failed</h2>
           <p>{errorMsg}</p>
-          <button
-            type="button"
-            className="btn-primary"
-            style={{ padding: '10px 24px', fontSize: '.9rem', margin: '0 auto' }}
-            onClick={() => {
-              window.history.replaceState({}, '', '/')
-              window.location.href = '/'
-            }}
-          >
-            ← Return to Sign In
-          </button>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%', maxWidth: 320, margin: '20px auto 0 auto' }}>
+            <button
+              type="button"
+              className="btn-primary"
+              style={{ width: '100%', padding: '11px 20px', fontSize: '.9rem' }}
+              onClick={async () => {
+                try {
+                  const demoRes = await api('/api/sdu/demo-connect', null, { method: 'POST' })
+                  if (demoRes && demoRes.access_token) {
+                    window.history.replaceState({}, '', '/')
+                    onLogin(demoRes)
+                  }
+                } catch {
+                  window.history.replaceState({}, '', '/')
+                  window.location.href = '/'
+                }
+              }}
+            >
+              ⚡ Continue with Demo SDU Mode
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              style={{ width: '100%', padding: '10px 20px', fontSize: '.9rem' }}
+              onClick={() => {
+                window.history.replaceState({}, '', '/')
+                window.location.href = '/'
+              }}
+            >
+              ← Return to Sign In
+            </button>
+          </div>
         </div>
       </div>
     )

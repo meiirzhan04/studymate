@@ -571,3 +571,66 @@ def test_sdu_live_endpoints_error_handling_409_502_504(monkeypatch):
     assert res_504.status_code == 504
 
 
+def test_sdu_availability():
+    res = client.get("/api/sdu/availability")
+    assert res.status_code == 200
+    data = res.json()
+    assert "available" in data
+    assert "origin" in data
+    assert data["demo_fallback_supported"] is True
+
+
+def test_sdu_demo_mode_flow():
+    # 1. Unauthenticated demo connect creates/logs in demo student
+    connect_res = client.post("/api/sdu/demo-connect")
+    assert connect_res.status_code == 200
+    conn_data = connect_res.json()
+    assert conn_data["ok"] is True
+    assert conn_data["demo_mode"] is True
+    assert "access_token" in conn_data
+    assert conn_data["sdu_connected"] is True
+    demo_token = conn_data["access_token"]
+
+    # 2. Check SDU status reports connected and demo_mode True
+    status_res = client.get("/api/sdu/status", headers=auth(demo_token))
+    assert status_res.status_code == 200
+    st = status_res.json()
+    assert st["connected"] is True
+    assert st["demo_mode"] is True
+
+    # 3. Live endpoints return rich mock data without hitting external server
+    prof = client.get("/api/sdu/profile", headers=auth(demo_token)).json()
+    assert prof["source"] == "demo_mock"
+    assert prof["fullname"] == "Demo Student"
+
+    sched = client.get("/api/sdu/schedule", headers=auth(demo_token)).json()
+    assert sched["source"] == "demo_mock"
+    assert len(sched["schedule"]) > 0
+
+    trans = client.get("/api/sdu/transcript", headers=auth(demo_token)).json()
+    assert trans["source"] == "demo_mock"
+    assert len(trans["courses"]) == 15
+
+    att = client.get("/api/sdu/attendance", headers=auth(demo_token)).json()
+    assert att["source"] == "demo_mock"
+    assert len(att["attendance"]) > 0
+
+    grades = client.get("/api/sdu/grades", headers=auth(demo_token)).json()
+    assert grades["source"] == "demo_mock"
+    assert len(grades["grades"]) > 0
+
+    # 4. Sync in demo mode succeeds
+    sync_res = client.post("/api/sdu/sync", headers=auth(demo_token))
+    assert sync_res.status_code == 200
+    assert sync_res.json()["synced"] is True
+
+    # 5. Disconnect in demo mode succeeds
+    disc_res = client.post("/api/sdu/disconnect", headers=auth(demo_token))
+    assert disc_res.status_code == 200
+    assert disc_res.json()["ok"] is True
+
+    status_after = client.get("/api/sdu/status", headers=auth(demo_token)).json()
+    assert status_after["connected"] is False
+
+
+

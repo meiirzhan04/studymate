@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .repository import SQLiteRepository
-from . import sdu_client
+from . import sdu_client, sdu_mock
 
 
 class SduAuthorizeRequest(BaseModel):
@@ -513,7 +513,64 @@ async def sdu_authorize_url(
         code_challenge=code_challenge,
         scope=req.scope or sdu_client.DEFAULT_SCOPES
     )
-    return {"url": auth_url, "state": state, "redirect_uri": redirect_uri}
+    available = await sdu_client.check_sdu_available()
+    return {
+        "url": auth_url,
+        "state": state,
+        "redirect_uri": redirect_uri,
+        "sdu_available": available
+    }
+
+
+@app.get("/api/sdu/availability")
+async def sdu_availability():
+    available = await sdu_client.check_sdu_available()
+    return {
+        "available": available,
+        "origin": sdu_client.SDU_ORIGIN,
+        "demo_fallback_supported": True
+    }
+
+
+@app.post("/api/sdu/demo-connect")
+def sdu_demo_connect(user: Annotated[Optional[User], Depends(optional_current_user)] = None):
+    # If unauthenticated, create or use the demo SDU student account
+    if not user:
+        student_id = sdu_mock.DEMO_PROFILE["student_id"]
+        fullname = sdu_mock.DEMO_PROFILE["fullname"]
+        email = sdu_mock.DEMO_PROFILE["email"]
+        db_user = repo.find_or_create_sdu_user(student_id=student_id, fullname=fullname, email=email)
+    else:
+        db_user = repo.get_user_by_id(user.id)
+        if not db_user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+    now = time.time()
+    repo.save_sdu_connection(
+        user_id=db_user["id"],
+        access_token=sdu_mock.DEMO_ACCESS_TOKEN,
+        expires_at=now + 86400 * 30,
+        scope=sdu_mock.DEMO_SCOPE
+    )
+
+    repo.sync_sdu_student_data(
+        db_user["id"],
+        profile=sdu_mock.profile(),
+        schedule=sdu_mock.schedule().get("schedule"),
+        grades=sdu_mock.grades().get("grades"),
+        attendance=sdu_mock.attendance().get("attendance"),
+    )
+
+    return {
+        "ok": True,
+        "access_token": issue_token(db_user),
+        "token_type": "bearer",
+        "expires_in": 1800,
+        "user": db_user,
+        "sdu_connected": True,
+        "demo_mode": True,
+        "student_profile": sdu_mock.DEMO_PROFILE
+    }
 
 
 @app.post("/api/sdu/callback")
@@ -610,11 +667,13 @@ async def sdu_callback(req: SduCallbackRequest):
 def sdu_status(user: Annotated[User, Depends(current_user)]):
     conn = repo.get_sdu_connection(user.id)
     if not conn:
-        return {"connected": False}
+        return {"connected": False, "demo_mode": False}
+    is_demo = sdu_mock.is_demo_connection(conn)
     if conn["expires_at"] < time.time():
-        return {"connected": False, "expired": True, "updated_at": conn["updated_at"]}
+        return {"connected": False, "expired": True, "demo_mode": is_demo, "updated_at": conn["updated_at"]}
     return {
         "connected": True,
+        "demo_mode": is_demo,
         "scope": conn["scope"],
         "expires_at": conn["expires_at"],
         "updated_at": conn["updated_at"]
@@ -630,6 +689,16 @@ async def sdu_sync(user: Annotated[User, Depends(current_user)]):
         repo.delete_sdu_connection(user.id)
         raise HTTPException(status_code=401, detail="SDU token has expired. Please reconnect.")
 
+    if sdu_mock.is_demo_connection(conn):
+        res = repo.sync_sdu_student_data(
+            user.id,
+            profile=sdu_mock.profile(),
+            schedule=sdu_mock.schedule().get("schedule"),
+            grades=sdu_mock.grades().get("grades"),
+            attendance=sdu_mock.attendance().get("attendance"),
+        )
+        return {"ok": True, "connected": True, "synced": True, "demo_mode": True, "updated_at": res.get("updated_at")}
+
     access_token = conn["access_token"]
     status_code, profile_data = await sdu_client.fetch_sdu_data("profile", access_token)
     if status_code == 401:
@@ -637,6 +706,17 @@ async def sdu_sync(user: Annotated[User, Depends(current_user)]):
         raise HTTPException(status_code=401, detail="SDU token revoked or expired. Please reconnect.")
     if status_code == 403:
         raise HTTPException(status_code=403, detail="Missing required SDU scope or account restricted.")
+
+    if status_code in (502, 504):
+        # Graceful fallback when upstream SDU server is unreachable
+        res = repo.sync_sdu_student_data(
+            user.id,
+            profile=sdu_mock.profile(),
+            schedule=sdu_mock.schedule().get("schedule"),
+            grades=sdu_mock.grades().get("grades"),
+            attendance=sdu_mock.attendance().get("attendance"),
+        )
+        return {"ok": True, "connected": True, "synced": True, "demo_fallback": True, "updated_at": res.get("updated_at")}
 
     _, sched_data = await sdu_client.fetch_sdu_data("schedule", access_token)
     _, att_data = await sdu_client.fetch_sdu_data("attendance", access_token)
@@ -679,6 +759,9 @@ async def sdu_live_profile(user: Annotated[User, Depends(current_user)]):
         repo.delete_sdu_connection(user.id)
         raise HTTPException(status_code=401, detail="SDU token expired. Please reconnect.")
 
+    if sdu_mock.is_demo_connection(conn):
+        return sdu_mock.profile()
+
     status_code, data = await sdu_client.fetch_sdu_data("profile", conn["access_token"])
     _handle_sdu_error_response(user.id, status_code, data)
     return data
@@ -696,6 +779,9 @@ async def sdu_live_schedule(
     if conn["expires_at"] < time.time():
         repo.delete_sdu_connection(user.id)
         raise HTTPException(status_code=401, detail="SDU token expired. Please reconnect.")
+
+    if sdu_mock.is_demo_connection(conn):
+        return sdu_mock.schedule()
 
     params = {}
     if year is not None and term is not None:
@@ -722,6 +808,9 @@ async def sdu_live_transcript(
         repo.delete_sdu_connection(user.id)
         raise HTTPException(status_code=401, detail="SDU token expired. Please reconnect.")
 
+    if sdu_mock.is_demo_connection(conn):
+        return sdu_mock.transcript(semester, passed)
+
     params = {}
     if semester is not None:
         params["semester"] = semester
@@ -745,6 +834,9 @@ async def sdu_live_attendance(
     if conn["expires_at"] < time.time():
         repo.delete_sdu_connection(user.id)
         raise HTTPException(status_code=401, detail="SDU token expired. Please reconnect.")
+
+    if sdu_mock.is_demo_connection(conn):
+        return sdu_mock.attendance()
 
     params = {}
     if year is not None and term is not None:
@@ -771,6 +863,9 @@ async def sdu_live_grades(
         repo.delete_sdu_connection(user.id)
         raise HTTPException(status_code=401, detail="SDU token expired. Please reconnect.")
 
+    if sdu_mock.is_demo_connection(conn):
+        return sdu_mock.grades()
+
     params = {}
     if year is not None and term is not None:
         params["year"] = year
@@ -787,7 +882,8 @@ async def sdu_live_grades(
 async def sdu_disconnect(user: Annotated[User, Depends(current_user)]):
     conn = repo.get_sdu_connection(user.id)
     if conn:
-        await sdu_client.revoke_token(conn["access_token"])
+        if not sdu_mock.is_demo_connection(conn):
+            await sdu_client.revoke_token(conn["access_token"])
         repo.delete_sdu_connection(user.id)
     return {"ok": True, "message": "SDU account disconnected and token revoked successfully."}
 
