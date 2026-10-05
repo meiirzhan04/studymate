@@ -471,8 +471,9 @@ function NextClassHighlightCard({ nextInfo }) {
     <div className="next-class-hero-card page-fade">
       <div>
         <div className="next-class-badge-pill">
+          <span className="pulse-dot-inline" />
           <Icons.Clock size={13} color="var(--primary)" />
-          <span>{isToday ? 'Today · Next Class' : `${dayName} · Next Class`}</span>
+          <span>{isToday ? 'Today · Next Session' : `${dayName} · Next Session`}</span>
         </div>
         <div className="next-class-title">{course.course_name}</div>
         <div className="next-class-meta-row">
@@ -492,7 +493,7 @@ function NextClassHighlightCard({ nextInfo }) {
       </div>
       <div className="next-class-time-block">
         <div className="time-countdown-val">{timeStr}</div>
-        <div className="time-countdown-lbl">{course.is_online ? 'Online Zoom / Moodle' : 'In-Person Campus'}</div>
+        <div className="time-countdown-lbl">{course.is_online ? 'Online Zoom / Moodle' : (course.room ? `Room ${course.room}` : 'SDU Campus')}</div>
       </div>
     </div>
   )
@@ -513,77 +514,150 @@ const CustomChartTooltip = ({ active, payload, label }) => {
       <div style={{ fontWeight: 700, marginBottom: 6, color: 'var(--text-primary)' }}>{label}</div>
       {payload.map((p, i) => (
         <div key={i} style={{ color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between', gap: 14 }}>
-          <span>{p.dataKey === 'grade' ? 'Course Grade:' : 'Attendance:'}</span>
-          <b style={{ color: p.color }}>{p.value}%</b>
+          <span>{p.dataKey === 'grade' ? 'Course Grade:' : (p.dataKey === 'gpa' ? 'Semester GPA:' : 'Attendance:')}</span>
+          <b style={{ color: p.color }}>{p.dataKey === 'gpa' ? `${p.value} GPA` : `${p.value}%`}</b>
         </div>
       ))}
     </div>
   )
 }
 
-function DashboardPerformanceChart({ transcript = [], attendance = [] }) {
-  if ((!transcript || !transcript.length) && (!attendance || !attendance.length)) return null
+/* ─── UNIFIED ACADEMIC ANALYTICS & TRAJECTORY HUB ────────────────── */
+function AcademicAnalyticsHub({ transcript = [], attendance = [], semesterProgress = [] }) {
+  const [activeView, setActiveView] = useState('courses')
 
-  const courseMap = {}
-  ;(transcript || []).forEach(c => {
-    if (c.course_code && (c.grade_percent != null || c.grade != null)) {
-      const pct = c.grade_percent != null ? Number(c.grade_percent) : (typeof c.grade === 'number' ? c.grade : null)
-      if (pct !== null && !isNaN(pct)) {
-        courseMap[c.course_code] = {
-          name: c.course_code,
-          grade: pct,
-          attendance: 100
+  const courseMap = useMemo(() => {
+    const map = {}
+    ;(transcript || []).forEach(c => {
+      if (c.course_code && (c.grade_percent != null || c.grade != null)) {
+        const pct = c.grade_percent != null ? Number(c.grade_percent) : (typeof c.grade === 'number' ? c.grade : null)
+        if (pct !== null && !isNaN(pct)) {
+          map[c.course_code] = {
+            name: c.course_code,
+            fullName: c.course_name || c.course_code,
+            grade: pct,
+            attendance: 100
+          }
         }
       }
-    }
-  })
+    })
 
-  ;(attendance || []).forEach(a => {
-    const code = a.lesson ? a.lesson.split(' ')[0] : null
-    const abs = a.absence_percent != null ? Number(a.absence_percent) : 0
-    const attPct = Math.max(0, 100 - abs)
-    if (code && courseMap[code]) {
-      courseMap[code].attendance = attPct
-    } else if (code) {
-      courseMap[code] = {
-        name: code,
-        grade: null,
-        attendance: attPct
+    ;(attendance || []).forEach(a => {
+      const code = a.lesson ? a.lesson.split(' ')[0] : null
+      const abs = a.absence_percent != null ? Number(a.absence_percent) : 0
+      const attPct = Math.max(0, 100 - abs)
+      if (code && map[code]) {
+        map[code].attendance = attPct
+      } else if (code) {
+        map[code] = {
+          name: code,
+          fullName: a.lesson || code,
+          grade: null,
+          attendance: attPct
+        }
       }
-    }
-  })
+    })
 
-  const chartData = Object.values(courseMap).slice(-6)
-  if (!chartData.length) return null
+    return Object.values(map).slice(-6)
+  }, [transcript, attendance])
+
+  const hasCourseData = courseMap.length > 0
+  const hasSemesterData = semesterProgress && semesterProgress.length > 0
+
+  if (!hasCourseData && !hasSemesterData) return null
+
+  const currentView = (activeView === 'trajectory' && hasSemesterData) ? 'trajectory' : 'courses'
 
   return (
-    <article className="panel" style={{ marginTop: 24 }}>
-      <div className="panel-title">
+    <article className="panel analytics-hub-panel">
+      <div className="panel-title" style={{ flexWrap: 'wrap', gap: 12 }}>
         <div>
           <span className="eyebrow">Academic Analytics</span>
-          <h2>Course Grade & Attendance Performance</h2>
+          <h2>{currentView === 'courses' ? 'Course Performance & Attendance' : 'Semester Growth & GPA Trajectory'}</h2>
         </div>
-        <div style={{ display: 'flex', gap: 14, fontSize: '.78rem', color: 'var(--text-secondary)', alignItems: 'center' }}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ width: 10, height: 10, background: 'var(--primary)', borderRadius: 2 }} /> Grade Score %
-          </span>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ width: 10, height: 10, background: '#10B981', borderRadius: 2 }} /> Attendance %
-          </span>
+
+        {hasSemesterData && (
+          <div className="analytics-toggle-group">
+            <button
+              type="button"
+              className={`analytics-toggle-btn ${currentView === 'courses' ? 'active' : ''}`}
+              onClick={() => setActiveView('courses')}
+            >
+              <Icons.Book size={13} /> Active Courses
+            </button>
+            <button
+              type="button"
+              className={`analytics-toggle-btn ${currentView === 'trajectory' ? 'active' : ''}`}
+              onClick={() => setActiveView('trajectory')}
+            >
+              <Icons.TrendingUp size={13} /> Multi-Term Trajectory
+            </button>
+          </div>
+        )}
+      </div>
+
+      {currentView === 'courses' ? (
+        <div>
+          <div className="analytics-chart-legend">
+            <span className="legend-chip">
+              <span className="legend-dot" style={{ background: 'var(--primary)' }} /> Grade Score %
+            </span>
+            <span className="legend-chip">
+              <span className="legend-dot" style={{ background: '#10B981' }} /> Attendance %
+            </span>
+            <span style={{ marginLeft: 'auto', fontSize: '.76rem', color: 'var(--text-muted)' }}>
+              Target: ≥85% Grade · ≥90% Attendance
+            </span>
+          </div>
+
+          <div style={{ width: '100%', height: 230 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={courseMap} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" opacity={0.6} />
+                <XAxis dataKey="name" stroke="var(--text-muted)" fontSize={12} tickLine={false} />
+                <YAxis domain={[0, 100]} stroke="var(--text-muted)" fontSize={12} tickLine={false} />
+                <Tooltip content={<CustomChartTooltip />} />
+                <Bar dataKey="grade" fill="var(--primary)" radius={[4, 4, 0, 0]} maxBarSize={32} />
+                <Bar dataKey="attendance" fill="#10B981" radius={[4, 4, 0, 0]} maxBarSize={32} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
         </div>
-      </div>
-      <div style={{ width: '100%', height: 230 }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" opacity={0.6} />
-            <XAxis dataKey="name" stroke="var(--text-muted)" fontSize={12} tickLine={false} />
-            <YAxis domain={[0, 100]} stroke="var(--text-muted)" fontSize={12} tickLine={false} />
-            <Tooltip content={<CustomChartTooltip />} />
-            <Bar dataKey="grade" fill="var(--primary)" radius={[4, 4, 0, 0]} maxBarSize={32} />
-            <Bar dataKey="attendance" fill="#10B981" radius={[4, 4, 0, 0]} maxBarSize={32} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
+      ) : (
+        <div>
+          <div className="analytics-chart-legend">
+            <span className="gpa-trend-pill trend-positive">
+              <Icons.TrendingUp size={13} />
+              <span>Continuous GPA Growth Across Terms</span>
+            </span>
+            <span style={{ marginLeft: 'auto', fontSize: '.76rem', color: 'var(--text-muted)' }}>
+              Standard 4.0 GPA Scale
+            </span>
+          </div>
+
+          <div style={{ width: '100%', height: 210, marginBottom: 14 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={semesterProgress} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" opacity={0.6} />
+                <XAxis dataKey="name" stroke="var(--text-muted)" fontSize={12} tickLine={false} />
+                <YAxis domain={[0, 4]} stroke="var(--text-muted)" fontSize={12} tickLine={false} />
+                <Tooltip content={<CustomChartTooltip />} />
+                <Bar dataKey="gpa" fill="#6366F1" radius={[6, 6, 0, 0]} maxBarSize={36} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="semester-metrics-row">
+            {semesterProgress.map((sp, idx) => (
+              <div key={idx} className="sem-metric-chip">
+                <small>{sp.name}</small>
+                <strong>{typeof sp.gpa === 'number' && !isNaN(sp.gpa) ? sp.gpa.toFixed(2) : '—'}</strong>
+                <span>{sp.credits} ECTS · {sp.passed} pass</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </article>
   )
 }
@@ -1956,14 +2030,14 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo
         </div>
       </header>
 
-      {/* 3 Distinct Stat Cards (Cumulative GPA is shown only in the Transcript & Grades tab) */}
-      <section className="stat-grid-3">
-        {/* Card 2: Overall Attendance */}
+      {/* 4 Bento Stat Cards (Cumulative GPA is shown only in Transcript & Grades tab) */}
+      <section className="stat-grid-4" style={{ marginBottom: 24 }}>
+        {/* Card 1: Overall Attendance */}
         <article className="stat-card-custom">
           <div>
             <div className="stat-card-head">
-              <span className="stat-card-label">Overall Attendance</span>
-              <div className={`stat-card-icon-pill ${attendance >= 90 ? 'pill-emerald' : 'pill-amber'}`}>
+              <span className="stat-card-label">Attendance Health</span>
+              <div className={`stat-card-icon-pill ${attendance >= 90 ? 'pill-emerald' : (attendance >= 75 ? 'pill-amber' : 'pill-danger')}`}>
                 <Icons.Calendar size={18} />
               </div>
             </div>
@@ -1976,7 +2050,29 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo
             <span className={`att-badge-state ${attClass}`}>
               {attLabel}
             </span>
-            <span style={{ fontSize: '.76rem', color: 'var(--text-muted)' }}>Limit: 20% absence</span>
+            <span style={{ fontSize: '.74rem', color: 'var(--text-muted)' }}>Limit: 20% absence</span>
+          </div>
+        </article>
+
+        {/* Card 2: Academic Standing */}
+        <article className="stat-card-custom">
+          <div>
+            <div className="stat-card-head">
+              <span className="stat-card-label">Academic Standing</span>
+              <div className="stat-card-icon-pill pill-purple">
+                <Icons.Award size={18} />
+              </div>
+            </div>
+            <div className="stat-card-value">
+              {gpa !== null && gpa >= 3.5 ? 'Honors' : (gpa !== null && gpa >= 2.0 ? 'Good' : 'Probation')}
+            </div>
+            <div className="stat-card-subtext">Faculty of Engineering & Natural Sci.</div>
+          </div>
+          <div className="att-health-row">
+            <span className={`standing-badge ${standingClass}`} style={{ fontSize: '.74rem', padding: '3px 8px' }}>
+              {standingIcon}
+              <span>{standingLabel}</span>
+            </span>
           </div>
         </article>
 
@@ -1990,7 +2086,7 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo
               </div>
             </div>
             <div className="stat-card-value">
-              {credits} <span style={{ fontSize: '1.1rem', color: 'var(--text-muted)', fontWeight: 600 }}>ECTS</span>
+              {credits} <span style={{ fontSize: '1rem', color: 'var(--text-muted)', fontWeight: 600 }}>ECTS</span>
             </div>
             <div className="stat-card-subtext">{credits} / {totalTargetCredits} ECTS required ({creditsPct}%)</div>
           </div>
@@ -2004,8 +2100,8 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo
           <div>
             <div className="stat-card-head">
               <span className="stat-card-label">Enrolled Classes</span>
-              <div className="stat-card-icon-pill pill-purple">
-                <Icons.Award size={18} />
+              <div className="stat-card-icon-pill pill-amber">
+                <Icons.Clock size={18} />
               </div>
             </div>
             <div className="stat-card-value">
@@ -2030,114 +2126,135 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo
       {/* Today / Next Class Highlight Card */}
       {nextInfo?.course && <NextClassHighlightCard nextInfo={nextInfo} />}
 
-      {/* Main Grid: Active Schedule Preview + Right Sidebars */}
+      {/* Main Grid: Active Schedule Preview + Analytics Hub on Left; Action Plan & Record on Right */}
       <section className="grid">
-        <article className="panel">
-          <div className="panel-title">
-            <div>
-              <span className="eyebrow">Academic Timetable</span>
-              <h2>Active Class Schedule</h2>
+        <div className="dash-main-col">
+          <article className="panel">
+            <div className="panel-title">
+              <div>
+                <span className="eyebrow">Academic Timetable</span>
+                <h2>Active Class Schedule</h2>
+              </div>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => setTab('schedule')}
+                style={{ fontSize: '.82rem', fontWeight: 600, color: 'var(--primary)' }}
+              >
+                Full Schedule →
+              </button>
             </div>
-            <button
-              type="button"
-              className="btn-ghost"
-              onClick={() => setTab('schedule')}
-              style={{ fontSize: '.82rem', fontWeight: 600, color: 'var(--primary)' }}
-            >
-              Full Schedule →
-            </button>
-          </div>
 
-          {!schedulePreview || schedulePreview.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '36px 16px', color: 'var(--text-muted)' }}>
-              <Icons.Calendar size={36} color="var(--text-muted)" style={{ marginBottom: 10 }} />
-              <p style={{ margin: 0, fontSize: '.9rem' }}>No active schedule records returned from SDU for this term.</p>
-            </div>
-          ) : (
-            <div className="schedule-list-v2">
-              {schedulePreview.map((s, idx) => {
-                const dayNames = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-                const dayStr = dayNames[getDayOrder(s)] || s.weekday || 'Weekday'
-                const timeFormatted = formatClassTime(s.times, s.start_time, s.end_time)
-                const isNext = nextInfo?.course && nextInfo.course.course_code === s.course_code && nextInfo.course.times === s.times
+            {!schedulePreview || schedulePreview.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '36px 16px', color: 'var(--text-muted)' }}>
+                <Icons.Calendar size={36} color="var(--text-muted)" style={{ marginBottom: 10 }} />
+                <p style={{ margin: 0, fontSize: '.9rem' }}>No active schedule records returned from SDU for this term.</p>
+              </div>
+            ) : (
+              <div className="schedule-list-v2">
+                {schedulePreview.map((s, idx) => {
+                  const dayNames = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+                  const dayStr = dayNames[getDayOrder(s)] || s.weekday || 'Weekday'
+                  const timeFormatted = formatClassTime(s.times, s.start_time, s.end_time)
+                  const isNext = nextInfo?.course && nextInfo.course.course_code === s.course_code && nextInfo.course.times === s.times
 
-                return (
-                  <div key={idx} className={`schedule-card-v2 ${isNext ? 'current-class' : ''}`}>
-                    <div className="time-slot-box">
-                      <span className="time-slot-day">{dayStr}</span>
-                      <span className="time-slot-hours">
-                        <Icons.Clock size={13} color="var(--primary)" />
-                        {timeFormatted}
-                      </span>
-                    </div>
-                    <div className="course-info-box">
-                      <h3>{s.course_name}</h3>
-                      <div className="course-chips-row">
-                        <span className="badge-chip"><code>{s.course_code}</code></span>
-                        <span className="badge-chip">{s.lesson_type || 'Lecture'} · Sec {s.section || '1'}</span>
-                        <span className="badge-chip">
-                          <Icons.MapPin size={12} color="var(--primary)" />
-                          {s.building ? `${s.building} ` : ''}{s.room ? `Room ${s.room}` : (s.is_online ? 'Online' : 'SDU Campus')}
+                  return (
+                    <div key={idx} className={`schedule-card-v2 ${isNext ? 'current-class' : ''}`}>
+                      <div className="time-slot-box">
+                        <span className="time-slot-day">{dayStr}</span>
+                        <span className="time-slot-hours">
+                          <Icons.Clock size={13} color="var(--primary)" />
+                          {timeFormatted}
                         </span>
-                        {s.teacher && (
+                      </div>
+                      <div className="course-info-box">
+                        <h3>{s.course_name}</h3>
+                        <div className="course-chips-row">
+                          <span className="badge-chip"><code>{s.course_code}</code></span>
+                          <span className="badge-chip">{s.lesson_type || 'Lecture'} · Sec {s.section || '1'}</span>
                           <span className="badge-chip">
-                            <Icons.User size={12} color="var(--text-muted)" />
-                            {s.teacher}
+                            <Icons.MapPin size={12} color="var(--primary)" />
+                            {s.building ? `${s.building} ` : ''}{s.room ? `Room ${s.room}` : (s.is_online ? 'Online' : 'SDU Campus')}
+                          </span>
+                          {s.teacher && (
+                            <span className="badge-chip">
+                              <Icons.User size={12} color="var(--text-muted)" />
+                              {s.teacher}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div>
+                        {isNext ? (
+                          <span className="status-badge badge-next">
+                            <span className="pulse-dot-inline" /> Next Up
+                          </span>
+                        ) : (
+                          <span className="status-badge badge-ok">
+                            Enrolled
                           </span>
                         )}
                       </div>
                     </div>
-                    <div>
-                      <span className="status-badge badge-ok">
-                        Enrolled
-                      </span>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </article>
-
-        <aside>
-          {/* SPRINT 2 · USER STORY 7: STUDY RECOMMENDATIONS */}
-          <article className="panel" style={{ borderLeft: '4px solid var(--primary)', background: 'var(--surface)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-              <div>
-                <span className="eyebrow" style={{ color: 'var(--primary)', fontWeight: 700 }}>STUDY PLAN · SPRINT 2</span>
-                <h2 style={{ margin: '2px 0 0', fontSize: '1.12rem' }}>Study Recommendations</h2>
+                  )
+                })}
               </div>
-              <span className="sdu-badge" style={{ fontSize: '.72rem' }}>Story 7</span>
+            )}
+          </article>
+
+          {/* Unified Academic Analytics & Progress Trajectory Hub */}
+          <AcademicAnalyticsHub
+            transcript={sduData.transcript}
+            attendance={sduData.attendance}
+            semesterProgress={semesterProgress}
+          />
+        </div>
+
+        <aside className="dash-side-col">
+          {/* Personalized Recommendations & Study Action Plan */}
+          <article className="panel action-plan-panel">
+            <div className="panel-title" style={{ marginBottom: 10 }}>
+              <div>
+                <span className="eyebrow">Smart Advisor</span>
+                <h2>Study Recommendations</h2>
+              </div>
+              <span className="rec-intel-pill">
+                <Icons.Sparkles size={12} />
+                <span>AI Guidance</span>
+              </span>
             </div>
-            <p style={{ fontSize: '.84rem', color: 'var(--text-secondary)', margin: '0 0 12px', lineHeight: 1.5 }}>
+            <p className="action-plan-desc">
               Targeted academic guidance based on your weakest course components and attendance thresholds:
             </p>
 
             {(!recommendations || !recommendations.length) ? (
-              <div style={{ padding: '12px 14px', background: 'var(--surface-subtle)', borderRadius: 10, fontSize: '.84rem', color: 'var(--text-secondary)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--success)', fontWeight: 600, marginBottom: 3 }}>
-                  <Icons.CheckCircle size={15} /> Dean's List Standing
+              <div className="rec-empty-honors">
+                <div className="rec-empty-title">
+                  <Icons.CheckCircle size={15} color="var(--success)" />
+                  <span>Dean's List Standing</span>
                 </div>
-                You are maintaining high honors across current courses. Prepare for upcoming Project Management milestones.
+                <p>You are maintaining high honors across current courses. Keep up the consistent preparation for final exams.</p>
               </div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div className="action-plan-list">
                 {recommendations.map((rec, i) => (
-                  <div key={i} style={{ padding: '10px 12px', background: 'var(--surface-subtle)', borderRadius: 10, border: '1px solid var(--border)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
-                      <b style={{ fontSize: '.88rem', color: 'var(--text-primary)' }}>{rec.course}</b>
-                      <span className="status-badge badge-warn" style={{ fontSize: '.7rem', padding: '2px 7px' }}>Focus</span>
+                  <div key={i} className="action-plan-item">
+                    <div className="action-plan-item-head">
+                      <span className="action-course-badge"><code>{rec.course}</code></span>
+                      <span className="action-priority-tag">
+                        <span className="pulse-dot-amber" /> Focus Area
+                      </span>
                     </div>
-                    <p style={{ margin: '0 0 5px', fontSize: '.82rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                      👉 {rec.action}
-                    </p>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
-                      <small style={{ color: 'var(--text-muted)', fontSize: '.74rem' }}>{rec.reason}</small>
+                    <div className="action-plan-text">
+                      {rec.action}
+                    </div>
+                    <div className="action-plan-foot">
+                      <span className="action-plan-reason">{rec.reason}</span>
                       <button
                         type="button"
-                        className="btn-ghost"
+                        className="action-plan-cta-btn"
                         onClick={onOpenWhatIf}
-                        style={{ padding: '2px 6px', fontSize: '.74rem', color: 'var(--primary)', fontWeight: 600 }}
+                        title="Simulate target grade in What-If"
                       >
                         Plan in What-If →
                       </button>
@@ -2148,22 +2265,35 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo
             )}
           </article>
 
+          {/* Recent Curriculum Grades */}
           <article className="panel">
-            <span className="eyebrow">Academic Record</span>
-            <h2>Recent Curriculum Grades</h2>
+            <div className="panel-title" style={{ marginBottom: 12 }}>
+              <div>
+                <span className="eyebrow">Academic Record</span>
+                <h2>Recent Assessments</h2>
+              </div>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => setTab('transcript')}
+                style={{ fontSize: '.8rem', fontWeight: 600, color: 'var(--primary)', padding: '4px 8px' }}
+              >
+                All Grades →
+              </button>
+            </div>
             {!transcriptPreview || transcriptPreview.length === 0 ? (
               <p className="empty">No recent grades available in transcript.</p>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
+              <div className="recent-grades-list">
                 {transcriptPreview.map((c, i) => (
-                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: 'var(--surface-subtle)', borderRadius: 10 }}>
-                    <div style={{ overflow: 'hidden', paddingRight: 8 }}>
-                      <b style={{ fontSize: '.86rem', display: 'block', textOverflow: 'ellipsis', whiteSpace: 'nowrap', overflow: 'hidden' }}>{c.course_name}</b>
-                      <small style={{ color: 'var(--text-muted)' }}>{c.course_code} · {c.credits || c.ects || 3} ECTS</small>
+                  <div key={i} className="recent-grade-row">
+                    <div className="recent-grade-info">
+                      <b>{c.course_name}</b>
+                      <small>{c.course_code} · {c.credits || c.ects || 3} ECTS</small>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <div className="recent-grade-score">
                       {c.letter_grade && <span className={`grade-pill ${getGradePillClass(c.letter_grade)}`}>{c.letter_grade}</span>}
-                      <span style={{ fontSize: '.84rem', fontWeight: 700 }}>
+                      <span className="recent-grade-pct">
                         {c.grade_percent != null ? `${c.grade_percent}%` : (c.grade != null ? (typeof c.grade === 'number' ? `${c.grade}%` : c.grade) : (c.passed ? 'Pass' : '—'))}
                       </span>
                     </div>
@@ -2171,84 +2301,48 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo
                 ))}
               </div>
             )}
-            <button
-              type="button"
-              className="btn-ghost"
-              onClick={() => setTab('transcript')}
-              style={{ width: '100%', marginTop: 16, fontSize: '.84rem', fontWeight: 600, color: 'var(--primary)', justifyContent: 'center' }}
-            >
-              View Full Transcript →
-            </button>
           </article>
 
-          <article className="panel">
-            <span className="eyebrow">SDU Attendance Policy</span>
-            <h2>Absence Thresholds</h2>
-            <p style={{ fontSize: '.86rem', color: 'var(--text-secondary)', lineHeight: 1.5, margin: '8px 0 14px' }}>
-              SDU records course absence percentage directly. If absence exceeds <b>20%</b>, you will be automatically withdrawn with an <b>FX</b> grade.
+          {/* Absence Thresholds & Safe Guard */}
+          <article className="panel absence-policy-card">
+            <div className="panel-title" style={{ marginBottom: 8 }}>
+              <div>
+                <span className="eyebrow">SDU Attendance Policy</span>
+                <h2>Absence Safe Guard</h2>
+              </div>
+              <span className={`att-badge-state ${attClass}`} style={{ fontSize: '.72rem' }}>
+                {attLabel}
+              </span>
+            </div>
+            <p style={{ fontSize: '.84rem', color: 'var(--text-secondary)', lineHeight: 1.5, margin: '0 0 12px' }}>
+              SDU regulation: If course absence exceeds <b>20%</b>, student is automatically failed with an <b>FX</b> grade.
             </p>
+            <div className="policy-meter-wrap">
+              <div className="policy-meter-bar">
+                <div
+                  className="policy-meter-fill"
+                  style={{
+                    width: `${Math.min(100, Math.round((100 - attendance) * 5))}%`,
+                    background: attendance < 75 ? 'var(--danger)' : (attendance < 90 ? 'var(--warning)' : 'var(--success)')
+                  }}
+                />
+              </div>
+              <div className="policy-meter-labels">
+                <span>0% Safe</span>
+                <span style={{ color: 'var(--danger)', fontWeight: 600 }}>20% FX Drop Limit</span>
+              </div>
+            </div>
             <button
               type="button"
               className="btn-ghost"
               onClick={() => setTab('attendance')}
-              style={{ width: '100%', fontSize: '.84rem', fontWeight: 600, color: 'var(--primary)', justifyContent: 'center' }}
+              style={{ width: '100%', marginTop: 14, fontSize: '.82rem', fontWeight: 600, color: 'var(--primary)', justifyContent: 'center' }}
             >
-              Check Absence Percentages →
+              Review Attendance Breakdown →
             </button>
           </article>
         </aside>
       </section>
-
-      {/* Performance Analytics Trend Chart */}
-      <DashboardPerformanceChart transcript={sduData.transcript} attendance={sduData.attendance} />
-
-      {/* SPRINT 2 · USER STORY 8: TRACK ACADEMIC PROGRESS ACROSS SEMESTERS */}
-      {semesterProgress && semesterProgress.length > 1 && (
-        <article className="panel" style={{ marginTop: 20 }}>
-          <div className="panel-title">
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                <span className="eyebrow" style={{ color: 'var(--primary)', fontWeight: 700 }}>ACADEMIC PROGRESS · SPRINT 2</span>
-                <span className="sdu-badge">Story 8</span>
-              </div>
-              <h2>Semester-by-Semester Performance & Trend</h2>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span className="gpa-trend-pill trend-positive">
-                <Icons.TrendingUp size={13} />
-                <span>Improving GPA Trend across terms</span>
-              </span>
-            </div>
-          </div>
-          <p style={{ fontSize: '.86rem', color: 'var(--text-secondary)', margin: '0 0 16px', lineHeight: 1.5 }}>
-            Compare your GPA and course outcomes across all completed semesters to track academic trajectory and growth:
-          </p>
-
-          <div style={{ width: '100%', height: 210, marginBottom: 14 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={semesterProgress} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" opacity={0.6} />
-                <XAxis dataKey="name" stroke="var(--text-muted)" fontSize={12} tickLine={false} />
-                <YAxis domain={[0, 4]} stroke="var(--text-muted)" fontSize={12} tickLine={false} />
-                <Tooltip formatter={(value) => [`${value} GPA`, 'Term GPA']} />
-                <Bar dataKey="gpa" fill="#4F46E5" radius={[6, 6, 0, 0]} maxBarSize={44} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
-            {semesterProgress.map((sp, idx) => (
-              <div key={idx} style={{ padding: '10px 12px', background: 'var(--surface-subtle)', borderRadius: 10, textAlign: 'center' }}>
-                <small style={{ color: 'var(--text-muted)', display: 'block', fontSize: '.76rem', fontWeight: 600 }}>{sp.name}</small>
-                <strong style={{ fontSize: '1.2rem', color: (sp.gpa || 0) >= 3.5 ? 'var(--primary)' : 'var(--text-primary)', display: 'block', margin: '2px 0' }}>
-                  {typeof sp.gpa === 'number' && !isNaN(sp.gpa) ? sp.gpa.toFixed(2) : '—'}
-                </strong>
-                <span style={{ fontSize: '.74rem', color: 'var(--text-secondary)' }}>{sp.credits} ECTS · {sp.passed} passed</span>
-              </div>
-            ))}
-          </div>
-        </article>
-      )}
     </div>
   )
 }
@@ -3428,7 +3522,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
               </div>
               <button
                 type="button"
-                className="icon-button"
+                className="sdu-sync-nav-btn"
                 onClick={handleSduSync}
                 disabled={sduLoading}
                 title="Sync latest data from SDU Platform"
@@ -3451,21 +3545,9 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
 
           <button
             type="button"
-            className="btn-ghost"
+            className="what-if-nav-btn"
             onClick={() => setShowWhatIf(true)}
             title="Open Grade Planner (What-If Calculator)"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '6px 12px',
-              borderRadius: 8,
-              border: '1px solid var(--border)',
-              background: 'var(--surface)',
-              fontWeight: 600,
-              fontSize: '.82rem',
-              cursor: 'pointer'
-            }}
           >
             <Icons.Sliders size={14} color="var(--primary)" />
             <span>What-If</span>

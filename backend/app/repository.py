@@ -601,7 +601,11 @@ class SQLiteRepository:
                 if clean_id.isdigit():
                     student_id = clean_id
                 else:
-                    student_id = f"STU-{secrets.randbelow(89999) + 10000}"
+                    while True:
+                        cand = f"STU-{secrets.token_hex(4).upper()}"
+                        if not db.execute("SELECT 1 FROM students WHERE id = ?", (cand,)).fetchone():
+                            student_id = cand
+                            break
 
                 db.execute(
                     "INSERT INTO users (id, name, role, student_id, teacher_id, password_salt, password_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -614,7 +618,7 @@ class SQLiteRepository:
                     db.execute("INSERT OR IGNORE INTO login_identifiers (identifier, user_id) VALUES (?, ?)", (email.strip(), user_id))
 
                 db.execute(
-                    "INSERT INTO students (id, name, cohort, attendance, missing_assignments) VALUES (?, ?, ?, ?, ?)",
+                    "INSERT OR REPLACE INTO students (id, name, cohort, attendance, missing_assignments) VALUES (?, ?, ?, ?, ?)",
                     (student_id, clean_name, cohort, 93.5, 0)
                 )
 
