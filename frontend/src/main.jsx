@@ -294,6 +294,17 @@ const Icons = {
       <path d="M12 3l1.912 5.885a2.5 2.5 0 0 0 1.583 1.583L21.38 12.38l-5.885 1.912a2.5 2.5 0 0 0-1.583 1.583L12 21.76l-1.912-5.885a2.5 2.5 0 0 0-1.583-1.583L2.62 12.38l5.885-1.912a2.5 2.5 0 0 0 1.583-1.583L12 3z" />
     </svg>
   ),
+  Home: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <path d="M3 10.5 12 3l9 7.5" />
+      <path d="M5 9.5V20a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V9.5" />
+    </svg>
+  ),
+  ChevronRight: ({ size = 16, color = "currentColor", strokeWidth = 2, className = "" }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
+      <polyline points="9 18 15 12 9 6" />
+    </svg>
+  ),
   Shield: ({ size = 18, color = "currentColor", strokeWidth = 2, className = "" }) => (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} style={{ display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 }}>
       <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
@@ -333,7 +344,7 @@ function ThemeToggle({ theme, toggleTheme }) {
       title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
       aria-label="Toggle dark/light theme"
     >
-      {theme === 'dark' ? <Icons.Sun size={17} color="#FBBF24" /> : <Icons.Moon size={17} color="#6366F1" />}
+      {theme === 'dark' ? <Icons.Sun size={18} /> : <Icons.Moon size={18} />}
     </button>
   )
 }
@@ -354,16 +365,26 @@ function initials(name = '') {
   return name.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase() || 'U'
 }
 
-function formatClassTime(times, start, end) {
-  if (start && end) {
-    const s = String(start).replace(/:\d{2}$/, '').trim()
-    const e = String(end).replace(/:\d{2}$/, '').trim()
-    return `${s} – ${e}`
-  }
-  if (times) {
-    return String(times).replace(/(\d{1,2}:\d{2}):\d{2}/g, '$1').replace(/-/g, '–').trim()
-  }
-  return 'Time TBD'
+const DAY_NAMES = ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+const DAY_SHORT = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+const DEGREE_CREDITS = 240
+
+function classTimes(s) {
+  const pick = v => (String(v || '').match(/\d{1,2}:\d{2}/) || [''])[0]
+  if (s.start_time || s.end_time) return [pick(s.start_time), pick(s.end_time)]
+  const parts = String(s.times || '').match(/\d{1,2}:\d{2}/g) || []
+  return [parts[0] || '', parts[1] || '']
+}
+
+function formatClassTime(s) {
+  const [start, end] = classTimes(s)
+  if (!start) return 'Time TBD'
+  return end ? `${start} – ${end}` : start
+}
+
+function classLocation(s) {
+  if (s.room) return `${s.building ? `${s.building}, ` : ''}Room ${s.room}`
+  return s.is_online ? 'Online' : 'SDU Campus'
 }
 
 const DAY_ORDER_MAP = {
@@ -424,27 +445,6 @@ function findNextClass(schedule = []) {
   return { course: sorted[0], isToday: false }
 }
 
-function GpaGauge({ gpa, maxGpa = 4.0 }) {
-  const val = gpa != null ? Math.min(Math.max(Number(gpa), 0), maxGpa) : 0
-  const pct = (val / maxGpa) * 100
-  const radius = 30
-  const stroke = 6
-  const circ = 2 * Math.PI * radius
-  const offset = circ - (pct / 100) * circ
-  return (
-    <svg width={72} height={72} viewBox="0 0 72 72" style={{ transform: 'rotate(-90deg)', flexShrink: 0 }}>
-      <circle cx={36} cy={36} r={radius} fill="none" stroke="var(--border)" strokeWidth={stroke} />
-      <circle
-        cx={36} cy={36} r={radius} fill="none"
-        stroke="var(--primary)" strokeWidth={stroke}
-        strokeDasharray={circ} strokeDashoffset={offset}
-        strokeLinecap="round"
-        style={{ transition: 'stroke-dashoffset 0.8s cubic-bezier(0.4, 0, 0.2, 1)' }}
-      />
-    </svg>
-  )
-}
-
 function getPasswordStrength(pw) {
   if (!pw) return { score: 0, label: 'Enter password', cls: '' }
   let score = 0
@@ -459,135 +459,153 @@ function getPasswordStrength(pw) {
   return { score: 4, label: 'Strong', cls: 'active-strong' }
 }
 
-/* ─── TODAY / NEXT CLASS HIGHLIGHT HERO CARD ─────────────────────── */
-function NextClassHighlightCard({ nextInfo }) {
-  if (!nextInfo?.course) return null
-  const { course, isToday } = nextInfo
-  const timeStr = formatClassTime(course.times, course.start_time, course.end_time)
-  const dayNames = ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-  const dayName = dayNames[getDayOrder(course)] || course.weekday || 'Upcoming'
+/* ─── ACADEMIC STATUS HELPERS ────────────────────────────────────── */
+const ABSENCE_WARN = 15
+const ABSENCE_LIMIT = 20
 
+const absenceOf = a => Number(a.absence_percent ?? a.absence ?? 0) || 0
+const attendanceTitle = a => a.lesson || a.course_name || a.course_title || a.course || a.subject || a.name || 'Course'
+const absenceTone = abs => (abs >= ABSENCE_LIMIT ? 'danger' : abs >= ABSENCE_WARN ? 'warning' : 'success')
+
+function gpaStanding(gpa) {
+  if (gpa == null) return { tone: 'neutral', label: 'No grades yet' }
+  if (gpa >= 3.5) return { tone: 'success', label: "Dean's list" }
+  if (gpa >= 2.0) return { tone: 'success', label: 'Good standing' }
+  return { tone: 'danger', label: 'Academic warning' }
+}
+
+function attendanceStanding(pct) {
+  if (pct >= 90) return { tone: 'success', label: 'On track' }
+  if (pct >= 75) return { tone: 'warning', label: 'Watch absences' }
+  return { tone: 'danger', label: 'At risk' }
+}
+
+function gradeTone(letter) {
+  const l = String(letter || '').toUpperCase().trim()
+  if (l.startsWith('A')) return 'success'
+  if (l.startsWith('B')) return 'accent'
+  if (l.startsWith('C') || l.startsWith('D')) return 'warning'
+  if (l.startsWith('F')) return 'danger'
+  return 'neutral'
+}
+
+function notifMeta(type) {
+  switch (type) {
+    case 'low_grade':      return { icon: <Icons.AlertTriangle size={16} />, tone: 'warning' }
+    case 'low_attendance': return { icon: <Icons.Calendar size={16} />, tone: 'danger' }
+    case 'critical':
+    case 'danger':         return { icon: <Icons.AlertTriangle size={16} />, tone: 'danger' }
+    case 'success':        return { icon: <Icons.CheckCircle size={16} />, tone: 'success' }
+    default:               return { icon: <Icons.Bell size={16} />, tone: 'accent' }
+  }
+}
+
+/* ─── SHARED UI PRIMITIVES ───────────────────────────────────────── */
+function Status({ tone = 'neutral', children }) {
   return (
-    <div className="next-class-hero-card page-fade">
-      <div>
-        <div className="next-class-badge-pill">
-          <span className="pulse-dot-inline" />
-          <Icons.Clock size={13} color="var(--primary)" />
-          <span>{isToday ? 'Today · Next Session' : `${dayName} · Next Session`}</span>
-        </div>
-        <div className="next-class-title">{course.course_name}</div>
-        <div className="next-class-meta-row">
-          <span className="badge-chip"><code>{course.course_code}</code></span>
-          <span className="badge-chip">{course.lesson_type || 'Lecture'} · Section {course.section || '1'}</span>
-          <span className="badge-chip">
-            <Icons.MapPin size={13} color="var(--primary)" />
-            {course.building ? `${course.building}, ` : ''}{course.room ? `Room ${course.room}` : (course.is_online ? 'Online Zoom' : 'SDU Campus')}
-          </span>
-          {course.teacher && (
-            <span className="badge-chip">
-              <Icons.User size={13} color="var(--text-muted)" />
-              {course.teacher}
-            </span>
-          )}
-        </div>
+    <span className={`status status-${tone}`}>
+      <span className="status-dot" />
+      {children}
+    </span>
+  )
+}
+
+function Metric({ label, value, unit, foot }) {
+  return (
+    <article className="card metric">
+      <span className="metric-label">{label}</span>
+      <div className="metric-value">
+        {value ?? '—'}
+        {unit && <span className="metric-unit">{unit}</span>}
       </div>
-      <div className="next-class-time-block">
-        <div className="time-countdown-val">{timeStr}</div>
-        <div className="time-countdown-lbl">{course.is_online ? 'Online Zoom / Moodle' : (course.room ? `Room ${course.room}` : 'SDU Campus')}</div>
-      </div>
+      {foot && <div className="metric-foot">{foot}</div>}
+    </article>
+  )
+}
+
+function ProgressBar({ pct, tone = 'accent' }) {
+  return (
+    <div className="progress">
+      <div className={`progress-fill fill-${tone}`} style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
     </div>
   )
 }
 
-/* ─── PERFORMANCE ANALYTICS MINI CHART ───────────────────────────── */
-const CustomChartTooltip = ({ active, payload, label }) => {
-  if (!active || !payload?.length) return null
+function Segmented({ options, value, onChange, label }) {
   return (
-    <div style={{
-      background: 'var(--surface)',
-      border: '1px solid var(--border)',
-      borderRadius: 10,
-      padding: '10px 14px',
-      boxShadow: 'var(--shadow-md)',
-      fontSize: '.85rem'
-    }}>
-      <div style={{ fontWeight: 700, marginBottom: 6, color: 'var(--text-primary)' }}>{label}</div>
-      {payload.map((p, i) => (
-        <div key={i} style={{ color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between', gap: 14 }}>
-          <span>{p.dataKey === 'grade' ? 'Course Grade:' : (p.dataKey === 'gpa' ? 'Semester GPA:' : 'Attendance:')}</span>
-          <b style={{ color: p.color }}>{p.dataKey === 'gpa' ? `${p.value} GPA` : `${p.value}%`}</b>
-        </div>
+    <div className="segmented" role="tablist" aria-label={label}>
+      {options.map(o => (
+        <button
+          key={o.id}
+          type="button"
+          role="tab"
+          aria-selected={value === o.id}
+          className={`segmented-item ${value === o.id ? 'active' : ''}`}
+          onClick={() => onChange(o.id)}
+        >
+          {o.label}
+        </button>
       ))}
     </div>
   )
 }
 
-/* ─── Loading Skeleton (Clean 3-Metric Layout) ─────────────────────── */
-function SkeletonDashboard() {
+function EmptyState({ icon, title, text, action }) {
   return (
-    <div className="page-fade dashboard-clean-container">
-      <div style={{ marginBottom: 20 }}>
-        <div className="skeleton skeleton-text" style={{ width: 140, marginBottom: 12 }} />
-        <div className="skeleton skeleton-title" style={{ width: '40%' }} />
-        <div className="skeleton skeleton-text" style={{ width: '25%' }} />
-      </div>
-      <div className="stat-grid-3">
-        {[0, 1, 2].map(i => (
-          <div key={i} className="stat-card-custom" style={{ minHeight: 140 }}>
-            <div className="skeleton" style={{ width: 36, height: 36, borderRadius: 8, marginBottom: 14 }} />
-            <div className="skeleton skeleton-title" style={{ width: '60%', height: 32 }} />
-            <div className="skeleton skeleton-text" style={{ width: '80%', marginTop: 8 }} />
-          </div>
-        ))}
-      </div>
-      <div className="skeleton" style={{ width: '100%', height: 110, borderRadius: 16 }} />
-      <div className="dash-quick-nav-grid">
-        {[0, 1, 2].map(i => (
-          <div key={i} className="stat-card-custom" style={{ minHeight: 120 }}>
-            <div className="skeleton" style={{ width: 32, height: 32, borderRadius: 8, marginBottom: 12 }} />
-            <div className="skeleton skeleton-title" style={{ width: '50%' }} />
-            <div className="skeleton skeleton-text" style={{ width: '90%' }} />
-          </div>
-        ))}
-      </div>
+    <div className="empty">
+      {icon && <div className="empty-icon">{icon}</div>}
+      <h3>{title}</h3>
+      {text && <p>{text}</p>}
+      {action}
     </div>
   )
 }
 
-/* ─── StatusBadge ────────────────────────────────────────────────── */
-const StatusBadge = ({ status }) => {
-  const map = {
-    satisfactory: { label: 'Satisfactory', cls: 'badge-ok'   },
-    warning:      { label: 'Warning',       cls: 'badge-warn' },
-    critical:     { label: 'Critical',      cls: 'badge-crit' },
-  }
-  const { label, cls } = map[status] ?? { label: status, cls: '' }
-  return <span className={`status-badge ${cls}`}>{label}</span>
-}
-
-/* ─── SVG Progress Ring ──────────────────────────────────────────── */
-const ProgressRing = ({ pct, size = 90, stroke = 8, color = '#6366F1' }) => {
-  const r = (size - stroke) / 2
-  const circ = 2 * Math.PI * r
-  const offset = circ - (Math.min(Math.max(pct, 0), 100) / 100) * circ
+function PageLoader({ label }) {
   return (
-    <svg className="progress-ring" width={size} height={size}>
-      <circle cx={size / 2} cy={size / 2} r={r} fill="none"
-        stroke="var(--border)" strokeWidth={stroke} />
-      <circle cx={size / 2} cy={size / 2} r={r} fill="none"
-        stroke={color} strokeWidth={stroke}
-        strokeDasharray={circ} strokeDashoffset={offset}
-        strokeLinecap="round"
-        style={{ transform: 'rotate(-90deg)', transformOrigin: '50% 50%', transition: 'stroke-dashoffset .6s cubic-bezier(.4,0,.2,1)' }} />
-      <text x="50%" y="50%" textAnchor="middle" dominantBaseline="central"
-        style={{ fontSize: size * .17, fontWeight: 800, fontFamily: 'Manrope, sans-serif', fill: 'var(--text-primary)' }}>
-        {pct}%
-      </text>
-    </svg>
+    <div className="page-loader page-fade">
+      <div className="spinner" />
+      <span>{label}</span>
+    </div>
   )
 }
 
-/* ─── SHARED DESIGN SYSTEM COMPONENTS ────────────────────────────── */
+function SkeletonDashboard() {
+  return (
+    <div className="page">
+      <section className="metric-grid">
+        {[0, 1, 2].map(i => (
+          <div key={i} className="card metric">
+            <div className="skeleton" style={{ width: 70, height: 12 }} />
+            <div className="skeleton" style={{ width: 110, height: 34, marginTop: 16 }} />
+            <div className="skeleton" style={{ width: 90, height: 12, marginTop: 16 }} />
+          </div>
+        ))}
+      </section>
+      <section className="split">
+        {[0, 1].map(i => (
+          <div key={i} className="card">
+            <div className="skeleton" style={{ width: 120, height: 14 }} />
+            <div className="skeleton" style={{ width: '70%', height: 22, marginTop: 24 }} />
+            <div className="skeleton" style={{ width: '50%', height: 12, marginTop: 12 }} />
+          </div>
+        ))}
+      </section>
+    </div>
+  )
+}
+
+const CustomChartTooltip = ({ active, payload, label }) => {
+  if (!active || !payload?.length) return null
+  return (
+    <div className="chart-tip">
+      <b>{label}</b>
+      {payload.map((p, i) => (
+        <span key={i}>GPA {p.value}</span>
+      ))}
+    </div>
+  )
+}
 
 function timeAgo(isoDate) {
   if (!isoDate) return ''
@@ -609,95 +627,22 @@ function timeAgo(isoDate) {
   }
 }
 
-function PageHeader({ badge, title, subtitle, lastFetched, actions, className = '' }) {
+/* ─── NOTIFICATIONS ──────────────────────────────────────────────── */
+function NotifRow({ n, onOpen, children }) {
+  const { icon, tone } = notifMeta(n.type)
   return (
-    <header className={`page-head page-fade ${className}`}>
-      <div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
-          {badge && <span className="sdu-badge">{badge}</span>}
-          {lastFetched && (
-            <span style={{ fontSize: '.76rem', color: '#10B981', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-              <span className="sdu-dot pulse-dot" /> Live • Synced {new Date(lastFetched).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-            </span>
-          )}
+    <li className={`notif-row ${n.read ? '' : 'unread'}`} onClick={onOpen}>
+      <span className={`notif-icon tint-${tone}`}>{icon}</span>
+      <div className="notif-body">
+        <div className="notif-top">
+          <b>{n.title}</b>
+          <time>{timeAgo(n.created_at)}</time>
         </div>
-        <h1 style={{ margin: '0 0 6px 0' }}>{title}</h1>
-        {subtitle && <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '.92rem' }}>{subtitle}</p>}
+        <p>{n.detail}</p>
+        {children}
       </div>
-      {actions && <div className="page-head-actions">{actions}</div>}
-    </header>
-  )
-}
-
-function StatCard({ label, value, valueSuffix, subtext, icon, pillColor = 'pill-purple', badge, children, valueColor, className = '' }) {
-  return (
-    <article className={`stat-card-custom ${className}`}>
-      <div>
-        <div className="stat-card-head">
-          <span className="stat-card-label">{label}</span>
-          <div className={`stat-card-icon-pill ${pillColor}`}>
-            {icon}
-          </div>
-        </div>
-        <div className="stat-card-value" style={valueColor ? { color: valueColor } : undefined}>
-          {value ?? '—'}
-          {valueSuffix && <span style={{ fontSize: '1rem', color: 'var(--text-muted)', fontWeight: 600 }}> {valueSuffix}</span>}
-        </div>
-        {subtext && <div className="stat-card-subtext">{subtext}</div>}
-      </div>
-      {(children || badge) && (
-        <div style={{ marginTop: 14 }}>
-          {badge}
-          {children}
-        </div>
-      )}
-    </article>
-  )
-}
-
-function SearchInput({ value, onChange, placeholder = "Search...", onClear, className = "" }) {
-  return (
-    <div className={`search-input-wrap ${className}`}>
-      <span className="search-icon">
-        <Icons.Search size={16} />
-      </span>
-      <input
-        type="text"
-        value={value}
-        onChange={onChange}
-        placeholder={placeholder}
-        aria-label={placeholder}
-      />
-      {value && (
-        <button
-          type="button"
-          className="search-clear-btn"
-          onClick={onClear || (() => onChange({ target: { value: '' } }))}
-          aria-label="Clear search"
-        >
-          <Icons.Close size={14} />
-        </button>
-      )}
-    </div>
-  )
-}
-
-function FilterChips({ options = [], value, onChange }) {
-  return (
-    <div className="filter-chips-group" role="tablist">
-      {options.map(opt => (
-        <button
-          key={opt.id}
-          type="button"
-          role="tab"
-          aria-selected={value === opt.id}
-          className={`filter-chip-btn ${value === opt.id ? 'active' : ''}`}
-          onClick={() => onChange(opt.id)}
-        >
-          {opt.label}
-        </button>
-      ))}
-    </div>
+      {!n.read && <span className="unread-dot" aria-label="Unread" />}
+    </li>
   )
 }
 
@@ -752,8 +697,7 @@ function NotificationsDropdown({ token, unread, onUnreadChange, onSelectTab }) {
     }
   }, [isOpen])
 
-  const markRead = async (id, e) => {
-    if (e) e.stopPropagation()
+  const markRead = async id => {
     try {
       await api(`/api/student/notifications/${id}/read`, token, { method: 'POST' })
       setNotifs(prev => (prev || []).map(n => n.id === id ? { ...n, read: true } : n))
@@ -776,167 +720,61 @@ function NotificationsDropdown({ token, unread, onUnreadChange, onSelectTab }) {
     }
   }
 
-  const getNotifIconInfo = type => {
-    switch (type) {
-      case 'low_grade':
-        return {
-          icon: <Icons.AlertTriangle size={16} />,
-          pill: 'pill-amber',
-        }
-      case 'low_attendance':
-        return {
-          icon: <Icons.Calendar size={16} />,
-          pill: 'pill-danger',
-        }
-      case 'critical':
-      case 'danger':
-        return {
-          icon: <Icons.AlertTriangle size={16} />,
-          pill: 'pill-danger',
-        }
-      case 'success':
-        return {
-          icon: <Icons.CheckCircle size={16} />,
-          pill: 'pill-emerald',
-        }
-      case 'info':
-      default:
-        return {
-          icon: <Icons.Bell size={16} />,
-          pill: 'pill-purple',
-        }
-    }
+  const openAll = () => {
+    setIsOpen(false)
+    if (onSelectTab) onSelectTab('alerts')
   }
 
   return (
-    <div className="notif-wrapper" ref={wrapperRef}>
+    <div className="popover-wrap" ref={wrapperRef}>
       <button
         type="button"
-        className="notification-bell"
+        className="icon-btn"
         onClick={() => setIsOpen(prev => !prev)}
         aria-label={`Notifications${unread > 0 ? `, ${unread} unread` : ''}`}
         aria-expanded={isOpen}
         aria-haspopup="dialog"
       >
-        <Icons.Bell size={18} color="var(--text-secondary)" />
-        {unread > 0 && <span className="bell-badge">{unread}</span>}
+        <Icons.Bell size={18} />
+        {unread > 0 && <span className="badge-count">{unread}</span>}
       </button>
 
       {isOpen && (
-        <div className="notif-dropdown-panel page-fade" role="dialog" aria-label="Notifications panel">
-          <div className="notif-panel-header">
-            <h3>
-              <span>Notifications</span>
-              {unread > 0 && <span className="notif-unread-count-pill">{unread}</span>}
-            </h3>
+        <div className="popover notif-popover" role="dialog" aria-label="Notifications">
+          <div className="popover-head">
+            <b>Notifications</b>
             {unread > 0 && (
-              <button type="button" className="btn-mark-all-text" onClick={markAllRead}>
-                Mark all as read
-              </button>
+              <button type="button" className="link-btn" onClick={markAllRead}>Mark all read</button>
             )}
           </div>
 
-          <div className="notif-panel-body" aria-live="polite">
+          <div className="popover-body" aria-live="polite">
             {loading && !notifs ? (
-              <div style={{ padding: '30px 16px', textAlign: 'center', color: 'var(--text-muted)' }}>
-                <div className="sdu-spinner" style={{ margin: '0 auto 8px auto', width: 22, height: 22 }} />
-                <span style={{ fontSize: '.84rem' }}>Loading notifications…</span>
-              </div>
+              <PageLoader label="Loading…" />
             ) : !notifs || notifs.length === 0 ? (
-              <div className="notif-empty-state">
-                <Icons.CheckCircle size={32} color="var(--success)" />
-                <h4>You're all caught up!</h4>
-                <p>No new academic alerts or notifications.</p>
-              </div>
+              <EmptyState icon={<Icons.CheckCircle size={20} />} title="You're all caught up" />
             ) : (
-              notifs.map(n => {
-                const { icon, pill } = getNotifIconInfo(n.type)
-                return (
-                  <div
+              <ul className="notif-list">
+                {notifs.slice(0, 5).map(n => (
+                  <NotifRow
                     key={n.id}
-                    className={`notif-item-v2 ${n.read ? '' : 'unread'}`}
-                    onClick={() => {
+                    n={n}
+                    onOpen={() => {
                       if (!n.read) markRead(n.id)
-                      setIsOpen(false)
-                      if (onSelectTab) onSelectTab('alerts')
+                      openAll()
                     }}
-                  >
-                    <div className={`notif-item-icon ${pill}`}>
-                      {icon}
-                    </div>
-
-                    <div className="notif-item-content">
-                      <div className="notif-item-title" title={n.title}>
-                        {n.title}
-                      </div>
-                      <div className="notif-item-msg" title={n.detail}>
-                        {n.detail}
-                      </div>
-                      <div className="notif-item-time">
-                        {timeAgo(n.created_at)}
-                      </div>
-                    </div>
-
-                    <div className="notif-item-right">
-                      {!n.read && <span className="notif-unread-dot" title="Unread" />}
-                      {!n.read && (
-                        <button
-                          type="button"
-                          className="notif-mark-btn"
-                          title="Mark as read"
-                          aria-label="Mark as read"
-                          onClick={e => markRead(n.id, e)}
-                        >
-                          <Icons.Check size={14} />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                )
-              })
+                  />
+                ))}
+              </ul>
             )}
           </div>
 
-          <div className="notif-panel-footer">
-            <button
-              type="button"
-              onClick={() => {
-                setIsOpen(false)
-                if (onSelectTab) onSelectTab('alerts')
-              }}
-            >
-              View all notifications →
-            </button>
-          </div>
+          <button type="button" className="popover-foot" onClick={openAll}>
+            View all notifications
+          </button>
         </div>
       )}
     </div>
-  )
-}
-
-/* ─── Stat Metric Card (Legacy fallback modernized) ──────────────── */
-const Metric = ({ label, value, detail, icon, tone = '', colorClass = 'metric-purple' }) => {
-  const pillMap = {
-    'metric-purple': 'pill-purple',
-    'metric-green': 'pill-emerald',
-    'metric-blue': 'pill-blue',
-    'metric-warn': 'pill-amber',
-    'metric-danger': 'pill-danger',
-  }
-  const pill = pillMap[colorClass] || 'pill-purple'
-  return (
-    <article className={`stat-card-custom metric ${tone}`}>
-      <div>
-        <div className="stat-card-head">
-          <span className="stat-card-label">{label}</span>
-          <div className={`stat-card-icon-pill ${pill}`}>
-            {icon}
-          </div>
-        </div>
-        <div className="stat-card-value">{value ?? '—'}</div>
-        {detail && <div className="stat-card-subtext">{detail}</div>}
-      </div>
-    </article>
   )
 }
 
@@ -1117,81 +955,47 @@ function Login({ onLogin, theme, toggleTheme }) {
     <main className="login-page">
       {/* Left Brand & Feature Hero Panel */}
       <section className="login-copy">
-        <div>
-          <div className="login-eyebrow">
-            <span className="login-eyebrow-dot" />
-            <span>SDU Student Portal · v2.4</span>
-          </div>
+        <Brand subtitle="SDU student" />
 
-          <div className="login-hero-header">
-            <h1>Academic Intelligence,<br /><span>Engineered for Excellence.</span></h1>
-            <p>
-              Direct live synchronization with official SDU university portals. Experience real-time grades, schedule timetable, proactive absence alerts, and GPA analytics in one refined workspace.
-            </p>
-          </div>
-
-          <div className="hero-features-grid">
-            <div className="hero-feature-card">
-              <div className="hero-feature-icon"><Icons.Chart size={20} /></div>
-              <h3>Live Grade Breakdown</h3>
-              <p>Real-time syllabus assessment scores and official letter grades.</p>
-            </div>
-            <div className="hero-feature-card">
-              <div className="hero-feature-icon"><Icons.Shield size={20} /></div>
-              <h3>Smart Absence Alerts</h3>
-              <p>Continuous monitoring to prevent exceeding SDU drop thresholds.</p>
-            </div>
-            <div className="hero-feature-card">
-              <div className="hero-feature-icon"><Icons.Calendar size={20} /></div>
-              <h3>Weekly Timetable</h3>
-              <p>Campus room numbers, instructors, and instant next-class preview.</p>
-            </div>
-            <div className="hero-feature-card">
-              <div className="hero-feature-icon"><Icons.Sliders size={20} /></div>
-              <h3>What-If Simulator</h3>
-              <p>Calculate exact final exam scores needed to reach your target GPA.</p>
-            </div>
-          </div>
+        <div className="login-hero">
+          <h1>Your studies,<br />at a glance.</h1>
+          <p>Grades, schedule and attendance from SDU — in one calm place.</p>
+          <ul className="login-points">
+            <li><Icons.Check size={16} /> Know your next class</li>
+            <li><Icons.Check size={16} /> See absence risk early</li>
+            <li><Icons.Check size={16} /> Plan the grade you need</li>
+          </ul>
         </div>
 
-        <div className="hero-footer-note">
-          <Icons.Sparkles size={15} color="#A78BFA" />
-          <span>Powered by <code>SDU OAuth 2.0 PKCE</code> integration</span>
-        </div>
+        <small className="login-foot">Secure sign-in through the official SDU portal</small>
       </section>
 
       {/* Right Form Panel */}
       <div className="login-right">
         <div className="login-card">
           <div className="login-card-topbar">
-            <div className="login-brand-badge">
-              <div className="login-brand-icon">S</div>
-              <div className="login-brand-title">
-                StudyMate
-                <small>SDU Performance Monitor</small>
-              </div>
-            </div>
+            <div className="login-mobile-brand"><Brand /></div>
             {toggleTheme && <ThemeToggle theme={theme} toggleTheme={toggleTheme} />}
           </div>
 
-          {/* SDU Platform Hero Actions */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 4 }}>
-            <button
-              type="button"
-              className="sdu-primary-hero-btn"
-              disabled={sduBusy || busy}
-              onClick={handleConnectSdu}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span className="sdu-badge" style={{ background: '#fff', color: '#0B4F6C', fontWeight: 900 }}>SDU</span>
-                <span>{sduBusy ? 'Connecting to SDU Platform…' : 'Connect with SDU Platform'}</span>
-              </div>
-              <Icons.ArrowRight size={18} color="#ffffff" />
-            </button>
+          <div className="login-header-text">
+            <h2>{authMode === 'login' ? 'Welcome back' : 'Create your account'}</h2>
+            <p>{authMode === 'login' ? 'Sign in to see your grades and schedule.' : 'It takes less than a minute.'}</p>
           </div>
 
+          <button
+            type="button"
+            className="sdu-primary-hero-btn"
+            disabled={sduBusy || busy}
+            onClick={handleConnectSdu}
+          >
+            <span className="sdu-mark">SDU</span>
+            <span>{sduBusy ? 'Connecting…' : 'Continue with SDU'}</span>
+            <Icons.ArrowRight size={16} />
+          </button>
+
           <div className="login-divider">
-            <span>or continue with credentials</span>
+            <span>or use your password</span>
           </div>
 
           {/* Segmented Auth Mode Switcher */}
@@ -1214,11 +1018,6 @@ function Login({ onLogin, theme, toggleTheme }) {
 
           {authMode === 'login' ? (
             <form onSubmit={submit} className="login-form">
-              <div className="login-header-text">
-                <h2>Welcome back</h2>
-                <p>Sign in with your university account or email.</p>
-              </div>
-
               <div className="field-group">
                 <label className="field-label" htmlFor="identifier">University Email or Student ID</label>
                 <div className="input-container">
@@ -1281,11 +1080,6 @@ function Login({ onLogin, theme, toggleTheme }) {
             </form>
           ) : (
             <form onSubmit={handleRegister} className="login-form">
-              <div className="login-header-text">
-                <h2>Create Account</h2>
-                <p>Register with your university student profile.</p>
-              </div>
-
               <div className="field-group">
                 <label className="field-label" htmlFor="regName">Full Name</label>
                 <div className="input-container">
@@ -1414,19 +1208,19 @@ function Login({ onLogin, theme, toggleTheme }) {
 
           {/* 6-Digit Code Reset Modal */}
           {showForgot && (
-            <div className="whatif-overlay" onClick={e => e.target === e.currentTarget && setShowForgot(false)}>
-              <div className="whatif-modal" style={{ maxWidth: 460 }}>
-                <div className="whatif-header">
+            <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowForgot(false)}>
+              <div className="modal" style={{ maxWidth: 460 }}>
+                <div className="modal-head">
                   <div>
-                    <span className="eyebrow">Account Recovery</span>
-                    <h2>Reset Password</h2>
+                    <h2>Reset password</h2>
+                    <p>We will send you a 6-digit code</p>
                   </div>
-                  <button type="button" className="close-btn" onClick={() => setShowForgot(false)}><Icons.Close size={18} /></button>
+                  <button type="button" className="icon-btn" onClick={() => setShowForgot(false)}><Icons.Close size={18} /></button>
                 </div>
 
                 {forgotStep === 1 ? (
                   <form onSubmit={handleSendCode}>
-                    <div className="whatif-body">
+                    <div className="modal-body">
                       <p style={{ color: 'var(--text-secondary)', fontSize: '.88rem', margin: 0, lineHeight: 1.5 }}>
                         Enter your registered email address (e.g. your Gmail) or Student ID. We will generate and send a <b>6-digit confirmation code</b>.
                       </p>
@@ -1444,7 +1238,7 @@ function Login({ onLogin, theme, toggleTheme }) {
                       </label>
                       {forgotErr && <div className="alert-box alert-danger">{forgotErr}</div>}
                     </div>
-                    <div className="whatif-footer">
+                    <div className="modal-foot">
                       <button type="button" className="btn-ghost" onClick={() => setShowForgot(false)}>Cancel</button>
                       <button
                         type="submit"
@@ -1458,7 +1252,7 @@ function Login({ onLogin, theme, toggleTheme }) {
                   </form>
                 ) : (
                   <form onSubmit={handleVerifyAndReset}>
-                    <div className="whatif-body">
+                    <div className="modal-body">
                       {forgotMsg && (
                         <div className="alert-box alert-success">
                           <Icons.CheckCircle size={16} /> {forgotMsg}
@@ -1520,7 +1314,7 @@ function Login({ onLogin, theme, toggleTheme }) {
 
                       {forgotErr && <div className="alert-box alert-danger">{forgotErr}</div>}
                     </div>
-                    <div className="whatif-footer">
+                    <div className="modal-foot">
                       <button type="button" className="btn-ghost" onClick={() => setForgotStep(1)}>← Back</button>
                       <button
                         type="submit"
@@ -1607,17 +1401,17 @@ function WhatIfModal({ token, courses, onClose }) {
   }
 
   return (
-    <div className="whatif-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="whatif-modal">
-        <div className="whatif-header">
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <div className="modal-head">
           <div>
-            <span className="eyebrow">Grade Planner</span>
-            <h2>What-If Calculator</h2>
+            <h2>What-if planner</h2>
+            <p>Find the score you need on an assessment</p>
           </div>
-          <button className="close-btn" onClick={onClose} aria-label="Close"><Icons.Close size={18} /></button>
+          <button className="icon-btn" onClick={onClose} aria-label="Close"><Icons.Close size={18} /></button>
         </div>
 
-        <div className="whatif-body">
+        <div className="modal-body">
           <label>
             Course
             <select value={courseCode} onChange={e => setCourseCode(e.target.value)}>
@@ -1661,7 +1455,7 @@ function WhatIfModal({ token, courses, onClose }) {
           )}
         </div>
 
-        <div className="whatif-footer">
+        <div className="modal-foot">
           <button className="btn-ghost" onClick={onClose}>Cancel</button>
           <button className="btn-primary" onClick={calculate} disabled={loading || !component} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             {loading ? 'Calculating…' : <><Icons.Sliders size={15} /> Calculate</>}
@@ -1698,627 +1492,267 @@ function calcCompletedCredits(transcript) {
     .reduce((sum, c) => sum + Number(c.credits || c.ects || 0), 0)
 }
 
-function getGradePillClass(letter) {
-  if (!letter) return 'grade-pill-neutral'
-  const l = String(letter).toUpperCase().trim()
-  if (l.startsWith('A')) return 'grade-pill-a'
-  if (l.startsWith('B')) return 'grade-pill-b'
-  if (l.startsWith('C')) return 'grade-pill-c'
-  if (l.startsWith('D')) return 'grade-pill-d'
-  if (l.startsWith('F')) return 'grade-pill-f'
-  return 'grade-pill-neutral'
-}
-
 /* ─── SDU ONBOARDING / DISCONNECTED CARD ──────────────────────────── */
-function SduOnboardCard({ onConnect, onConnectDemo }) {
+function SduOnboardCard({ onConnect }) {
   return (
-    <div className="sdu-onboard-card page-fade">
-      <div className="sdu-onboard-icon">
-        <Icons.GraduationCap size={36} />
-      </div>
-      <div className="sdu-badge" style={{ margin: '0 auto 12px auto', display: 'inline-block' }}>SDU PLATFORM</div>
-      <h2>Connect Your SDU Student Account</h2>
-      <p>
-        Link your official university portal account to view your real live class schedule, curriculum grades, academic transcript, and absence tracking.
-      </p>
-
-      <div className="sdu-features-grid">
-        <div className="sdu-feature-box">
-          <div style={{ color: 'var(--primary)', marginBottom: 8 }}><Icons.Calendar size={20} /></div>
-          <b>Live Schedule</b>
-          <span>Room numbers, buildings, instructors, and weekly timetable.</span>
-        </div>
-        <div className="sdu-feature-box">
-          <div style={{ color: '#10B981', marginBottom: 8 }}><Icons.Award size={20} /></div>
-          <b>Official Transcript</b>
-          <span>ECTS credits, GPA, letter grades, and passed course records.</span>
-        </div>
-        <div className="sdu-feature-box">
-          <div style={{ color: '#2563EB', marginBottom: 8 }}><Icons.Chart size={20} /></div>
-          <b>Real Attendance</b>
-          <span>Official course absence rates and drop limit monitoring.</span>
-        </div>
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 360, margin: '0 auto' }}>
-        <button
-          type="button"
-          className="sdu-connect-btn"
-          onClick={onConnect}
-          style={{ width: '100%', padding: '14px 24px', fontSize: '.95rem' }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span className="sdu-badge">SDU</span>
-            <span>Connect with SDU Platform</span>
-          </div>
-          <Icons.ArrowRight size={18} color="#ffffff" />
+    <div className="page page-narrow page-fade">
+      <article className="card onboard">
+        <div className="onboard-icon"><Icons.GraduationCap size={28} /></div>
+        <h2>Connect your SDU account</h2>
+        <p>Your schedule, grades and attendance will appear here automatically.</p>
+        <button type="button" className="btn-primary btn-lg" onClick={onConnect}>
+          Connect SDU Platform <Icons.ArrowRight size={16} />
         </button>
-      </div>
-
-      <div style={{ marginTop: 20, fontSize: '.78rem', color: 'var(--text-muted)' }}>
-        Official SDU Platform OAuth 2.0 PKCE authorization. Connect directly to synchronize your student records.
-      </div>
+        <small>Secure sign-in through the official SDU portal.</small>
+      </article>
     </div>
   )
 }
 
-/* ─── LIVE DASHBOARD TAB ─────────────────────────────────────────── */
-function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo, onRefresh, user, setTab, onOpenWhatIf, token }) {
-  if (!sduStatus?.connected) {
-    return <SduOnboardCard onConnect={onConnect} onConnectDemo={onConnectDemo} />
-  }
+/* ─── OVERVIEW TAB ───────────────────────────────────────────────── */
+function NextClassCard({ nextInfo, onOpenSchedule }) {
+  const c = nextInfo?.course
+  return (
+    <article className="card">
+      <header className="card-head">
+        <h2>Next class</h2>
+        <button type="button" className="link-btn" onClick={onOpenSchedule}>
+          Schedule <Icons.ArrowRight size={14} />
+        </button>
+      </header>
+      {c ? (
+        <div className="next-class">
+          <div className="next-class-when">
+            <span>{nextInfo.isToday ? 'Today' : DAY_NAMES[getDayOrder(c)] || 'Upcoming'}</span>
+            <b>{formatClassTime(c)}</b>
+          </div>
+          <h3>{c.course_name}</h3>
+          <ul className="meta-list">
+            <li><Icons.MapPin size={14} />{classLocation(c)}</li>
+            <li><Icons.Book size={14} />{c.lesson_type || 'Lecture'}</li>
+            {c.teacher && <li><Icons.User size={14} />{c.teacher}</li>}
+          </ul>
+        </div>
+      ) : (
+        <EmptyState icon={<Icons.Calendar size={20} />} title="No upcoming classes" text="Your timetable is empty for now." />
+      )}
+    </article>
+  )
+}
 
+function AttentionCard({ items, onSelect }) {
+  return (
+    <article className="card">
+      <header className="card-head">
+        <h2>Needs attention</h2>
+        {items.length > 0 && <span className="count-pill">{items.length}</span>}
+      </header>
+      {items.length ? (
+        <ul className="attention-list">
+          {items.map((item, i) => (
+            <li key={i}>
+              <button type="button" className="attention-item" onClick={() => onSelect(item.tab)}>
+                <span className={`dot dot-${item.tone}`} />
+                <span className="attention-text">
+                  <b>{item.title}</b>
+                  <span>{item.text}</span>
+                </span>
+                <Icons.ChevronRight size={16} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <EmptyState icon={<Icons.CheckCircle size={20} />} title="All clear" text="No absence or grade warnings right now." />
+      )}
+    </article>
+  )
+}
+
+function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token }) {
   const [recommendations, setRecommendations] = useState([])
+  const connected = !!sduStatus?.connected
+
   useEffect(() => {
-    if (token) {
-      api('/api/student/dashboard?semester=spring-2026', token)
-        .then(d => {
-          if (d?.recommendations?.length) setRecommendations(d.recommendations)
-        })
-        .catch(() => {})
-    }
-  }, [token])
+    if (!token || !connected) return
+    api('/api/student/dashboard?semester=spring-2026', token)
+      .then(d => setRecommendations(d?.recommendations || []))
+      .catch(() => {})
+  }, [token, connected])
 
-  if (sduLoading && !sduData.transcript && !sduData.schedule) {
-    return <SkeletonDashboard />
-  }
-
-  const gpa = calcGPA(sduData.transcript)
-  const attendance = calcOverallAttendance(sduData.attendance)
-  const credits = calcCompletedCredits(sduData.transcript)
-  const schedule = sduData.schedule || []
-  const nextInfo = findNextClass(schedule)
-  const activeCourses = schedule.length
+  if (!connected) return <SduOnboardCard onConnect={onConnect} />
+  if (sduLoading && !sduData.transcript && !sduData.schedule) return <SkeletonDashboard />
 
   const transcript = sduData.transcript || []
-  const passedCoursesCount = transcript.filter(c => c.passed === true).length
   const attendanceList = sduData.attendance || []
+  const gpa = calcGPA(transcript)
+  const attendance = calcOverallAttendance(attendanceList)
+  const credits = calcCompletedCredits(transcript)
+  const creditsPct = Math.min(100, Math.round((credits / DEGREE_CREDITS) * 100))
+  const standing = gpaStanding(gpa)
+  const attStanding = attendanceStanding(attendance)
 
-  // Check for critical attendance risks (SDU drop limit is 20%)
-  const warningAbsences = attendanceList.filter(a => Number(a.absence_percent ?? a.absence ?? 0) >= 15)
-  const criticalAbsences = attendanceList.filter(a => Number(a.absence_percent ?? a.absence ?? 0) >= 20)
-
-  // Academic standing
-  let standingIcon = <Icons.Check size={14} />
-  let standingLabel = 'Good Standing'
-  let standingClass = 'standing-good'
-  if (gpa !== null) {
-    if (gpa >= 3.5) {
-      standingIcon = <Icons.Award size={14} />
-      standingLabel = "Dean's List (Honors)"
-      standingClass = 'standing-honors'
-    } else if (gpa >= 2.0) {
-      standingIcon = <Icons.Check size={14} />
-      standingLabel = 'Good Standing'
-      standingClass = 'standing-good'
-    } else {
-      standingIcon = <Icons.AlertTriangle size={14} />
-      standingLabel = 'Academic Warning'
-      standingClass = 'standing-warn'
-    }
-  }
-
-  // Attendance health state
-  let attClass = 'state-safe'
-  let attLabel = 'Safe Status (≥90%)'
-  if (attendance < 75) {
-    attClass = 'state-danger'
-    attLabel = 'Critical Risk (<75%)'
-  } else if (attendance < 90) {
-    attClass = 'state-caution'
-    attLabel = 'Caution (75–89%)'
-  }
-
-  // Credits progress (standard 240 ECTS bachelor)
-  const totalTargetCredits = 240
-  const creditsPct = Math.min(100, Math.round(((credits || 0) / totalTargetCredits) * 100))
+  const attention = [
+    ...attendanceList
+      .filter(a => absenceOf(a) >= ABSENCE_WARN)
+      .sort((a, b) => absenceOf(b) - absenceOf(a))
+      .map(a => ({
+        tone: absenceTone(absenceOf(a)),
+        title: attendanceTitle(a),
+        text: absenceOf(a) >= ABSENCE_LIMIT
+          ? `${absenceOf(a)}% absent — over the ${ABSENCE_LIMIT}% limit`
+          : `${absenceOf(a)}% absent — close to the ${ABSENCE_LIMIT}% limit`,
+        tab: 'attendance',
+      })),
+    ...transcript
+      .filter(c => c.passed === false)
+      .map(c => ({ tone: 'danger', title: c.course_name, text: `Not passed · grade ${c.letter_grade || '—'}`, tab: 'transcript' })),
+    ...recommendations
+      .slice(0, 1)
+      .map(r => ({ tone: 'accent', title: r.course, text: r.action, tab: 'transcript' })),
+  ].slice(0, 4)
 
   return (
-    <div className="page-fade dashboard-clean-container">
-      {/* 1. Clean Hero Header */}
-      <header className="dashboard-hero-head">
-        <div>
-          <div className="dash-eyebrow-row">
-            <span className="sdu-badge">SDU LIVE PORTAL</span>
-            <span className={`standing-badge ${standingClass}`}>
-              {standingIcon}
-              <span>{standingLabel}</span>
-            </span>
-            {sduData.lastFetched && (
-              <span className="live-sync-indicator">
-                <span className="sdu-dot pulse-dot" /> Live • Synced {new Date(sduData.lastFetched).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </span>
-            )}
-          </div>
-          <h1>Good {timeOfDay()}, {sduData.profile?.fullname || user.name.split(' ')[0]}</h1>
-          <p>
-            SDU Student ID: <b>{sduData.profile?.student_id || user.student_id || '—'}</b> · {sduData.profile?.email || user.email || 'University Student'}
-          </p>
-        </div>
-
-        <div className="dash-hero-actions">
-          <button
-            type="button"
-            className="btn-primary"
-            onClick={onOpenWhatIf}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '9px 16px', fontWeight: 600, fontSize: '.88rem' }}
-          >
-            <Icons.Sliders size={15} /> What-If Calculator
-          </button>
-          <button
-            type="button"
-            className="btn-ghost"
-            onClick={onRefresh}
-            disabled={sduLoading}
-          >
-            <Icons.Refresh size={14} className={sduLoading ? "spinning" : ""} />
-            {sduLoading ? 'Syncing SDU…' : 'Refresh Data'}
-          </button>
-        </div>
-      </header>
-
-      {/* 2. Top 3 Core Metrics (GPA, Attendance, Degree Credits) */}
-      <section className="stat-grid-3">
-        {/* Metric 1: Cumulative GPA */}
-        <article className="stat-card-custom">
-          <div>
-            <div className="stat-card-head">
-              <span className="stat-card-label">Cumulative GPA</span>
-              <div className="stat-card-icon-pill pill-purple">
-                <Icons.Target size={18} />
-              </div>
-            </div>
-            <div className="stat-card-value">
-              {gpa != null ? gpa.toFixed(2) : '—'}
-              <span style={{ fontSize: '1rem', color: 'var(--text-muted)', fontWeight: 600, marginLeft: 4 }}>/ 4.00</span>
-            </div>
-            <div className="stat-card-subtext">Official university grade point average</div>
-          </div>
-          <div className="att-health-row">
-            <span className={`standing-badge ${standingClass}`} style={{ fontSize: '.74rem', padding: '3px 8px' }}>
-              {standingIcon}
-              <span>{standingLabel}</span>
-            </span>
-            <span style={{ fontSize: '.76rem', color: 'var(--text-muted)' }}>Scale: 0.00 – 4.00</span>
-          </div>
-        </article>
-
-        {/* Metric 2: Attendance Rate */}
-        <article className="stat-card-custom">
-          <div>
-            <div className="stat-card-head">
-              <span className="stat-card-label">Overall Attendance</span>
-              <div className={`stat-card-icon-pill ${attendance >= 90 ? 'pill-emerald' : (attendance >= 75 ? 'pill-amber' : 'pill-danger')}`}>
-                <Icons.Calendar size={18} />
-              </div>
-            </div>
-            <div className="stat-card-value" style={{ color: attendance >= 90 ? 'var(--success)' : (attendance >= 75 ? 'var(--warning)' : 'var(--danger)') }}>
-              {attendance}%
-            </div>
-            <div className="stat-card-subtext">Calculated from registered class hours</div>
-          </div>
-          <div className="att-health-row">
-            <span className={`att-badge-state ${attClass}`}>
-              {attLabel}
-            </span>
-            <span style={{ fontSize: '.76rem', color: 'var(--text-muted)' }}>Limit: 20% absence</span>
-          </div>
-        </article>
-
-        {/* Metric 3: Degree Progress (ECTS) */}
-        <article className="stat-card-custom">
-          <div>
-            <div className="stat-card-head">
-              <span className="stat-card-label">Degree Progress</span>
-              <div className="stat-card-icon-pill pill-blue">
-                <Icons.Book size={18} />
-              </div>
-            </div>
-            <div className="stat-card-value">
-              {credits} <span style={{ fontSize: '1rem', color: 'var(--text-muted)', fontWeight: 600 }}>ECTS</span>
-            </div>
-            <div className="stat-card-subtext">{credits} / {totalTargetCredits} ECTS completed ({creditsPct}%)</div>
-          </div>
-          <div className="credits-bar-track">
-            <div className="credits-bar-fill" style={{ width: `${creditsPct}%` }} />
-          </div>
-        </article>
+    <div className="page page-fade">
+      <section className="metric-grid">
+        <Metric
+          label="GPA"
+          value={gpa != null ? gpa.toFixed(2) : '—'}
+          unit="/ 4.00"
+          foot={<Status tone={standing.tone}>{standing.label}</Status>}
+        />
+        <Metric
+          label="Attendance"
+          value={`${attendance}%`}
+          foot={<Status tone={attStanding.tone}>{attStanding.label}</Status>}
+        />
+        <Metric
+          label="Credits earned"
+          value={credits}
+          unit={`/ ${DEGREE_CREDITS} ECTS`}
+          foot={<ProgressBar pct={creditsPct} />}
+        />
       </section>
 
-      {/* 3. Upcoming Class or Calm All-Done Card */}
-      {nextInfo?.course ? (
-        <div className="next-class-hero-card page-fade">
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div className="next-class-badge-pill">
-              <span className="pulse-dot-inline" />
-              <Icons.Clock size={13} color="var(--primary)" />
-              <span>{nextInfo.isToday ? 'Today • Next Upcoming Session' : `${['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][getDayOrder(nextInfo.course)] || 'Next'} Session`}</span>
-            </div>
-            <div className="next-class-title">{nextInfo.course.course_name}</div>
-            <div className="next-class-meta-row">
-              <span className="badge-chip"><code>{nextInfo.course.course_code}</code></span>
-              <span className="badge-chip">{nextInfo.course.lesson_type || 'Lecture'} · Section {nextInfo.course.section || '1'}</span>
-              <span className="badge-chip">
-                <Icons.MapPin size={13} color="var(--primary)" />
-                {nextInfo.course.building ? `${nextInfo.course.building}, ` : ''}{nextInfo.course.room ? `Room ${nextInfo.course.room}` : (nextInfo.course.is_online ? 'Online Zoom' : 'SDU Campus')}
-              </span>
-              {nextInfo.course.teacher && (
-                <span className="badge-chip">
-                  <Icons.User size={13} color="var(--text-muted)" />
-                  {nextInfo.course.teacher}
-                </span>
-              )}
-            </div>
-          </div>
-          <div className="next-class-side-action">
-            <div className="next-class-time-block">
-              <div className="time-countdown-val">{formatClassTime(nextInfo.course.times, nextInfo.course.start_time, nextInfo.course.end_time)}</div>
-              <div className="time-countdown-lbl">{nextInfo.course.is_online ? 'Online Zoom' : (nextInfo.course.room ? `Room ${nextInfo.course.room}` : 'SDU Campus')}</div>
-            </div>
-            <button
-              type="button"
-              className="btn-ghost"
-              onClick={() => setTab('schedule')}
-              style={{ fontSize: '.84rem', marginTop: 10, padding: '7px 14px' }}
-            >
-              Full Schedule →
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="dash-calm-status-card page-fade">
-          <div className="dash-calm-icon"><Icons.CheckCircle size={22} color="var(--success)" /></div>
-          <div className="dash-calm-content">
-            <h4>No Remaining Classes Today</h4>
-            <p>You have finished all scheduled classes for today. You can review your full timetable for the rest of the week.</p>
-          </div>
-          <button
-            type="button"
-            className="btn-ghost"
-            onClick={() => setTab('schedule')}
-            style={{ fontSize: '.84rem', padding: '7px 16px' }}
-          >
-            Weekly Schedule →
-          </button>
-        </div>
-      )}
-
-      {/* 4. Actionable Alerts (Only critical/important information) */}
-      {criticalAbsences.length > 0 ? (
-        <div className="dash-alert-banner alert-critical page-fade">
-          <div className="dash-alert-icon"><Icons.AlertTriangle size={20} color="var(--danger)" /></div>
-          <div className="dash-alert-text">
-            <strong>Critical Absence Alert (FX Drop Risk)</strong>
-            <p>
-              You have reached or exceeded the 20% absence threshold in:{' '}
-              <b>{criticalAbsences.map(c => `${c.lesson || 'Course'} (${Number(c.absence_percent ?? c.absence)}%)`).join(', ')}</b>.
-              Under SDU regulations, this risks an automatic FX grade.
-            </p>
-          </div>
-          <button type="button" className="btn-alert-action" onClick={() => setTab('attendance')}>
-            View Absence Details →
-          </button>
-        </div>
-      ) : warningAbsences.length > 0 ? (
-        <div className="dash-alert-banner alert-warning page-fade">
-          <div className="dash-alert-icon"><Icons.AlertTriangle size={20} color="var(--warning)" /></div>
-          <div className="dash-alert-text">
-            <strong>Attendance Caution (Nearing 20% FX Limit)</strong>
-            <p>
-              Absence warning for:{' '}
-              <b>{warningAbsences.map(c => `${c.lesson || 'Course'} (${Number(c.absence_percent ?? c.absence)}%)`).join(', ')}</b>.
-              Maintain regular attendance in the next sessions to protect your standing.
-            </p>
-          </div>
-          <button type="button" className="btn-alert-action" onClick={() => setTab('attendance')}>
-            View Attendance →
-          </button>
-        </div>
-      ) : recommendations.length > 0 ? (
-        <div className="dash-guidance-card page-fade">
-          <div className="dash-guidance-head">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Icons.Sparkles size={16} color="var(--primary)" />
-              <span className="dash-guidance-title">Academic Study Focus</span>
-            </div>
-            <button
-              type="button"
-              className="btn-ghost"
-              onClick={onOpenWhatIf}
-              style={{ fontSize: '.78rem', padding: '4px 10px' }}
-            >
-              Plan Target in What-If →
-            </button>
-          </div>
-          <div className="dash-guidance-list">
-            {recommendations.slice(0, 2).map((rec, i) => (
-              <div key={i} className="dash-guidance-item">
-                <span className="badge-chip"><code>{rec.course}</code></span>
-                <span className="dash-guidance-action">{rec.action}</span>
-                <span className="dash-guidance-reason">{rec.reason}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : (
-        <div className="dash-good-standing-strip page-fade">
-          <Icons.CheckCircle size={16} color="var(--success)" />
-          <span>All academic indicators in good standing · No course absence warnings detected</span>
-        </div>
-      )}
-
-      {/* 5. Clean Navigation Hub (Direct shortcuts to dedicated tabs) */}
-      <section className="dash-quick-nav-grid">
-        <div className="dash-nav-card" onClick={() => setTab('schedule')}>
-          <div className="dash-nav-card-head">
-            <div className="dash-nav-icon"><Icons.Calendar size={20} /></div>
-            <span className="dash-nav-arrow">→</span>
-          </div>
-          <h3>Weekly Schedule</h3>
-          <p>{activeCourses} active courses registered in your weekly timetable.</p>
-          <span className="dash-nav-link">Open Timetable</span>
-        </div>
-
-        <div className="dash-nav-card" onClick={() => setTab('transcript')}>
-          <div className="dash-nav-card-head">
-            <div className="dash-nav-icon"><Icons.Book size={20} /></div>
-            <span className="dash-nav-arrow">→</span>
-          </div>
-          <h3>Grades & Transcript</h3>
-          <p>{passedCoursesCount} of {transcript.length} courses passed. View grades & What-If calculator.</p>
-          <span className="dash-nav-link">View Grades</span>
-        </div>
-
-        <div className="dash-nav-card" onClick={() => setTab('attendance')}>
-          <div className="dash-nav-card-head">
-            <div className="dash-nav-icon"><Icons.CheckCircle size={20} /></div>
-            <span className="dash-nav-arrow">→</span>
-          </div>
-          <h3>Attendance Tracking</h3>
-          <p>
-            {warningAbsences.length > 0
-              ? `${warningAbsences.length} course(s) require attention (<20% limit).`
-              : 'All courses safe within the SDU 20% absence threshold.'}
-          </p>
-          <span className="dash-nav-link">Track Absences</span>
-        </div>
+      <section className="split">
+        <NextClassCard nextInfo={findNextClass(sduData.schedule || [])} onOpenSchedule={() => setTab('schedule')} />
+        <AttentionCard items={attention} onSelect={setTab} />
       </section>
     </div>
   )
 }
 
-/* ─── LIVE SCHEDULE TAB ──────────────────────────────────────────── */
-function ScheduleTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo, onRefresh }) {
-  const [selectedDay, setSelectedDay] = useState('all')
+/* ─── SCHEDULE TAB ───────────────────────────────────────────────── */
+function ScheduleTab({ sduData, sduLoading, sduStatus, onConnect }) {
+  const [selectedDay, setSelectedDay] = useState(null)
 
-  if (!sduStatus?.connected) {
-    return <SduOnboardCard onConnect={onConnect} onConnectDemo={onConnectDemo} />
-  }
-
-  if (sduLoading && (!sduData.schedule || !sduData.schedule.length)) {
-    return (
-      <div className="page-fade" style={{ textAlign: 'center', padding: '60px 20px' }}>
-        <div className="sdu-spinner" style={{ margin: '0 auto 20px auto', width: 36, height: 36 }} />
-        <h2 style={{ fontSize: '1.25rem', marginBottom: 8 }}>Loading Class Schedule…</h2>
-        <p style={{ color: 'var(--text-muted)', fontSize: '.88rem' }}>Fetching live weekly timetable directly from SDU Platform.</p>
-      </div>
-    )
-  }
+  if (!sduStatus?.connected) return <SduOnboardCard onConnect={onConnect} />
 
   const schedule = sduData.schedule || []
+  if (sduLoading && !schedule.length) return <PageLoader label="Loading schedule…" />
+
   const sorted = sortSchedule(schedule)
-  const days = [
-    { id: 'all', label: 'All Days' },
-    { id: 1, label: 'Monday' },
-    { id: 2, label: 'Tuesday' },
-    { id: 3, label: 'Wednesday' },
-    { id: 4, label: 'Thursday' },
-    { id: 5, label: 'Friday' },
-    { id: 6, label: 'Saturday' },
-  ]
-
-  const filtered = sorted.filter(s => {
-    if (selectedDay === 'all') return true
-    return getDayOrder(s) === Number(selectedDay)
-  })
-
   const nextInfo = findNextClass(schedule)
+  const today = new Date().getDay() || 7
+  const counts = {}
+  sorted.forEach(s => { counts[getDayOrder(s)] = (counts[getDayOrder(s)] || 0) + 1 })
+
+  const defaultDay = counts[today] ? today : (nextInfo?.course ? getDayOrder(nextInfo.course) : 1)
+  const day = selectedDay ?? defaultDay
+  const classes = sorted.filter(s => getDayOrder(s) === day)
 
   return (
-    <div className="page-fade">
-      <header className="dashboard-hero-head" style={{ marginBottom: 20 }}>
-        <div>
-          <div className="dash-eyebrow-row">
-            <span className="sdu-badge">SDU SCHEDULE</span>
-            {sduData.lastFetched && (
-              <span style={{ fontSize: '.76rem', color: '#10B981', fontWeight: 600 }}>
-                • Synced {new Date(sduData.lastFetched).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </span>
-            )}
-          </div>
-          <h1>Class Timetable</h1>
-          <p>Official weekly schedule synchronized live from the SDU University portal.</p>
-        </div>
-        <button
-          type="button"
-          className="btn-ghost"
-          onClick={onRefresh}
-          disabled={sduLoading}
-        >
-          <Icons.Refresh size={14} className={sduLoading ? "spinning" : ""} />
-          {sduLoading ? 'Refreshing…' : 'Refresh Timetable'}
-        </button>
-      </header>
-
-      {/* Next Class Hero Banner if on All Days */}
-      {selectedDay === 'all' && nextInfo?.course && (
-        <NextClassHighlightCard nextInfo={nextInfo} />
-      )}
-
-      {/* Day Filter Pills */}
-      <div className="schedule-days-bar">
-        {days.map(d => (
+    <div className="page page-fade">
+      <div className="day-tabs" role="tablist" aria-label="Day of week">
+        {[1, 2, 3, 4, 5, 6].map(d => (
           <button
-            key={d.id}
+            key={d}
             type="button"
-            className={`day-pill-btn ${selectedDay === d.id ? 'active' : ''}`}
-            onClick={() => setSelectedDay(d.id)}
+            role="tab"
+            aria-selected={day === d}
+            className={`day-tab ${day === d ? 'active' : ''}`}
+            onClick={() => setSelectedDay(d)}
           >
-            {d.label}
+            <span>{DAY_SHORT[d]}</span>
+            <small>{d === today ? 'Today' : counts[d] ? `${counts[d]} class${counts[d] > 1 ? 'es' : ''}` : 'Free'}</small>
           </button>
         ))}
       </div>
 
-      {!filtered.length ? (
-        <div style={{ padding: '60px 24px', textAlign: 'center', background: 'var(--surface)', borderRadius: 16, border: '1px solid var(--border)' }}>
-          <Icons.Calendar size={36} color="var(--text-muted)" style={{ marginBottom: 12 }} />
-          <h3 style={{ margin: '0 0 6px', fontSize: '1.05rem', color: 'var(--text-primary)' }}>No classes on this day</h3>
-          <p style={{ margin: 0, fontSize: '.88rem', color: 'var(--text-secondary)' }}>
-            There are no scheduled courses recorded for {days.find(d => d.id === selectedDay)?.label}.
-          </p>
-        </div>
-      ) : (
-        <div className="schedule-list-v2">
-          {filtered.map((s, idx) => {
-            const dayNames = ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-            const dayStr = dayNames[getDayOrder(s)] || s.weekday || 'Weekday'
-            const timeFormatted = formatClassTime(s.times, s.start_time, s.end_time)
-
-            return (
-              <div key={idx} className="schedule-card-v2">
-                <div className="time-slot-box">
-                  <span className="time-slot-day">{dayStr}</span>
-                  <span className="time-slot-hours">
-                    <Icons.Clock size={14} color="var(--primary)" />
-                    {timeFormatted}
-                  </span>
-                </div>
-                <div className="course-info-box">
-                  <h3>{s.course_name}</h3>
-                  <div className="course-chips-row">
-                    <span className="badge-chip"><code>{s.course_code}</code></span>
-                    <span className="badge-chip">{s.lesson_type || 'Lecture'} · Section {s.section || '1'}</span>
-                    <span className="badge-chip">
-                      <Icons.MapPin size={13} color="var(--primary)" />
-                      {s.building ? `${s.building}, ` : ''}{s.room ? `Room ${s.room}` : (s.is_online ? 'Online Zoom' : 'SDU Campus')}
-                    </span>
-                    {s.teacher && (
-                      <span className="badge-chip">
-                        <Icons.User size={13} color="var(--text-muted)" />
-                        {s.teacher}
-                      </span>
-                    )}
+      <article className="card card-flush">
+        {classes.length ? (
+          <ol className="timeline">
+            {classes.map((s, idx) => {
+              const [start, end] = classTimes(s)
+              const isNext = nextInfo?.course === s
+              return (
+                <li key={idx} className={`timeline-row ${isNext ? 'is-next' : ''}`}>
+                  <div className="timeline-time">
+                    <b>{start || 'TBD'}</b>
+                    {end && <span>{end}</span>}
                   </div>
-                </div>
-                <div>
-                  <span className="status-badge" style={{ background: s.is_online ? 'var(--info-dim)' : 'var(--success-dim)', color: s.is_online ? 'var(--info)' : 'var(--success)' }}>
-                    {s.is_online ? 'Online' : 'In-Person'}
-                  </span>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      )}
+                  <div className="timeline-body">
+                    <h3>
+                      {s.course_name}
+                      {isNext && <span className="tag tag-accent">Next</span>}
+                      {s.is_online && <span className="tag">Online</span>}
+                    </h3>
+                    <p>
+                      {classLocation(s)} · {s.lesson_type || 'Lecture'}
+                      {s.teacher ? ` · ${s.teacher}` : ''}
+                    </p>
+                  </div>
+                  <code className="course-code">{s.course_code}</code>
+                </li>
+              )
+            })}
+          </ol>
+        ) : (
+          <EmptyState icon={<Icons.Calendar size={20} />} title={`No classes on ${DAY_NAMES[day]}`} text="Enjoy the free time." />
+        )}
+      </article>
     </div>
   )
 }
 
-/* ─── LIVE TRANSCRIPT & GRADES TAB ───────────────────────────────── */
-function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo, onRefresh, onOpenWhatIf }) {
-  const [semesterFilter, setSemesterFilter] = useState('all')
-  const [statusFilter, setStatusFilter] = useState('all')
-  const [search, setSearch] = useState('')
-  const [showGrowth, setShowGrowth] = useState(false)
-
-  if (!sduStatus?.connected) {
-    return <SduOnboardCard onConnect={onConnect} onConnectDemo={onConnectDemo} />
-  }
-
-  if (sduLoading && (!sduData.transcript || !sduData.transcript.length)) {
-    return (
-      <div className="page-fade" style={{ textAlign: 'center', padding: '60px 20px' }}>
-        <div className="sdu-spinner" style={{ margin: '0 auto 20px auto', width: 36, height: 36 }} />
-        <h2 style={{ fontSize: '1.25rem', marginBottom: 8 }}>Loading Official Transcript & Grades…</h2>
-        <p style={{ color: 'var(--text-muted)', fontSize: '.88rem' }}>Fetching real curriculum and course grade data directly from SDU Platform.</p>
-      </div>
-    )
-  }
-
+/* ─── GRADES TAB ─────────────────────────────────────────────────── */
+function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect }) {
+  const [semester, setSemester] = useState(null)
+  const [view, setView] = useState('list')
   const transcript = sduData.transcript || []
-  const gpa = calcGPA(transcript)
-  const totalCredits = calcCompletedCredits(transcript)
-  const passedCount = transcript.filter(c => c.passed === true).length
-  const unpassedCount = transcript.length - passedCount
 
-  const semesterProgress = useMemo(() => {
-    if (!transcript.length) return []
+  const groups = useMemo(() => {
     const bySem = {}
     transcript.forEach(c => {
-      const s = c.semester
-      if (!s) return
-      if (!bySem[s]) bySem[s] = { semester: s, totalCredits: 0, points: 0, passed: 0, count: 0 }
-      const cr = Number(c.credits || c.ects || 3)
-      bySem[s].count += 1
-      bySem[s].totalCredits += cr
-      if (c.passed) bySem[s].passed += 1
-      if (c.grade_point != null && !isNaN(Number(c.grade_point))) {
-        bySem[s].points += Number(c.grade_point) * cr
-      }
+      const key = c.semester != null ? String(c.semester) : '—'
+      if (!bySem[key]) bySem[key] = []
+      bySem[key].push(c)
     })
-    return Object.keys(bySem).sort((a,b) => Number(a) - Number(b)).map(sem => {
-      const d = bySem[sem]
-      const semGpa = d.totalCredits > 0 ? (d.points / d.totalCredits) : 0
-      return {
-        name: `Sem ${sem}`,
-        semNum: Number(sem),
-        gpa: Math.round(semGpa * 100) / 100,
-        credits: d.totalCredits,
-        passed: d.passed,
-        count: d.count
-      }
-    })
+    return Object.keys(bySem)
+      .sort((a, b) => (a === '—') - (b === '—') || Number(a) - Number(b))
+      .map(key => {
+        const courses = bySem[key]
+        const gpa = calcGPA(courses)
+        return {
+          key,
+          name: key === '—' ? 'Other' : `Sem ${key}`,
+          courses,
+          gpa: gpa != null ? Math.round(gpa * 100) / 100 : null,
+          credits: courses.reduce((sum, c) => sum + Number(c.credits || c.ects || 0), 0),
+        }
+      })
   }, [transcript])
 
-  const semesters = Array.from(new Set(transcript.map(c => c.semester).filter(Boolean))).sort((a, b) => a - b)
+  if (!sduStatus?.connected) return <SduOnboardCard onConnect={onConnect} />
+  if (sduLoading && !transcript.length) return <PageLoader label="Loading grades…" />
 
-  const filtered = transcript.filter(c => {
-    if (semesterFilter !== 'all' && String(c.semester) !== String(semesterFilter)) return false
-    if (statusFilter === 'passed' && c.passed !== true) return false
-    if (statusFilter === 'unpassed' && c.passed === true) return false
-    if (search.trim()) {
-      const q = search.toLowerCase()
-      const name = (c.course_name || '').toLowerCase()
-      const code = (c.course_code || '').toLowerCase()
-      return name.includes(q) || code.includes(q)
-    }
-    return true
-  })
-
-  // Degree progress calculation (240 ECTS target)
-  const targetCredits = 240
-  const creditsPct = Math.min(100, Math.round(((totalCredits || 0) / targetCredits) * 100))
-  const passedPct = transcript.length > 0 ? Math.round((passedCount / transcript.length) * 100) : 0
+  const gpa = calcGPA(transcript)
+  const credits = calcCompletedCredits(transcript)
+  const passedCount = transcript.filter(c => c.passed === true).length
+  const latest = [...groups].reverse().find(g => g.key !== '—')
+  const selected = semester ?? latest?.key ?? 'all'
+  const visible = selected === 'all' ? groups : groups.filter(g => g.key === selected)
+  const trend = groups.filter(g => g.key !== '—' && g.gpa != null)
 
   const exportCSV = () => {
     if (!transcript.length) return
@@ -2334,9 +1768,8 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDem
       c.passed ? 'Passed' : 'Unpassed'
     ])
     const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n')
-    const encoded = encodeURI(csvContent)
     const link = document.createElement('a')
-    link.setAttribute('href', encoded)
+    link.setAttribute('href', encodeURI(csvContent))
     link.setAttribute('download', `SDU_Transcript_${sduData.profile?.student_id || 'student'}.csv`)
     document.body.appendChild(link)
     link.click()
@@ -2344,559 +1777,219 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDem
   }
 
   return (
-    <div className="page-fade">
-      <PageHeader
-        badge="SDU TRANSCRIPT"
-        title="Official Transcript & Grades"
-        subtitle="Complete academic curriculum records and grades fetched directly from SDU Platform."
-        lastFetched={sduData.lastFetched}
-        actions={
-          <>
-            {semesterProgress.length > 0 && (
-              <button
-                type="button"
-                className={`btn-ghost ${showGrowth ? 'active' : ''}`}
-                onClick={() => setShowGrowth(!showGrowth)}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-              >
-                <Icons.TrendingUp size={14} /> {showGrowth ? 'Hide GPA Trend' : 'GPA Trend'}
-              </button>
-            )}
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={onOpenWhatIf}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-            >
-              <Icons.Sliders size={14} /> What-If Calculator
-            </button>
-            <button
-              type="button"
-              className="btn-ghost"
-              onClick={exportCSV}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-            >
-              <Icons.Download size={14} /> Export CSV
-            </button>
-            <button
-              type="button"
-              className="btn-ghost"
-              onClick={onRefresh}
-              disabled={sduLoading}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-            >
-              <Icons.Refresh size={14} className={sduLoading ? "spinning" : ""} />
-              {sduLoading ? 'Refreshing…' : 'Refresh'}
-            </button>
-          </>
-        }
-      />
-
-      {/* 3 Stat Cards Responsive Grid (3 cols desktop, 2 tablet, 1 mobile) */}
-      <section className="stat-grid-3">
-        {/* Card 1: Cumulative GPA */}
-        <article className="stat-card-custom">
-          <div>
-            <div className="stat-card-head">
-              <span className="stat-card-label">Cumulative GPA</span>
-              <div className="stat-card-icon-pill pill-purple">
-                <Icons.Target size={18} />
-              </div>
-            </div>
-            <div className="gpa-gauge-row">
-              <div>
-                <div className="stat-card-value">
-                  {gpa != null ? gpa.toFixed(2) : '—'}
-                  <span style={{ fontSize: '1rem', color: 'var(--text-muted)', fontWeight: 600 }}> / 4.00</span>
-                </div>
-                <div className="stat-card-subtext">Official SDU 4.0 scale</div>
-              </div>
-              <GpaGauge gpa={gpa} maxGpa={4.0} />
-            </div>
-          </div>
-          <div style={{ marginTop: 14 }}>
-            <span className="gpa-trend-pill trend-positive">
-              <Icons.TrendingUp size={13} />
-              <span>{gpa >= 3.5 ? "Dean's List Eligible" : (gpa >= 2.0 ? 'Satisfactory Progress' : 'Academic Alert')}</span>
-            </span>
-          </div>
-        </article>
-
-        {/* Card 2: Completed Credits */}
-        <article className="stat-card-custom">
-          <div>
-            <div className="stat-card-head">
-              <span className="stat-card-label">Completed Credits</span>
-              <div className="stat-card-icon-pill pill-blue">
-                <Icons.Book size={18} />
-              </div>
-            </div>
-            <div className="stat-card-value">
-              {totalCredits} <span style={{ fontSize: '1.1rem', color: 'var(--text-muted)', fontWeight: 600 }}>ECTS</span>
-            </div>
-            <div className="stat-card-subtext">{totalCredits} / {targetCredits} ECTS required ({creditsPct}%)</div>
-          </div>
-          <div className="credits-bar-track" style={{ marginTop: 14 }}>
-            <div className="credits-bar-fill" style={{ width: `${creditsPct}%` }} />
-          </div>
-        </article>
-
-        {/* Card 3: Passed Courses */}
-        <article className="stat-card-custom">
-          <div>
-            <div className="stat-card-head">
-              <span className="stat-card-label">Passed Courses</span>
-              <div className="stat-card-icon-pill pill-emerald">
-                <Icons.CheckCircle size={18} />
-              </div>
-            </div>
-            <div className="stat-card-value">
-              {passedCount} <span style={{ fontSize: '1.1rem', color: 'var(--text-muted)', fontWeight: 600 }}>/ {transcript.length}</span>
-            </div>
-            <div className="stat-card-subtext">{unpassedCount} in progress / remaining ({passedPct}%)</div>
-          </div>
-          <div className="credits-bar-track" style={{ marginTop: 14 }}>
-            <div className="credits-bar-fill" style={{ width: `${passedPct}%`, background: 'var(--success)' }} />
-          </div>
-        </article>
+    <div className="page page-fade">
+      <section className="card summary-strip">
+        <div>
+          <span>GPA</span>
+          <b>{gpa != null ? gpa.toFixed(2) : '—'}</b>
+        </div>
+        <div>
+          <span>Credits</span>
+          <b>{credits}<small>ECTS</small></b>
+        </div>
+        <div>
+          <span>Passed</span>
+          <b>{passedCount}<small>/ {transcript.length}</small></b>
+        </div>
       </section>
 
-      {/* Optional Semester GPA Trajectory Growth Panel */}
-      {showGrowth && semesterProgress.length > 0 && (
-        <article className="panel page-fade" style={{ marginBottom: 24 }}>
-          <div className="panel-title" style={{ marginBottom: 12 }}>
-            <div>
-              <span className="eyebrow">Academic Growth</span>
-              <h2>Semester GPA Trajectory</h2>
-            </div>
-            <span className="gpa-trend-pill trend-positive">
-              <Icons.TrendingUp size={13} />
-              <span>Standard 4.0 Scale</span>
-            </span>
-          </div>
-          <div style={{ width: '100%', height: 210, marginBottom: 14 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={semesterProgress} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" opacity={0.6} />
-                <XAxis dataKey="name" stroke="var(--text-muted)" fontSize={12} tickLine={false} />
-                <YAxis domain={[0, 4]} stroke="var(--text-muted)" fontSize={12} tickLine={false} />
-                <Tooltip content={<CustomChartTooltip />} />
-                <Bar dataKey="gpa" fill="var(--primary)" radius={[6, 6, 0, 0]} maxBarSize={36} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-          <div className="semester-metrics-row">
-            {semesterProgress.map((sp, idx) => (
-              <div key={idx} className="sem-metric-chip">
-                <small>{sp.name}</small>
-                <strong>{typeof sp.gpa === 'number' && !isNaN(sp.gpa) ? sp.gpa.toFixed(2) : '—'}</strong>
-                <span>{sp.credits} ECTS · {sp.passed} pass</span>
-              </div>
-            ))}
-          </div>
-        </article>
-      )}
-
-      {/* Toolbar: Search on left, chips and semester select on right */}
-      <div className="toolbar-row">
-        <SearchInput
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          onClear={() => setSearch('')}
-          placeholder="Search course title or code…"
+      <div className="toolbar">
+        <Segmented
+          label="View"
+          options={[{ id: 'list', label: 'Courses' }, { id: 'trend', label: 'GPA trend' }]}
+          value={view}
+          onChange={setView}
         />
-
-        <div className="toolbar-controls">
-          {semesters.length > 0 && (
-            <select
-              value={semesterFilter}
-              onChange={e => setSemesterFilter(e.target.value)}
-              className="portal-select"
-              aria-label="Filter by semester"
-            >
-              <option value="all">All Semesters</option>
-              {semesters.map(s => (
-                <option key={s} value={s}>Semester {s}</option>
-              ))}
+        <div className="toolbar-end">
+          {view === 'list' && groups.length > 1 && (
+            <select className="select" value={selected} onChange={e => setSemester(e.target.value)} aria-label="Semester">
+              <option value="all">All semesters</option>
+              {groups.map(g => <option key={g.key} value={g.key}>{g.name.replace('Sem', 'Semester')}</option>)}
             </select>
           )}
-
-          <FilterChips
-            options={[
-              { id: 'all', label: 'All' },
-              { id: 'passed', label: `Passed (${passedCount})` },
-              { id: 'unpassed', label: `Unpassed (${unpassedCount})` },
-            ]}
-            value={statusFilter}
-            onChange={setStatusFilter}
-          />
+          <button type="button" className="icon-btn" onClick={exportCSV} title="Export CSV" aria-label="Export CSV">
+            <Icons.Download size={16} />
+          </button>
         </div>
       </div>
 
-      {/* Course list / table with modern portal styling */}
-      <div className="table-card-container" style={{ overflowX: 'auto' }}>
-        <table className="portal-table">
-          <thead>
-            <tr>
-              <th style={{ paddingLeft: 20 }}>Sem</th>
-              <th>Course Code & Title</th>
-              <th>ECTS</th>
-              <th>Final Score</th>
-              <th>Letter</th>
-              <th>GPA Point</th>
-              <th style={{ paddingRight: 20 }}>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {!filtered.length ? (
-              <tr>
-                <td colSpan={7} style={{ textAlign: 'center', padding: '48px 16px', color: 'var(--text-muted)' }}>
-                  No courses found matching your filter criteria.
-                </td>
-              </tr>
-            ) : (
-              filtered.map((c, idx) => (
-                <tr key={idx}>
-                  <td style={{ paddingLeft: 20, fontWeight: 700, color: 'var(--text-secondary)' }}>Sem {c.semester ?? '—'}</td>
-                  <td>
-                    <b style={{ color: 'var(--text-primary)' }}>{c.course_name}</b>
-                    <span style={{ display: 'block', fontSize: '.76rem', color: 'var(--text-muted)' }}>{c.course_code}</span>
-                  </td>
-                  <td style={{ fontWeight: 600 }}>{c.credits ?? c.ects ?? '—'}</td>
-                  <td>
-                    <b>
-                      {c.grade_percent != null
-                        ? `${c.grade_percent}%`
-                        : (c.grade != null ? (typeof c.grade === 'number' ? `${c.grade}%` : c.grade) : '—')}
-                    </b>
-                  </td>
-                  <td>
-                    <span className={`grade-pill ${getGradePillClass(c.letter_grade)}`}>
-                      {c.letter_grade || '—'}
+      {view === 'trend' ? (
+        <article className="card">
+          <header className="card-head">
+            <h2>GPA by semester</h2>
+            <span className="muted">4.0 scale</span>
+          </header>
+          {trend.length ? (
+            <div style={{ width: '100%', height: 260 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={trend} margin={{ top: 8, right: 8, left: -24, bottom: 0 }}>
+                  <CartesianGrid vertical={false} stroke="var(--border)" />
+                  <XAxis dataKey="name" stroke="var(--text-muted)" fontSize={12} tickLine={false} axisLine={false} />
+                  <YAxis domain={[0, 4]} ticks={[0, 1, 2, 3, 4]} stroke="var(--text-muted)" fontSize={12} tickLine={false} axisLine={false} />
+                  <Tooltip content={<CustomChartTooltip />} cursor={{ fill: 'var(--surface-2)' }} />
+                  <Bar dataKey="gpa" fill="var(--accent)" radius={[6, 6, 0, 0]} maxBarSize={44} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <EmptyState title="No graded semesters yet" />
+          )}
+        </article>
+      ) : !visible.length ? (
+        <article className="card">
+          <EmptyState icon={<Icons.Book size={20} />} title="No courses yet" text="Your transcript will appear after the first sync." />
+        </article>
+      ) : (
+        visible.map(g => (
+          <article key={g.key} className="card card-flush">
+            <header className="group-head">
+              <h2>{g.name.replace('Sem', 'Semester')}</h2>
+              <span>{g.gpa != null ? `GPA ${g.gpa.toFixed(2)} · ` : ''}{g.credits} ECTS</span>
+            </header>
+            <ul className="course-list">
+              {g.courses.map((c, idx) => {
+                const score = c.grade_percent ?? c.grade
+                return (
+                  <li key={idx} className="course-row">
+                    <div className="course-main">
+                      <b>{c.course_name}</b>
+                      <span>
+                        {c.course_code} · {c.credits ?? c.ects ?? '—'} ECTS
+                        {c.passed === false && <span className="tone-danger"> · Not passed</span>}
+                      </span>
+                    </div>
+                    <span className="course-score">
+                      {score != null ? (typeof score === 'number' ? `${score}%` : score) : '—'}
                     </span>
-                  </td>
-                  <td style={{ fontWeight: 600 }}>
-                    {c.grade_point != null && !isNaN(Number(c.grade_point))
-                      ? Number(c.grade_point).toFixed(2)
-                      : (c.grade_point || '—')}
-                  </td>
-                  <td style={{ paddingRight: 20 }}>
-                    {c.passed === false ? (
-                      <span className="status-badge badge-warn">Unpassed</span>
-                    ) : (
-                      <span className="status-badge badge-ok">Passed</span>
-                    )}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+                    <span className={`grade tint-${gradeTone(c.letter_grade)}`}>{c.letter_grade || '—'}</span>
+                  </li>
+                )
+              })}
+            </ul>
+          </article>
+        ))
+      )}
     </div>
   )
 }
 
-/* ─── LIVE ATTENDANCE TAB ────────────────────────────────────────── */
-function AttendanceTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo, onRefresh }) {
+/* ─── ATTENDANCE TAB ─────────────────────────────────────────────── */
+function AttendanceTab({ sduData, sduLoading, sduStatus, onConnect }) {
   const attendanceList = sduData?.attendance || []
-  if (!sduStatus?.connected && !attendanceList.length) {
-    return <SduOnboardCard onConnect={onConnect} onConnectDemo={onConnectDemo} />
-  }
+  if (!sduStatus?.connected && !attendanceList.length) return <SduOnboardCard onConnect={onConnect} />
+  if (sduLoading && !attendanceList.length) return <PageLoader label="Loading attendance…" />
 
-  if (sduLoading && (!attendanceList || !attendanceList.length)) {
-    return (
-      <div className="page-fade" style={{ textAlign: 'center', padding: '60px 20px' }}>
-        <div className="sdu-spinner" style={{ margin: '0 auto 20px auto', width: 36, height: 36 }} />
-        <h2 style={{ fontSize: '1.25rem', marginBottom: 8 }}>Loading Live Attendance Records…</h2>
-        <p style={{ color: 'var(--text-muted)', fontSize: '.88rem' }}>Fetching real absence rates and course hours from SDU Platform.</p>
-      </div>
-    )
-  }
-  const overallAtt = calcOverallAttendance(attendanceList)
-  const totalCourses = attendanceList.length
-  const warningCourses = attendanceList.filter(a => Number(a.absence_percent) > 20).length
-  const goodCourses = totalCourses - warningCourses
-
-  // Attendance health state
-  let attClass = 'state-safe'
-  let attLabel = 'Safe Status (≥90%)'
-  if (overallAtt < 75) {
-    attClass = 'state-danger'
-    attLabel = 'Critical Drop Risk (<75%)'
-  } else if (overallAtt < 90) {
-    attClass = 'state-caution'
-    attLabel = 'Caution (75–89%)'
-  }
-
-  const attColor = overallAtt >= 90 ? 'var(--success)' : (overallAtt >= 75 ? 'var(--warning)' : 'var(--danger)')
-  const attPill = overallAtt >= 90 ? 'pill-emerald' : (overallAtt >= 75 ? 'pill-amber' : 'pill-danger')
+  const list = [...attendanceList].sort((a, b) => absenceOf(b) - absenceOf(a))
+  const overall = calcOverallAttendance(list)
+  const over = list.filter(a => absenceOf(a) >= ABSENCE_LIMIT).length
+  const near = list.filter(a => absenceOf(a) >= ABSENCE_WARN && absenceOf(a) < ABSENCE_LIMIT).length
+  const overallStanding = attendanceStanding(overall)
+  const meterMax = 30
 
   return (
-    <div className="page-fade">
-      <PageHeader
-        badge="SDU ATTENDANCE"
-        title="Course Attendance & Absences"
-        subtitle="Official course absence metrics tracked directly from SDU University portal."
-        lastFetched={sduData.lastFetched}
-        actions={
-          <button
-            type="button"
-            className="btn-ghost"
-            onClick={onRefresh}
-            disabled={sduLoading}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-          >
-            <Icons.Refresh size={14} className={sduLoading ? "spinning" : ""} />
-            {sduLoading ? 'Refreshing…' : 'Refresh'}
-          </button>
-        }
-      />
-
-      {/* 4 Stat Cards Responsive Grid (4 cols desktop, 2 tablet, 1 mobile) */}
-      <section className="stat-grid-4">
-        {/* Card 1: Overall Attendance */}
-        <article className="stat-card-custom">
-          <div>
-            <div className="stat-card-head">
-              <span className="stat-card-label">Overall Attendance</span>
-              <div className={`stat-card-icon-pill ${attPill}`}>
-                <Icons.Calendar size={18} />
-              </div>
-            </div>
-            <div className="stat-card-value" style={{ color: attColor }}>
-              {overallAtt}%
-            </div>
-            <div className="stat-card-subtext">100% minus average absence</div>
-          </div>
-          <div className="att-health-row">
-            <span className={`att-badge-state ${attClass}`}>
-              {attLabel}
-            </span>
-            <span style={{ fontSize: '.76rem', color: 'var(--text-muted)' }}>Limit: 20% absence</span>
-          </div>
-        </article>
-
-        {/* Card 2: Tracked Courses */}
-        <article className="stat-card-custom">
-          <div>
-            <div className="stat-card-head">
-              <span className="stat-card-label">Tracked Courses</span>
-              <div className="stat-card-icon-pill pill-purple">
-                <Icons.Book size={18} />
-              </div>
-            </div>
-            <div className="stat-card-value">
-              {totalCourses} <span style={{ fontSize: '1rem', color: 'var(--text-muted)', fontWeight: 600 }}>Courses</span>
-            </div>
-            <div className="stat-card-subtext">Live portal academic courses</div>
-          </div>
-          <div className="next-class-hint-pill">
-            <Icons.Book size={13} color="var(--primary)" />
-            <span>Active semester enrollment</span>
-          </div>
-        </article>
-
-        {/* Card 3: Good Standing */}
-        <article className="stat-card-custom">
-          <div>
-            <div className="stat-card-head">
-              <span className="stat-card-label">Good Standing</span>
-              <div className="stat-card-icon-pill pill-emerald">
-                <Icons.CheckCircle size={18} />
-              </div>
-            </div>
-            <div className="stat-card-value">
-              {goodCourses} <span style={{ fontSize: '1rem', color: 'var(--text-muted)', fontWeight: 600 }}>Courses</span>
-            </div>
-            <div className="stat-card-subtext">Absence within limits (≤ 20%)</div>
-          </div>
-          <div className="next-class-hint-pill">
-            <Icons.CheckCircle size={13} color="var(--success)" />
-            <span>No immediate drop risk</span>
-          </div>
-        </article>
-
-        {/* Card 4: Absence Warnings */}
-        <article className="stat-card-custom">
-          <div>
-            <div className="stat-card-head">
-              <span className="stat-card-label">Absence Warnings</span>
-              <div className={`stat-card-icon-pill ${warningCourses > 0 ? 'pill-danger' : 'pill-emerald'}`}>
-                <Icons.AlertTriangle size={18} />
-              </div>
-            </div>
-            <div className="stat-card-value" style={{ color: warningCourses > 0 ? 'var(--danger)' : 'var(--success)' }}>
-              {warningCourses} <span style={{ fontSize: '1rem', color: 'var(--text-muted)', fontWeight: 600 }}>Courses</span>
-            </div>
-            <div className="stat-card-subtext">
-              {warningCourses ? 'Exceeding recommended limit' : 'All courses safe'}
-            </div>
-          </div>
-          <div className="next-class-hint-pill">
-            <Icons.AlertTriangle size={13} color={warningCourses > 0 ? "var(--danger)" : "var(--success)"} />
-            <span style={{ color: warningCourses > 0 ? 'var(--danger)' : 'inherit' }}>
-              {warningCourses > 0 ? 'Action required (>20% absence)' : 'Standing in good order'}
-            </span>
-          </div>
-        </article>
+    <div className="page page-fade">
+      <section className="card att-summary">
+        <div>
+          <span className="metric-label">Overall attendance</span>
+          <div className={`metric-value tone-${overallStanding.tone}`}>{overall}%</div>
+        </div>
+        <div className="att-summary-side">
+          <Status tone={over ? 'danger' : near ? 'warning' : 'success'}>
+            {over
+              ? `${over} course${over > 1 ? 's' : ''} over the limit`
+              : near
+                ? `${near} course${near > 1 ? 's' : ''} close to the limit`
+                : 'All courses within the limit'}
+          </Status>
+          <span className="muted">{list.length} courses tracked this term</span>
+        </div>
       </section>
 
-      {!attendanceList.length ? (
-        <div className="panel" style={{ padding: '60px 24px', textAlign: 'center' }}>
-          <Icons.Calendar size={36} color="var(--text-muted)" style={{ marginBottom: 12 }} />
-          <h3 style={{ margin: '0 0 6px', fontSize: '1.05rem', color: 'var(--text-primary)' }}>No attendance records found</h3>
-          <p style={{ margin: 0, fontSize: '.88rem', color: 'var(--text-secondary)' }}>
-            SDU has not published absence entries for this term yet.
-          </p>
-        </div>
-      ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 18, marginBottom: 28 }}>
-          {attendanceList.map((item, idx) => {
-            const lessonTitle = item.lesson || item.course_name || item.course_title || item.course || item.subject || item.name || 'Course'
-            const absence = Number(item.absence_percent ?? item.absence ?? 0)
-            const attRate = Math.max(0, Math.min(100, Math.round((100 - absence) * 10) / 10))
-            const isCritical = absence >= 25
-            const isWarning = absence >= 18 && absence < 25
-            const statusClass = isCritical ? 'badge-crit' : isWarning ? 'badge-warn' : 'badge-ok'
-            const statusLabel = isCritical ? 'Critical Drop Risk' : isWarning ? 'Absence Warning' : 'Good Standing'
-            const fillClass = isCritical ? 'fill-danger' : isWarning ? 'fill-warn' : 'fill-good'
-
-            return (
-              <div key={idx} className="sdu-att-card">
-                <div className="sdu-att-header">
-                  <div>
-                    <h4>{lessonTitle}</h4>
-                    <small>Term {item.term ?? '1'} · {item.year ?? '2026'}</small>
+      <article className="card card-flush">
+        <header className="group-head">
+          <h2>By course</h2>
+          <span>Absence · limit {ABSENCE_LIMIT}%</span>
+        </header>
+        {list.length ? (
+          <ul className="att-list">
+            {list.map((a, idx) => {
+              const abs = absenceOf(a)
+              const tone = absenceTone(abs)
+              return (
+                <li key={idx} className="att-row">
+                  <div className="course-main">
+                    <b>{attendanceTitle(a)}</b>
+                    <span>Term {a.term ?? '1'} · {a.year ?? '2026'}</span>
                   </div>
-                  <span className={`status-badge ${statusClass}`}>{statusLabel}</span>
-                </div>
-
-                <div className="sdu-att-bar-wrap">
-                  <div className="sdu-att-metric-row">
-                    <span style={{ color: 'var(--text-secondary)' }}>Attendance Rate:</span>
-                    <strong style={{ fontSize: '1.1rem', color: isCritical ? 'var(--danger)' : 'var(--text-primary)' }}>
-                      {attRate}%
-                    </strong>
+                  <div className="meter" aria-hidden="true">
+                    <div className={`meter-fill fill-${tone}`} style={{ width: `${Math.min(100, (abs / meterMax) * 100)}%` }} />
+                    <span className="meter-limit" style={{ left: `${(ABSENCE_LIMIT / meterMax) * 100}%` }} />
                   </div>
+                  <span className={`att-value tone-${tone}`}>{abs}%</span>
+                </li>
+              )
+            })}
+          </ul>
+        ) : (
+          <EmptyState icon={<Icons.Calendar size={20} />} title="No attendance records yet" text="SDU has not published absences for this term." />
+        )}
+      </article>
 
-                  <div className="sdu-progress-track">
-                    <div className={`sdu-progress-fill ${fillClass}`} style={{ width: `${attRate}%` }} />
-                  </div>
-
-                  <div className="sdu-att-metric-row" style={{ marginTop: 2 }}>
-                    <small style={{ color: 'var(--text-muted)' }}>Absence: <b>{absence}%</b></small>
-                    <small style={{ color: 'var(--text-muted)' }}>Allowed limit: ~20%</small>
-                  </div>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      )}
-
-      <div style={{ background: 'var(--surface-subtle)', border: '1px solid var(--border)', borderRadius: 14, padding: '20px 24px', display: 'flex', gap: 14, alignItems: 'flex-start' }}>
-        <div style={{ color: 'var(--primary)', marginTop: 2 }}><Icons.Calendar size={22} /></div>
-        <div>
-          <b style={{ fontSize: '.92rem', color: 'var(--text-primary)', display: 'block', marginBottom: 4 }}>SDU Attendance Contract & Regulation:</b>
-          <p style={{ margin: 0, fontSize: '.84rem', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
-            SDU University portal tracks the course absence percentage directly (not lesson-by-lesson log). StudyMate calculates your attendance rate as <b>100% minus the absence rate</b>. Reaching 25% course absence leads to automatic course drop (FX status).
-          </p>
-        </div>
-      </div>
+      <p className="footnote">
+        Attendance is 100% minus absence. Missing more than {ABSENCE_LIMIT}% of a course puts it at risk of an FX grade.
+      </p>
     </div>
   )
 }
 
-/* ─── LIVE SDU PROFILE TAB ───────────────────────────────────────── */
-function SduProfileTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo, onDisconnect, onRefresh, user }) {
-  if (!sduStatus?.connected) {
-    return <SduOnboardCard onConnect={onConnect} onConnectDemo={onConnectDemo} />
-  }
+/* ─── PROFILE TAB ────────────────────────────────────────────────── */
+function SduProfileTab({ sduData, sduLoading, sduStatus, onConnect, onDisconnect, onRefresh, user }) {
+  if (!sduStatus?.connected) return <SduOnboardCard onConnect={onConnect} />
 
   const p = sduData.profile || {}
+  const demo = !!sduStatus?.demo_mode
 
   return (
-    <div className="page-fade" style={{ maxWidth: 740, margin: '0 auto' }}>
-      <header className="page-head" style={{ marginBottom: 24, textAlign: 'center', justifyContent: 'center' }}>
-        <div>
-          <span className="sdu-badge">SDU IDENTITY</span>
-          <h1 style={{ marginTop: 6 }}>University Profile Card</h1>
-          <p>Verified SDU Platform credentials and OAuth connection details.</p>
-        </div>
-      </header>
-
-      <div className="panel" style={{ padding: '32px 28px', borderRadius: 20, border: '1px solid var(--border)', boxShadow: 'var(--shadow-md)', position: 'relative', overflow: 'hidden' }}>
-        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 6, background: 'linear-gradient(90deg, #4F46E5, #06B6D4, #10B981)' }} />
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap', marginBottom: 24 }}>
-          <div className="avatar-btn" style={{ width: 68, height: 68, fontSize: '1.6rem', background: 'linear-gradient(135deg, #4F46E5, #7C3AED)', color: '#fff', boxShadow: '0 8px 16px rgba(79, 70, 229, 0.25)' }}>
-            {initials(p.fullname || user.name)}
-          </div>
-          <div style={{ flex: 1 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              <h2 style={{ margin: 0, fontSize: '1.35rem' }}>{p.fullname || user.name}</h2>
-              <span className={`status-badge ${sduStatus?.demo_mode ? 'badge-warn' : 'badge-ok'}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                <span className="sdu-dot" style={sduStatus?.demo_mode ? { background: '#F59E0B' } : {}} /> {sduStatus?.demo_mode ? 'SDU Demo Mode' : 'SDU Active'}
-              </span>
-            </div>
-            <span style={{ color: 'var(--text-secondary)', fontSize: '.9rem', fontWeight: 600 }}>
-              Student ID: <code>{p.student_id || user.student_id || '—'}</code>
-            </span>
+    <div className="page page-narrow page-fade">
+      <article className="card">
+        <div className="profile-head">
+          <div className="avatar avatar-lg">{initials(p.fullname || user.name)}</div>
+          <div>
+            <h2>{p.fullname || user.name}</h2>
+            <span className="muted">Student ID {p.student_id || user.student_id || '—'}</span>
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14, marginBottom: 24 }}>
-          <div style={{ background: 'var(--bg)', padding: '14px 16px', borderRadius: 10, border: '1px solid var(--border)' }}>
-            <small style={{ color: 'var(--text-muted)', display: 'block', marginBottom: 3 }}>Official University Email</small>
-            <b style={{ fontSize: '.9rem', color: 'var(--text-primary)' }}>{p.email || `${p.student_id || 'student'}@sdu.edu.kz`}</b>
+        <dl className="kv">
+          <div>
+            <dt>Email</dt>
+            <dd>{p.email || `${p.student_id || 'student'}@sdu.edu.kz`}</dd>
           </div>
-          <div style={{ background: 'var(--bg)', padding: '14px 16px', borderRadius: 10, border: '1px solid var(--border)' }}>
-            <small style={{ color: 'var(--text-muted)', display: 'block', marginBottom: 3 }}>Portal Data Origin</small>
-            <b style={{ fontSize: '.9rem', color: sduStatus?.demo_mode ? 'var(--warning, #F59E0B)' : 'var(--success, #10B981)' }}>
-              {sduStatus?.demo_mode ? 'Demo SDU Dataset (Portal Offline)' : 'api-sdu.javazhan.tech (Live)'}
-            </b>
+          <div>
+            <dt>Data source</dt>
+            <dd><Status tone={demo ? 'warning' : 'success'}>{demo ? 'Demo data (SDU offline)' : 'SDU Platform'}</Status></dd>
           </div>
-          <div style={{ background: 'var(--bg)', padding: '14px 16px', borderRadius: 10, border: '1px solid var(--border)' }}>
-            <small style={{ color: 'var(--text-muted)', display: 'block', marginBottom: 3 }}>Last Portal Query</small>
-            <b style={{ fontSize: '.84rem', color: 'var(--text-primary)' }}>
-              {sduData.lastFetched ? new Date(sduData.lastFetched).toLocaleTimeString() : 'Recently'}
-            </b>
+          <div>
+            <dt>Last sync</dt>
+            <dd>{sduData.lastFetched ? new Date(sduData.lastFetched).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '—'}</dd>
           </div>
-        </div>
+        </dl>
 
-        <div style={{ background: 'var(--surface-subtle)', border: '1px solid var(--border)', borderRadius: 12, padding: '14px 18px', marginBottom: 24, fontSize: '.82rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-          <b>Security & Authorization Scope:</b> Connected via OAuth 2.0 PKCE (S256). Authorized scopes: <code>profile:read</code>, <code>schedule:read</code>, <code>grades-attendance:read</code>, <code>transcript:read</code>. Token stored securely on the server.
-        </div>
-
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
-          <button
-            type="button"
-            className="btn-primary"
-            onClick={onRefresh}
-            disabled={sduLoading}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 18px', fontSize: '.88rem' }}
-          >
-            <Icons.Refresh size={15} className={sduLoading ? "spinning" : ""} />
-            {sduLoading ? 'Refreshing Live Data…' : 'Refresh Live Portal Data'}
+        <footer className="card-foot">
+          <button type="button" className="btn-ghost" onClick={onRefresh} disabled={sduLoading}>
+            <Icons.Refresh size={15} className={sduLoading ? 'spinning' : ''} />
+            {sduLoading ? 'Refreshing…' : 'Refresh data'}
           </button>
-
-          <button
-            type="button"
-            className="btn-ghost"
-            onClick={onDisconnect}
-            style={{ color: 'var(--danger)', borderColor: 'var(--danger-border)', background: 'var(--danger-dim)', fontSize: '.88rem' }}
-          >
-            Disconnect SDU Account
+          <button type="button" className="btn-danger" onClick={onDisconnect}>
+            Disconnect SDU
           </button>
-        </div>
-      </div>
+        </footer>
+      </article>
     </div>
   )
 }
 
-
-/* ─── NOTIFICATIONS / ALERTS TAB ─────────────────────────────────── */
+/* ─── NOTIFICATIONS TAB ──────────────────────────────────────────── */
 function AlertsTab({ token, onUnreadChange, onSelectTab }) {
   const [notifs, setNotifs]   = useState(null)
   const [error, setError]     = useState('')
@@ -2929,150 +2022,50 @@ function AlertsTab({ token, onUnreadChange, onSelectTab }) {
     finally { setMarking(false) }
   }
 
-  if (error)  return <div className="error" style={{ margin: '40px 0' }}>{error}</div>
-  if (!notifs) return (
-    <div className="loading">
-      <div className="loading-spinner" />
-      Loading notifications…
-    </div>
-  )
+  if (error) return <div className="page page-narrow"><div className="alert-box alert-danger">{error}</div></div>
+  if (!notifs) return <PageLoader label="Loading notifications…" />
 
   const unreadCount = notifs.filter(n => !n.read).length
 
-  const getNotifIconInfo = type => {
-    switch (type) {
-      case 'low_grade':
-        return {
-          icon: <Icons.AlertTriangle size={18} />,
-          pill: 'pill-amber',
-        }
-      case 'low_attendance':
-        return {
-          icon: <Icons.Calendar size={18} />,
-          pill: 'pill-danger',
-        }
-      case 'critical':
-      case 'danger':
-        return {
-          icon: <Icons.AlertTriangle size={18} />,
-          pill: 'pill-danger',
-        }
-      case 'success':
-        return {
-          icon: <Icons.CheckCircle size={18} />,
-          pill: 'pill-emerald',
-        }
-      case 'info':
-      default:
-        return {
-          icon: <Icons.Bell size={18} />,
-          pill: 'pill-purple',
-        }
-    }
-  }
-
   return (
-    <div className="page-fade">
-      <PageHeader
-        badge="SDU NOTIFICATIONS"
-        title="Academic Alerts & Notifications"
-        subtitle={unreadCount > 0 ? `${unreadCount} unread academic notification${unreadCount > 1 ? 's' : ''}` : 'All caught up! No unread notifications.'}
-        actions={
-          unreadCount > 0 && (
-            <button
-              type="button"
-              className="btn-ghost"
-              onClick={markAll}
-              disabled={marking}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-            >
-              <Icons.Check size={14} /> {marking ? 'Marking…' : 'Mark all read'}
-            </button>
-          )
-        }
-      />
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 840 }}>
-        {notifs.length === 0 ? (
-          <article className="panel" style={{ padding: '60px 20px', textAlign: 'center' }}>
-            <Icons.CheckCircle size={36} color="var(--success)" style={{ marginBottom: 12 }} />
-            <h3 style={{ margin: '0 0 6px', fontSize: '1.05rem', color: 'var(--text-primary)' }}>You're all caught up!</h3>
-            <p style={{ margin: 0, fontSize: '.88rem', color: 'var(--text-secondary)' }}>
-              No notifications or academic warnings on your account.
-            </p>
-          </article>
-        ) : (
-          notifs.map(n => {
-            const { icon, pill } = getNotifIconInfo(n.type)
-            return (
-              <div
-                key={n.id}
-                className={`notif-item-v2 ${n.read ? '' : 'unread'}`}
-                style={{ padding: '16px 20px', border: '1px solid var(--border)', background: n.read ? 'var(--surface)' : 'var(--primary-dim)' }}
-                onClick={() => !n.read && markRead(n.id)}
-              >
-                <div className={`notif-item-icon ${pill}`} style={{ width: 42, height: 42 }}>
-                  {icon}
-                </div>
-                <div className="notif-item-content">
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-                    <div className="notif-item-title" style={{ fontSize: '.95rem' }}>{n.title}</div>
-                    <span className="notif-item-time" style={{ margin: 0 }}>{timeAgo(n.created_at)}</span>
-                  </div>
-                  <div className="notif-item-msg" style={{ WebkitLineClamp: 3, fontSize: '.86rem', marginTop: 4 }}>
-                    {n.detail}
-                  </div>
-                  {n.course && (
-                    <div style={{ marginTop: 8 }}>
-                      <span className="badge-chip"><code>{n.course}</code></span>
-                    </div>
-                  )}
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }} onClick={e => e.stopPropagation()}>
-                    <button
-                      type="button"
-                      className="notif-action-btn"
-                      onClick={() => onSelectTab && onSelectTab('transcript')}
-                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                    >
-                      <Icons.Chart size={13} /> View Grades
-                    </button>
-                    <a
-                      className="notif-action-btn"
-                      href={`mailto:advisor@sdu.edu.kz?subject=Regarding ${encodeURIComponent(n.course || 'Academic Alert')}`}
-                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                    >
-                      <Icons.Mail size={13} /> Contact Instructor
-                    </a>
-                  </div>
-                </div>
-                <div className="notif-item-right">
-                  {!n.read && <span className="notif-unread-dot" title="Unread" />}
-                  {!n.read && (
-                    <button
-                      type="button"
-                      className="notif-mark-btn"
-                      title="Mark as read"
-                      aria-label="Mark as read"
-                      onClick={e => {
-                        e.stopPropagation()
-                        markRead(n.id)
-                      }}
-                    >
-                      <Icons.Check size={14} />
-                    </button>
-                  )}
-                </div>
-              </div>
-            )
-          })
+    <div className="page page-narrow page-fade">
+      <div className="toolbar">
+        <span className="muted">{unreadCount > 0 ? `${unreadCount} unread` : 'All caught up'}</span>
+        {unreadCount > 0 && (
+          <button type="button" className="btn-ghost btn-sm" onClick={markAll} disabled={marking}>
+            <Icons.Check size={14} /> {marking ? 'Marking…' : 'Mark all read'}
+          </button>
         )}
       </div>
+
+      <article className="card card-flush">
+        {notifs.length === 0 ? (
+          <EmptyState icon={<Icons.CheckCircle size={20} />} title="You're all caught up" text="No academic warnings on your account." />
+        ) : (
+          <ul className="notif-list">
+            {notifs.map(n => (
+              <NotifRow key={n.id} n={n} onOpen={() => !n.read && markRead(n.id)}>
+                {n.course && (
+                  <div className="notif-actions" onClick={e => e.stopPropagation()}>
+                    <button type="button" className="link-btn" onClick={() => onSelectTab && onSelectTab('transcript')}>
+                      View grades
+                    </button>
+                    <a className="link-btn" href={`mailto:advisor@sdu.edu.kz?subject=Regarding ${encodeURIComponent(n.course)}`}>
+                      Contact advisor
+                    </a>
+                  </div>
+                )}
+              </NotifRow>
+            ))}
+          </ul>
+        )}
+      </article>
     </div>
   )
 }
 
 /* ─── AVATAR DROPDOWN ─────────────────────────────────────────────── */
-function AvatarMenu({ user, logout, token, onUpdateUser }) {
+function AvatarMenu({ user, logout, token, onUpdateUser, onOpenProfile }) {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(false)
   const [nameVal, setNameVal] = useState(user?.name || '')
@@ -3110,9 +2103,10 @@ function AvatarMenu({ user, logout, token, onUpdateUser }) {
   }
 
   return (
-    <div style={{ position: 'relative' }} ref={ref}>
+    <div className="popover-wrap" ref={ref}>
       <button
-        className="avatar-btn"
+        type="button"
+        className="avatar"
         onClick={() => setOpen(v => !v)}
         aria-label="User menu"
         aria-expanded={open}
@@ -3120,58 +2114,46 @@ function AvatarMenu({ user, logout, token, onUpdateUser }) {
         {initials(user?.name)}
       </button>
       {open && (
-        <div className="avatar-dropdown">
-          <div className="avatar-dropdown-header">
+        <div className="popover menu">
+          <div className="menu-head">
             <b>{user?.name ?? 'User'}</b>
-            <span>{user?.student_id ? `ID: ${user.student_id}` : (user?.email ?? user?.id ?? '')}</span>
+            <span>{user?.student_id ? `ID ${user.student_id}` : (user?.email ?? user?.id ?? '')}</span>
           </div>
 
           {editing ? (
-            <form onSubmit={saveName} style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
-              <label style={{ fontSize: '.75rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>
-                Change Display Name:
-              </label>
+            <form onSubmit={saveName} className="menu-form">
+              <label htmlFor="display-name">Display name</label>
               <input
+                id="display-name"
+                className="input"
                 type="text"
                 value={nameVal}
                 onChange={e => setNameVal(e.target.value)}
-                style={{ width: '100%', padding: '6px 8px', fontSize: '.84rem', borderRadius: 6, border: '1px solid var(--border)', marginBottom: 8 }}
                 autoFocus
               />
-              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                <button
-                  type="button"
-                  onClick={() => setEditing(false)}
-                  style={{ background: 'none', border: 'none', fontSize: '.78rem', color: 'var(--text-muted)', cursor: 'pointer' }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={saving || !nameVal.trim()}
-                  className="btn-primary"
-                  style={{ padding: '4px 10px', fontSize: '.78rem' }}
-                >
+              <div className="menu-form-actions">
+                <button type="button" className="btn-ghost btn-sm" onClick={() => setEditing(false)}>Cancel</button>
+                <button type="submit" className="btn-primary btn-sm" disabled={saving || !nameVal.trim()}>
                   {saving ? 'Saving…' : (msg || 'Save')}
                 </button>
               </div>
             </form>
           ) : (
-            <button
-              className="dropdown-item"
-              onClick={() => { setEditing(true); setNameVal(user?.name || '') }}
-              style={{ display: 'flex', alignItems: 'center', gap: 8 }}
-            >
-              <Icons.Edit size={14} /> Edit Name
-            </button>
+            <>
+              {onOpenProfile && (
+                <button type="button" className="menu-item" onClick={() => { setOpen(false); onOpenProfile() }}>
+                  <Icons.User size={15} /> Profile
+                </button>
+              )}
+              <button type="button" className="menu-item" onClick={() => { setEditing(true); setNameVal(user?.name || '') }}>
+                <Icons.Edit size={15} /> Edit name
+              </button>
+            </>
           )}
 
-          <button
-            className="dropdown-item danger"
-            onClick={() => { setOpen(false); logout() }}
-            style={{ display: 'flex', alignItems: 'center', gap: 8 }}
-          >
-            <Icons.SignOut size={14} /> Sign out
+          <div className="menu-sep" />
+          <button type="button" className="menu-item danger" onClick={() => { setOpen(false); logout() }}>
+            <Icons.SignOut size={15} /> Sign out
           </button>
         </div>
       )}
@@ -3179,7 +2161,26 @@ function AvatarMenu({ user, logout, token, onUpdateUser }) {
   )
 }
 
-/* ─── STUDENT SHELL (Unified SDU Portal) ──────────────────────────── */
+/* ─── STUDENT SHELL ──────────────────────────────────────────────── */
+const STUDENT_NAV = [
+  { id: 'dashboard',  label: 'Overview',   icon: Icons.Home },
+  { id: 'schedule',   label: 'Schedule',   icon: Icons.Calendar },
+  { id: 'transcript', label: 'Grades',     icon: Icons.Book },
+  { id: 'attendance', label: 'Attendance', icon: Icons.CheckCircle },
+]
+
+function Brand({ subtitle }) {
+  return (
+    <div className="brand">
+      <div className="brand-mark">S</div>
+      <div className="brand-text">
+        <b>StudyMate</b>
+        {subtitle && <span>{subtitle}</span>}
+      </div>
+    </div>
+  )
+}
+
 function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
   const [tab, setTab] = useState('dashboard')
   const [unread, setUnread] = useState(0)
@@ -3259,6 +2260,11 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
     loadSduLiveData()
   }, [checkSduStatus, loadSduLiveData])
 
+  const showToast = (text, ms = 3500) => {
+    setSduToast(text)
+    setTimeout(() => setSduToast(''), ms)
+  }
+
   const handleSduConnect = async () => {
     try {
       const callbackUri = getSduCallbackUri()
@@ -3281,14 +2287,12 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
       const res = await api('/api/sdu/sync', token, { method: 'POST' })
       setSduStatus(prev => ({ ...prev, connected: true, demo_mode: res.demo_mode ?? prev.demo_mode, updated_at: res.updated_at }))
       await loadSduLiveData()
-      setSduToast(res.demo_mode ? 'Demo SDU data updated!' : 'SDU Platform synchronized!')
-      setTimeout(() => setSduToast(''), 3500)
+      showToast(res.demo_mode ? 'Demo data updated' : 'Synced with SDU')
     } catch (e) {
       if (e.message && (e.message.includes('reconnect') || e.message.includes('expired'))) {
         setSduStatus({ connected: false })
       }
-      setSduToast(e.message || 'Sync failed')
-      setTimeout(() => setSduToast(''), 4000)
+      showToast(e.message || 'Sync failed', 4000)
     } finally {
       setSduLoading(false)
     }
@@ -3301,127 +2305,158 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
       setSduStatus({ connected: false, demo_mode: false })
       setSduData({ profile: null, schedule: null, transcript: null, attendance: null, lastFetched: null, error: null })
       setTab('dashboard')
-      setSduToast('SDU Platform disconnected.')
-      setTimeout(() => setSduToast(''), 3500)
+      showToast('SDU account disconnected')
     } catch (e) {
       alert(e.message || 'Disconnect failed')
     }
   }
 
-  const tabs = [
-    { id: 'dashboard',  label: 'Dashboard' },
-    { id: 'schedule',   label: 'Schedule' },
-    { id: 'transcript', label: 'Transcript & Grades' },
-    { id: 'attendance', label: 'Attendance' },
-    { id: 'profile',    label: 'SDU Profile' },
-  ]
+  const connected = !!sduStatus?.connected
+  const firstName = (sduData.profile?.fullname || user.name || '').split(' ')[0]
+  const classCount = sduData.schedule?.length || 0
+  const courseCount = sduData.transcript?.length || 0
+  const pageTitles = {
+    dashboard:  [`Good ${timeOfDay()}, ${firstName}`, fmtDate()],
+    schedule:   ['Schedule', connected && classCount ? `${classCount} classes a week` : null],
+    transcript: ['Grades', connected && courseCount ? `${courseCount} courses on your transcript` : null],
+    attendance: ['Attendance', connected ? 'How much of each course you have attended' : null],
+    profile:    ['Profile', null],
+    alerts:     ['Notifications', null],
+  }
+  const [title, subtitle] = pageTitles[tab] || pageTitles.dashboard
+
+  const syncedAt = sduData.lastFetched
+    ? new Date(sduData.lastFetched).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : null
 
   return (
-    <div className="app">
-      <nav className="topnav">
-        {/* Left: logo + brand */}
-        <div className="nav-left">
-          <div className="logo">S</div>
-          <div className="brand-text">
-            <b>StudyMate</b>
-            <span>SDU Performance Monitor</span>
-          </div>
+    <div className="shell">
+      <aside className="sidebar">
+        <Brand subtitle="SDU student" />
+
+        <nav className="side-nav" aria-label="Main">
+          {STUDENT_NAV.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              type="button"
+              className={`side-link ${tab === id ? 'active' : ''}`}
+              aria-current={tab === id ? 'page' : undefined}
+              onClick={() => setTab(id)}
+            >
+              <Icon size={18} />
+              <span>{label}</span>
+            </button>
+          ))}
+        </nav>
+
+        <div className="side-group">
+          <span className="side-label">Tools</span>
+          <button type="button" className="side-link" onClick={() => setShowWhatIf(true)}>
+            <Icons.Sliders size={18} />
+            <span>What-if planner</span>
+          </button>
+          <button
+            type="button"
+            className={`side-link ${tab === 'profile' ? 'active' : ''}`}
+            onClick={() => setTab('profile')}
+          >
+            <Icons.User size={18} />
+            <span>Profile</span>
+          </button>
         </div>
 
-        {/* Center: tabs */}
-        <div className="nav-center">
-          <div className="tabs-nav">
-            {tabs.map(t => (
-              <button
-                key={t.id}
-                className={`tab-btn ${tab === t.id ? 'tab-active' : ''}`}
-                onClick={() => setTab(t.id)}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Right: SDU badge + ThemeToggle + bell + avatar */}
-        <div className="nav-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          {sduStatus?.connected ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <div
-                className="sdu-nav-badge"
-                onClick={() => setTab('profile')}
-                style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
-                title={sduStatus?.demo_mode ? 'Connected via Demo SDU (external server offline)' : `Connected to SDU Platform. Last updated: ${sduStatus.updated_at ? new Date(sduStatus.updated_at).toLocaleString() : 'Recently'}`}
-              >
-                <span className={`sdu-dot ${sduStatus?.demo_mode ? 'amber-dot' : 'pulse-dot'}`} style={sduStatus?.demo_mode ? { background: '#F59E0B', boxShadow: '0 0 6px rgba(245, 158, 11, 0.6)' } : {}} />
-                <span>{sduStatus?.demo_mode ? 'SDU Demo Mode' : 'SDU Connected'}</span>
+        <div className="side-foot">
+          {connected ? (
+            <div className="sync-row">
+              <div className="sync-text">
+                <Status tone={sduStatus?.demo_mode ? 'warning' : 'success'}>
+                  {sduStatus?.demo_mode ? 'Demo data' : 'SDU connected'}
+                </Status>
+                {syncedAt && <small>Updated {syncedAt}</small>}
               </div>
               <button
                 type="button"
-                className="sdu-sync-nav-btn"
+                className="icon-btn icon-btn-sm"
                 onClick={handleSduSync}
                 disabled={sduLoading}
-                title="Sync latest data from SDU Platform"
-                aria-label="Sync SDU Data"
+                title="Sync with SDU"
+                aria-label="Sync with SDU"
               >
-                <Icons.Refresh size={14} className={sduLoading ? "spinning" : ""} color={sduLoading ? "var(--primary)" : "var(--text-secondary)"} />
+                <Icons.Refresh size={15} className={sduLoading ? 'spinning' : ''} />
               </button>
             </div>
           ) : (
-            <button
-              type="button"
-              className="sdu-nav-btn"
-              onClick={handleSduConnect}
-              title="Connect your official SDU Platform account"
-            >
-              <span className="sdu-badge">SDU</span>
-              <span>Connect SDU</span>
+            <button type="button" className="btn-primary btn-block" onClick={handleSduConnect}>
+              Connect SDU
             </button>
           )}
-
-          <button
-            type="button"
-            className="what-if-nav-btn"
-            onClick={() => setShowWhatIf(true)}
-            title="Open Grade Planner (What-If Calculator)"
-          >
-            <Icons.Sliders size={14} color="var(--primary)" />
-            <span>What-If</span>
-          </button>
-
-          {toggleTheme && <ThemeToggle theme={theme} toggleTheme={toggleTheme} />}
-
-          <NotificationsDropdown
-            token={token}
-            unread={unread}
-            onUnreadChange={setUnread}
-            onSelectTab={setTab}
-          />
-          <AvatarMenu user={user} logout={logout} token={token} onUpdateUser={onUpdateUser} />
         </div>
+      </aside>
+
+      <div className="main">
+        <header className="topbar">
+          <div className="topbar-title">
+            <h1>{title}</h1>
+            {subtitle && <p>{subtitle}</p>}
+          </div>
+          <div className="topbar-actions">
+            <button
+              type="button"
+              className="icon-btn mobile-only"
+              onClick={() => setShowWhatIf(true)}
+              title="What-if planner"
+              aria-label="What-if planner"
+            >
+              <Icons.Sliders size={18} />
+            </button>
+            {toggleTheme && <ThemeToggle theme={theme} toggleTheme={toggleTheme} />}
+            <NotificationsDropdown
+              token={token}
+              unread={unread}
+              onUnreadChange={setUnread}
+              onSelectTab={setTab}
+            />
+            <AvatarMenu
+              user={user}
+              logout={logout}
+              token={token}
+              onUpdateUser={onUpdateUser}
+              onOpenProfile={() => setTab('profile')}
+            />
+          </div>
+        </header>
+
+        <main className="content">
+          {tab === 'dashboard'  && <DashboardTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} setTab={setTab} token={token} />}
+          {tab === 'schedule'   && <ScheduleTab  sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} />}
+          {tab === 'transcript' && <TranscriptTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} />}
+          {tab === 'attendance' && <AttendanceTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} />}
+          {tab === 'profile'    && <SduProfileTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onDisconnect={handleSduDisconnect} onRefresh={loadSduLiveData} user={user} />}
+          {tab === 'alerts'     && <AlertsTab    token={token} onUnreadChange={setUnread} onSelectTab={setTab} />}
+        </main>
+      </div>
+
+      <nav className="bottom-nav" aria-label="Main">
+        {STUDENT_NAV.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            type="button"
+            className={`bottom-link ${tab === id ? 'active' : ''}`}
+            aria-current={tab === id ? 'page' : undefined}
+            onClick={() => setTab(id)}
+          >
+            <Icon size={20} />
+            <span>{label}</span>
+          </button>
+        ))}
       </nav>
 
       {sduToast && (
-        <div style={{
-          position: 'fixed', bottom: 24, right: 24, zIndex: 9999,
-          background: '#111827', color: '#fff', padding: '12px 18px',
-          borderRadius: 10, fontSize: '.86rem', fontWeight: 600,
-          boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
-          display: 'flex', alignItems: 'center', gap: 8
-        }}>
-          <Icons.CheckCircle size={16} color="#10B981" />
+        <div className="toast" role="status">
+          <Icons.CheckCircle size={16} />
           {sduToast}
         </div>
       )}
-
-      <main className="content">
-        {tab === 'dashboard'  && <DashboardTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRefresh={loadSduLiveData} user={user} setTab={setTab} onOpenWhatIf={() => setShowWhatIf(true)} token={token} />}
-        {tab === 'schedule'   && <ScheduleTab  sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRefresh={loadSduLiveData} />}
-        {tab === 'transcript' && <TranscriptTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRefresh={loadSduLiveData} onOpenWhatIf={() => setShowWhatIf(true)} />}
-        {tab === 'attendance' && <AttendanceTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRefresh={loadSduLiveData} />}
-        {tab === 'profile'    && <SduProfileTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onDisconnect={handleSduDisconnect} onRefresh={loadSduLiveData} user={user} />}
-        {tab === 'alerts'     && <AlertsTab    token={token} onUnreadChange={setUnread} onSelectTab={setTab} />}
-      </main>
 
       {showWhatIf && (
         <WhatIfModal
@@ -3478,97 +2513,82 @@ function TeacherStudentModal({ studentId, token, onClose }) {
   }
 
   return (
-    <div className="whatif-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="whatif-modal" style={{ maxWidth: 640 }}>
-        <div className="whatif-header">
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal modal-lg">
+        <div className="modal-head">
           <div>
-            <span className="eyebrow">Academic Intervention & Profile</span>
-            <h2>{data?.student?.name ?? 'Student Profile'}</h2>
-            <small style={{ color: 'var(--text-secondary)' }}>ID: {studentId} · {data?.student?.cohort}</small>
+            <h2>{data?.student?.name ?? 'Student'}</h2>
+            <p>{studentId}{data?.student?.cohort ? ` · ${data.student.cohort}` : ''}</p>
           </div>
-          <button type="button" className="close-btn" onClick={onClose}><Icons.Close size={18} /></button>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close"><Icons.Close size={18} /></button>
         </div>
-        <div className="whatif-body" style={{ maxHeight: '70vh', overflowY: 'auto' }}>
+        <div className="modal-body modal-scroll">
           {loading ? (
-            <div className="loading" style={{ minHeight: 180 }}>
-              <div className="loading-spinner" />
-              Loading student details…
-            </div>
+            <PageLoader label="Loading student…" />
           ) : data ? (
             <>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12, marginBottom: 16 }}>
-                <div style={{ background: 'var(--paper)', padding: '12px 14px', borderRadius: 'var(--radius-sm)' }}>
-                  <small style={{ color: 'var(--text-secondary)', display: 'block' }}>Attendance</small>
-                  <strong style={{ fontSize: '1.25rem', color: data.attendance < 75 ? 'var(--danger)' : 'var(--success)' }}>
-                    {data.attendance}%
-                  </strong>
+              <div className="mini-stats">
+                <div>
+                  <span>Attendance</span>
+                  <b className={`tone-${data.attendance < 75 ? 'danger' : 'success'}`}>{data.attendance}%</b>
                 </div>
-                <div style={{ background: 'var(--paper)', padding: '12px 14px', borderRadius: 'var(--radius-sm)' }}>
-                  <small style={{ color: 'var(--text-secondary)', display: 'block' }}>Risk Status</small>
-                  <strong style={{ fontSize: '.9rem', color: data.risk_factors.length ? 'var(--danger)' : 'var(--success)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                    {data.risk_factors.length ? (
-                      <><Icons.AlertTriangle size={15} /> {data.risk_factors.length} active risk signal(s)</>
-                    ) : (
-                      <><Icons.CheckCircle size={15} /> Good standing</>
-                    )}
-                  </strong>
+                <div>
+                  <span>Risk signals</span>
+                  <b className={`tone-${data.risk_factors.length ? 'danger' : 'success'}`}>{data.risk_factors.length || 'None'}</b>
                 </div>
               </div>
 
               {data.risk_factors.length > 0 && (
-                <div style={{ background: '#FFF1F2', border: '1px solid #FECDD3', padding: '10px 14px', borderRadius: 'var(--radius-sm)', marginBottom: 16 }}>
-                  <b style={{ color: '#BE123C', fontSize: '.82rem', display: 'block', marginBottom: 4 }}>Active Risk Signals:</b>
-                  <ul style={{ margin: 0, paddingLeft: 18, fontSize: '.8rem', color: '#9F1239' }}>
-                    {data.risk_factors.map((r, i) => (
-                      <li key={i}>{r.detail} {r.courses?.length ? `(${r.courses.join(', ')})` : ''}</li>
-                    ))}
-                  </ul>
-                </div>
+                <ul className="risk-list">
+                  {data.risk_factors.map((r, i) => (
+                    <li key={i}>
+                      <span className="dot dot-danger" />
+                      {r.detail}{r.courses?.length ? ` (${r.courses.join(', ')})` : ''}
+                    </li>
+                  ))}
+                </ul>
               )}
 
-              <h3 style={{ fontSize: '.95rem', margin: '14px 0 8px' }}>Enrolled Courses (Spring 2026)</h3>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
+              <h3 className="section-title">Courses this term</h3>
+              <ul className="plain-list">
                 {data.courses.map((c, i) => (
-                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--paper)', padding: '8px 12px', borderRadius: 6, fontSize: '.82rem' }}>
-                    <div>
-                      <b>{c.course}</b> <span style={{ color: 'var(--text-muted)' }}>({c.code})</span>
-                    </div>
-                    <strong>{c.score !== null ? `${c.score}%` : 'In Progress'}</strong>
-                  </div>
+                  <li key={i}>
+                    <span><b>{c.course}</b> <span className="muted">{c.code}</span></span>
+                    <b>{c.score !== null ? `${c.score}%` : 'In progress'}</b>
+                  </li>
                 ))}
-              </div>
+              </ul>
 
-              <h3 style={{ fontSize: '.95rem', margin: '14px 0 8px' }}>Record Teacher Advisory / Intervention</h3>
-              <form onSubmit={submitIntervention} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <label style={{ fontSize: '.82rem' }}>
-                  Action Type
-                  <select value={actionType} onChange={e => setActionType(e.target.value)} style={{ width: '100%', marginTop: 4 }}>
+              <h3 className="section-title">Add a note</h3>
+              <form onSubmit={submitIntervention} className="form-stack">
+                <label>
+                  Type
+                  <select value={actionType} onChange={e => setActionType(e.target.value)}>
                     <option value="Consultation Request">Academic Consultation Request</option>
                     <option value="Tutoring Referral">Tutoring Center Referral</option>
                     <option value="Attendance Warning">Formal Attendance Warning</option>
                     <option value="Commendation">Academic Commendation</option>
                   </select>
                 </label>
-                <label style={{ fontSize: '.82rem' }}>
-                  Advisory Notes & Instructions
+                <label>
+                  Note
                   <textarea
                     rows={3}
                     value={notes}
                     onChange={e => setNotes(e.target.value)}
-                    placeholder="Enter actionable guidance or notes for this student..."
-                    style={{ width: '100%', padding: '8px 10px', fontSize: '.82rem', borderRadius: 6, border: '1px solid var(--border)', marginTop: 4, fontFamily: 'inherit' }}
+                    placeholder="What should the student do next?"
                   />
                 </label>
-                {msg && <div style={{ background: 'var(--success-dim)', color: '#15803D', padding: '8px 12px', borderRadius: 6, fontSize: '.8rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}><Icons.CheckCircle size={15} /> {msg}</div>}
-                {err && <div className="error">{err}</div>}
-                <button type="submit" className="btn-primary" disabled={!notes.trim() || submitting} style={{ alignSelf: 'flex-start', marginTop: 4, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                  {submitting ? 'Sending…' : <><Icons.Send size={15} /> Send Advisory Note</>}
+                {msg && <div className="alert-box alert-success"><Icons.CheckCircle size={15} /> {msg}</div>}
+                {err && <div className="alert-box alert-danger">{err}</div>}
+                <button type="submit" className="btn-primary" disabled={!notes.trim() || submitting} style={{ alignSelf: 'flex-start' }}>
+                  {submitting ? 'Sending…' : <><Icons.Send size={15} /> Send note</>}
                 </button>
               </form>
 
               {interventions.length > 0 && (
-                <div style={{ marginTop: 20 }}>
-                  <h4 style={{ fontSize: '.85rem', color: 'var(--text-secondary)', marginBottom: 8 }}>Past Advisory History ({interventions.length})</h4>
+                <>
+                  <h3 className="section-title">History · {interventions.length}</h3>
                   {interventions.map((inv, i) => (
                     <div className="intervention-item" key={i}>
                       <div className="intervention-head">
@@ -3578,12 +2598,14 @@ function TeacherStudentModal({ studentId, token, onClose }) {
                       <p className="intervention-notes">{inv.notes}</p>
                     </div>
                   ))}
-                </div>
+                </>
               )}
             </>
+          ) : err ? (
+            <div className="alert-box alert-danger">{err}</div>
           ) : null}
         </div>
-        <div className="whatif-footer">
+        <div className="modal-foot">
           <button type="button" className="btn-ghost" onClick={onClose}>Close</button>
         </div>
       </div>
@@ -3606,15 +2628,12 @@ function Teacher({ token, user, logout }) {
     ]).then(([s, a]) => { setStudents(s.items); setAnalytics(a) })
   }, [token])
 
-  if (!students || !analytics) return (
-    <div className="loading">
-      <div className="loading-spinner" />
-      Loading authorized class data…
-    </div>
-  )
+  if (!students || !analytics) return <PageLoader label="Loading your students…" />
 
   const atRisk = students.filter(s => s.risk_factors.length)
-  const avgAtt = (students.reduce((a, s) => a + s.attendance, 0) / students.length).toFixed(1)
+  const avgAtt = students.length
+    ? (students.reduce((a, s) => a + s.attendance, 0) / students.length).toFixed(1)
+    : '—'
 
   const exportClassRosterCSV = () => {
     if (!students) return
@@ -3628,9 +2647,8 @@ function Teacher({ token, user, logout }) {
       `"${s.risk_factors.map(r => r.detail).join('; ')}"`
     ])
     const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n')
-    const encodedUri = encodeURI(csvContent)
     const link = document.createElement('a')
-    link.setAttribute('href', encodedUri)
+    link.setAttribute('href', encodeURI(csvContent))
     link.setAttribute('download', 'Class_Watchlist_Roster.csv')
     document.body.appendChild(link)
     link.click()
@@ -3648,157 +2666,93 @@ function Teacher({ token, user, logout }) {
   })
 
   return (
-    <>
-      <header className="page-head page-fade">
-        <div>
-          <span className="eyebrow">Faculty Overview</span>
-          <h1>Class Performance Monitor</h1>
-          <p>Authorized cohort academic intelligence, explainable risk factors, and interventions.</p>
-        </div>
-        <button
-          className="btn-ghost"
-          onClick={exportClassRosterCSV}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-        >
-          <Icons.Download size={14} /> Export Roster (CSV)
-        </button>
-      </header>
-
-      <section className="metrics page-fade">
+    <div className="page page-fade">
+      <section className="metric-grid">
+        <Metric label="Students" value={students.length} foot={<span className="muted">In your scope</span>} />
         <Metric
-          label="Students in Scope"
-          value={students.length}
-          detail="Authorized cohort"
-          icon={<Icons.User size={20} color="var(--primary)" />}
-          colorClass="metric-purple"
-        />
-        <Metric
-          label="At-Risk Students"
+          label="At risk"
           value={atRisk.length}
-          detail="Active risk signals"
-          icon={<Icons.AlertTriangle size={20} color={atRisk.length ? "var(--danger)" : "var(--success)"} />}
-          tone={atRisk.length ? 'warn' : ''}
-          colorClass={atRisk.length ? 'metric-warn' : 'metric-green'}
+          foot={<Status tone={atRisk.length ? 'danger' : 'success'}>{atRisk.length ? 'Need follow-up' : 'Nobody at risk'}</Status>}
         />
-        <Metric
-          label="Avg. Attendance"
-          value={`${avgAtt}%`}
-          detail="Across cohort in scope"
-          icon={<Icons.Calendar size={20} color="#2563EB" />}
-          colorClass="metric-blue"
-        />
-        <Metric
-          label="Correlation"
-          value={analytics.correlation}
-          detail="Association, not causation"
-          icon={<Icons.Chart size={20} color="var(--success)" />}
-          colorClass="metric-green"
-        />
+        <Metric label="Avg. attendance" value={`${avgAtt}%`} foot={<span className="muted">Across the cohort</span>} />
       </section>
 
-      <section className="grid page-fade">
-        <article className="panel wide">
-          <div className="panel-title">
-            <div>
-              <span className="eyebrow">Authorized Students</span>
-              <h2>Risk watchlist</h2>
-              <small style={{ color: 'var(--text-muted)' }}>Click any student row to view full details and record interventions.</small>
-            </div>
+      <div className="toolbar">
+        <Segmented
+          label="Filter students"
+          options={[
+            { id: 'all', label: `All ${students.length}` },
+            { id: 'risk', label: `At risk ${atRisk.length}` },
+            { id: 'good', label: `Good ${students.length - atRisk.length}` },
+          ]}
+          value={filter}
+          onChange={setFilter}
+        />
+        <div className="toolbar-end">
+          <div className="search">
+            <Icons.Search size={15} />
+            <input
+              type="text"
+              className="input"
+              placeholder="Search name or ID"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              aria-label="Search students"
+            />
           </div>
+          <button type="button" className="icon-btn" onClick={exportClassRosterCSV} title="Export roster (CSV)" aria-label="Export roster (CSV)">
+            <Icons.Download size={16} />
+          </button>
+        </div>
+      </div>
 
-          <div className="teacher-toolbar">
-            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-              <span style={{ position: 'absolute', left: 10, display: 'flex', alignItems: 'center', pointerEvents: 'none', color: 'var(--text-muted)' }}>
-                <Icons.Search size={15} />
-              </span>
-              <input
-                type="text"
-                className="teacher-search-input"
-                placeholder="Search by name or ID..."
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                style={{ paddingLeft: 32 }}
-              />
-            </div>
-            <div className="teacher-filter-group">
-              <button
-                type="button"
-                className={`teacher-filter-btn ${filter === 'all' ? 'active' : ''}`}
-                onClick={() => setFilter('all')}
-              >
-                All ({students.length})
-              </button>
-              <button
-                type="button"
-                className={`teacher-filter-btn ${filter === 'risk' ? 'active' : ''}`}
-                onClick={() => setFilter('risk')}
-              >
-                At-Risk ({atRisk.length})
-              </button>
-              <button
-                type="button"
-                className={`teacher-filter-btn ${filter === 'good' ? 'active' : ''}`}
-                onClick={() => setFilter('good')}
-              >
-                Good Standing ({students.length - atRisk.length})
-              </button>
-            </div>
-          </div>
-
-          <div className="student-table">
-            <div className="thead">
-              <span>Student</span>
-              <span>Attendance</span>
-              <span>Risk status</span>
-            </div>
-            {filteredStudents.length ? filteredStudents.map(s => (
-              <div
-                className="trow trow-clickable"
-                key={s.id}
-                onClick={() => setSelectedStudent(s.id)}
-                title="Click to view details & interventions"
-              >
-                <div className="student-info">
-                  <div className="student-avatar">{initials(s.name)}</div>
-                  <div className="student-info-text">
-                    <b>{s.name}</b>
-                    <small>ID: {s.id} · {s.cohort}</small>
-                  </div>
-                </div>
-                <strong style={{ color: s.attendance < 75 ? 'var(--danger)' : 'var(--success)', fontWeight: 700 }}>
-                  {s.attendance}%
-                </strong>
-                <span>
-                  {s.risk_factors.length
-                    ? s.risk_factors.map((r, i) => <em key={i}>{r.detail}</em>)
-                    : <em className="good" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><Icons.Check size={13} /> No active signals</em>
-                  }
-                </span>
-              </div>
-            )) : (
-              <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>
-                No students match your search filter.
-              </div>
-            )}
-          </div>
+      <section className="teacher-grid">
+        <article className="card card-flush">
+          <header className="group-head">
+            <h2>Watchlist</h2>
+            <span>Select a student to add a note</span>
+          </header>
+          {filteredStudents.length ? (
+            <ul className="student-list">
+              {filteredStudents.map(s => (
+                <li key={s.id}>
+                  <button type="button" className="student-row" onClick={() => setSelectedStudent(s.id)}>
+                    <span className="avatar avatar-sm">{initials(s.name)}</span>
+                    <span className="course-main">
+                      <b>{s.name}</b>
+                      <span>{s.id} · {s.cohort}</span>
+                    </span>
+                    <span className="student-risk">
+                      {s.risk_factors.length
+                        ? <Status tone="danger">{s.risk_factors[0].detail}{s.risk_factors.length > 1 ? ` +${s.risk_factors.length - 1}` : ''}</Status>
+                        : <Status tone="success">No risk signals</Status>}
+                    </span>
+                    <span className={`att-value tone-${s.attendance < 75 ? 'danger' : 'success'}`}>{s.attendance}%</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyState title="No students match" text="Try a different search or filter." />
+          )}
         </article>
 
-        <aside>
-          <article className="panel">
-            <span className="eyebrow">Attendance × Grade</span>
-            <h2>Cohort relationship</h2>
-            <ResponsiveContainer width="100%" height={220}>
-              <ScatterChart>
-                <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" />
-                <XAxis dataKey="attendance"    name="Attendance" unit="%" domain={[50, 100]} tick={{ fontSize: 11, fill: '#9CA3AF' }} axisLine={false} tickLine={false} />
-                <YAxis dataKey="average_grade" name="Grade"      unit="%" domain={[40, 100]} tick={{ fontSize: 11, fill: '#9CA3AF' }} axisLine={false} tickLine={false} />
-                <Tooltip cursor={{ strokeDasharray: '3 3' }} />
-                <Scatter data={analytics.points} fill="#F97316" />
-              </ScatterChart>
-            </ResponsiveContainer>
-            <p className="footnote">r = {analytics.correlation}. {analytics.note}</p>
-          </article>
-        </aside>
+        <article className="card">
+          <header className="card-head">
+            <h2>Attendance vs grade</h2>
+            <span className="muted">r = {analytics.correlation}</span>
+          </header>
+          <ResponsiveContainer width="100%" height={220}>
+            <ScatterChart margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
+              <CartesianGrid stroke="var(--border)" />
+              <XAxis dataKey="attendance" name="Attendance" unit="%" domain={[50, 100]} tick={{ fontSize: 11, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} />
+              <YAxis dataKey="average_grade" name="Grade" unit="%" domain={[40, 100]} tick={{ fontSize: 11, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} />
+              <Tooltip cursor={{ strokeDasharray: '3 3' }} />
+              <Scatter data={analytics.points} fill="var(--accent)" />
+            </ScatterChart>
+          </ResponsiveContainer>
+          <p className="footnote">{analytics.note}</p>
+        </article>
       </section>
 
       {selectedStudent && (
@@ -3808,7 +2762,7 @@ function Teacher({ token, user, logout }) {
           onClose={() => setSelectedStudent(null)}
         />
       )}
-    </>
+    </div>
   )
 }
 
@@ -3874,20 +2828,19 @@ function SduCallback({ onLogin }) {
     return (
       <div className="sdu-callback-container">
         <div className="sdu-callback-card">
-          <div className="sdu-callback-badge sdu-badge-error">SDU ERROR</div>
-          <h2>Authorization Failed</h2>
+          <div className="onboard-icon tint-danger"><Icons.AlertTriangle size={24} /></div>
+          <h2>Couldn't connect to SDU</h2>
           <p>{errorMsg}</p>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%', maxWidth: 320, margin: '20px auto 0 auto' }}>
+          <div>
             <button
               type="button"
-              className="btn-primary"
-              style={{ width: '100%', padding: '10px 20px', fontSize: '.9rem' }}
+              className="btn-primary btn-lg"
               onClick={() => {
                 window.history.replaceState({}, '', '/')
                 window.location.href = '/'
               }}
             >
-              ← Return to Sign In
+              Back to sign in
             </button>
           </div>
         </div>
@@ -3898,10 +2851,9 @@ function SduCallback({ onLogin }) {
   return (
     <div className="sdu-callback-container">
       <div className="sdu-callback-card">
-        <div className="sdu-callback-badge">SDU PLATFORM</div>
-        <div className="sdu-spinner" />
-        <h2>Connecting SDU Platform…</h2>
-        <p>Verifying secure PKCE authorization, authenticating your university identity, and syncing your student grades, schedule, and attendance snapshot.</p>
+        <div className="spinner spinner-lg" />
+        <h2>Connecting to SDU…</h2>
+        <p>Syncing your grades, schedule and attendance.</p>
       </div>
     </div>
   )
@@ -3939,24 +2891,25 @@ function App() {
 
   if (session.user.role === 'teacher') {
     return (
-      <div className="app">
-        <nav className="topnav">
-          <div className="nav-left">
-            <div className="logo">S</div>
-            <div className="brand-text">
-              <b>StudyMate</b>
-              <span>Teacher Portal</span>
+      <div className="shell shell-single">
+        <div className="main">
+          <header className="topbar">
+            <div className="topbar-lead">
+              <Brand />
+              <div className="topbar-title">
+                <h1>Class overview</h1>
+                <p>Students in your scope and their risk signals</p>
+              </div>
             </div>
-          </div>
-          <div className="nav-center" />
-          <div className="nav-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
-            <AvatarMenu user={session.user} logout={logout} token={session.access_token} onUpdateUser={updateUser} />
-          </div>
-        </nav>
-        <main className="content">
-          <Teacher token={session.access_token} user={session.user} logout={logout} />
-        </main>
+            <div className="topbar-actions">
+              <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
+              <AvatarMenu user={session.user} logout={logout} token={session.access_token} onUpdateUser={updateUser} />
+            </div>
+          </header>
+          <main className="content">
+            <Teacher token={session.access_token} user={session.user} logout={logout} />
+          </main>
+        </div>
       </div>
     )
   }
