@@ -1078,6 +1078,7 @@ function Login({ onLogin, theme, toggleTheme }) {
   const [password, setPassword]     = useState('')
   const [showPw, setShowPw]         = useState(false)
   const [error, setError]           = useState('')
+  const [fieldErr, setFieldErr]     = useState({})
   const [busy, setBusy]             = useState(false)
 
   // Registration state
@@ -1124,7 +1125,13 @@ function Login({ onLogin, theme, toggleTheme }) {
   }
 
   const submit = async e => {
-    e.preventDefault(); setBusy(true); setError('')
+    e.preventDefault(); setError('')
+    const fe = {}
+    if (!identifier.trim()) fe.identifier = 'Please enter your email or Student ID'
+    if (!password) fe.password = 'Please enter your password'
+    setFieldErr(fe)
+    if (Object.keys(fe).length) return
+    setBusy(true)
     try { onLogin(await api('/api/auth/login', null, { method: 'POST', body: JSON.stringify({ identifier, password }) })) }
     catch (e) { setError(e.message) }
     finally { setBusy(false) }
@@ -1330,7 +1337,7 @@ function Login({ onLogin, theme, toggleTheme }) {
             <button
               type="button"
               className={`segmented-btn ${authMode === 'login' ? 'active' : ''}`}
-              onClick={() => { setAuthMode('login'); setError('') }}
+              onClick={() => { setAuthMode('login'); setError(''); setFieldErr({}) }}
             >
               Sign In
             </button>
@@ -1358,12 +1365,13 @@ function Login({ onLogin, theme, toggleTheme }) {
                     id="identifier"
                     className="input-field"
                     value={identifier}
-                    onChange={e => setIdentifier(e.target.value)}
+                    onChange={e => { setIdentifier(e.target.value); setFieldErr(f => ({ ...f, identifier: '' })) }}
                     placeholder="e.g. 240103118 or student@univ.edu"
                     autoComplete="username"
-                    required
+                    style={fieldErr.identifier ? { borderColor: '#ef4444' } : undefined}
                   />
                 </div>
+                {fieldErr.identifier && <div style={{ color: '#ef4444', fontSize: 13, marginTop: 6 }}>{fieldErr.identifier}</div>}
               </div>
 
               <div className="field-group">
@@ -1380,11 +1388,10 @@ function Login({ onLogin, theme, toggleTheme }) {
                     className="input-field"
                     type={showPw ? 'text' : 'password'}
                     value={password}
-                    onChange={e => setPassword(e.target.value)}
+                    onChange={e => { setPassword(e.target.value); setFieldErr(f => ({ ...f, password: '' })) }}
                     placeholder="Enter your password"
                     autoComplete="current-password"
-                    style={{ paddingRight: 44 }}
-                    required
+                    style={{ paddingRight: 44, ...(fieldErr.password ? { borderColor: '#ef4444' } : {}) }}
                   />
                   <button
                     type="button"
@@ -1396,6 +1403,7 @@ function Login({ onLogin, theme, toggleTheme }) {
                     {showPw ? <Icons.EyeOff size={16} /> : <Icons.Eye size={16} />}
                   </button>
                 </div>
+                {fieldErr.password && <div style={{ color: '#ef4444', fontSize: 13, marginTop: 6 }}>{fieldErr.password}</div>}
               </div>
 
               {error && (
