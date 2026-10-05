@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react'
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
   Bar, BarChart, CartesianGrid, ResponsiveContainer,
@@ -2240,7 +2240,9 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo
             {semesterProgress.map((sp, idx) => (
               <div key={idx} style={{ padding: '10px 12px', background: 'var(--surface-subtle)', borderRadius: 10, textAlign: 'center' }}>
                 <small style={{ color: 'var(--text-muted)', display: 'block', fontSize: '.76rem', fontWeight: 600 }}>{sp.name}</small>
-                <strong style={{ fontSize: '1.2rem', color: sp.gpa >= 3.5 ? 'var(--primary)' : 'var(--text-primary)', display: 'block', margin: '2px 0' }}>{sp.gpa.toFixed(2)}</strong>
+                <strong style={{ fontSize: '1.2rem', color: (sp.gpa || 0) >= 3.5 ? 'var(--primary)' : 'var(--text-primary)', display: 'block', margin: '2px 0' }}>
+                  {typeof sp.gpa === 'number' && !isNaN(sp.gpa) ? sp.gpa.toFixed(2) : '—'}
+                </strong>
                 <span style={{ fontSize: '.74rem', color: 'var(--text-secondary)' }}>{sp.credits} ECTS · {sp.passed} passed</span>
               </div>
             ))}
