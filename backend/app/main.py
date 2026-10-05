@@ -426,10 +426,11 @@ def send_reset_code(req: SendCodeRequest):
     if not user:
         raise HTTPException(status_code=404, detail="No registered account found with this email or Student ID.")
 
-    found_email = repo.get_email_for_user(user["id"])
-    target_email = clean_email
-    if "@" not in clean_email:
-        target_email = found_email or f"{clean_email}@sdu.edu.kz"
+    if "@" in clean_email:
+        target_email = clean_email
+    else:
+        sid = user.get("student_id") or clean_email
+        target_email = f"{sid}@sdu.edu.kz"
 
     code = f"{secrets.randbelow(900000) + 100000}"
     expires_at = time.time() + 900
@@ -438,16 +439,8 @@ def send_reset_code(req: SendCodeRequest):
         repo.create_reset_code(target_email, code, expires_at)
     if user.get("student_id"):
         repo.create_reset_code(user["student_id"], code, expires_at)
-    if found_email:
-        repo.create_reset_code(found_email, code, expires_at)
 
     sent, detail = send_gmail_code(target_email, code)
-    # If student has a personal Gmail alias, also deliver a copy there so they never miss it
-    if found_email and found_email.lower() != target_email.lower():
-        try:
-            send_gmail_code(found_email, code)
-        except Exception:
-            pass
 
     if sent:
         return {

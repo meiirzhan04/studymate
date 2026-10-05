@@ -489,10 +489,9 @@ class SQLiteRepository:
                    WHERE user_id = ? AND identifier LIKE '%@%' 
                    ORDER BY 
                        CASE 
-                           WHEN identifier = 'amirzhanmeirzhan5@gmail.com' THEN 0
+                           WHEN identifier LIKE '%@sdu.edu.kz' THEN 0
                            WHEN identifier LIKE '%@gmail.com' THEN 1 
-                           WHEN identifier NOT LIKE '%@sdu.edu.kz' AND identifier NOT LIKE '%@univ.edu' THEN 2 
-                           ELSE 3 
+                           ELSE 2 
                        END, 
                        rowid DESC 
                    LIMIT 1""",
