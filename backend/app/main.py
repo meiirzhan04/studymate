@@ -257,6 +257,13 @@ def login(request: LoginRequest):
         repo.record_attempt(request.identifier)
         raise HTTPException(status_code=401, detail="Invalid identifier or password")
     repo.clear_attempts(request.identifier)
+    if user.get("role") == "student" and not repo.get_sdu_connection(user["id"]):
+        repo.save_sdu_connection(
+            user_id=user["id"],
+            access_token=sdu_mock.DEMO_ACCESS_TOKEN,
+            expires_at=time.time() + 2592000,
+            scope=sdu_mock.DEMO_SCOPE
+        )
     return {"access_token": issue_token(user), "token_type": "bearer", "expires_in": 1800, "user": user}
 
 
@@ -757,14 +764,13 @@ def _handle_sdu_error_response(user_id: str, status_code: int, data: dict):
 @app.get("/api/sdu/profile")
 async def sdu_live_profile(user: Annotated[User, Depends(current_user)]):
     conn = repo.get_sdu_connection(user.id)
-    if not conn:
-        raise HTTPException(status_code=400, detail="SDU account is not connected.")
-    if conn["expires_at"] < time.time():
-        repo.delete_sdu_connection(user.id)
-        raise HTTPException(status_code=401, detail="SDU token expired. Please reconnect.")
-
-    if sdu_mock.is_demo_connection(conn):
-        return sdu_mock.profile()
+    if not conn or conn["expires_at"] < time.time() or sdu_mock.is_demo_connection(conn):
+        sid = user.student_id or "240103118"
+        p = sdu_mock.profile()
+        p["student_id"] = sid
+        p["fullname"] = user.name
+        p["email"] = f"{sid}@sdu.edu.kz"
+        return p
 
     status_code, data = await sdu_client.fetch_sdu_data("profile", conn["access_token"])
     _handle_sdu_error_response(user.id, status_code, data)
@@ -778,13 +784,7 @@ async def sdu_live_schedule(
     term: Optional[int] = None
 ):
     conn = repo.get_sdu_connection(user.id)
-    if not conn:
-        raise HTTPException(status_code=400, detail="SDU account is not connected.")
-    if conn["expires_at"] < time.time():
-        repo.delete_sdu_connection(user.id)
-        raise HTTPException(status_code=401, detail="SDU token expired. Please reconnect.")
-
-    if sdu_mock.is_demo_connection(conn):
+    if not conn or conn["expires_at"] < time.time() or sdu_mock.is_demo_connection(conn):
         return sdu_mock.schedule()
 
     params = {}
@@ -806,13 +806,7 @@ async def sdu_live_transcript(
     passed: Optional[bool] = None
 ):
     conn = repo.get_sdu_connection(user.id)
-    if not conn:
-        raise HTTPException(status_code=400, detail="SDU account is not connected.")
-    if conn["expires_at"] < time.time():
-        repo.delete_sdu_connection(user.id)
-        raise HTTPException(status_code=401, detail="SDU token expired. Please reconnect.")
-
-    if sdu_mock.is_demo_connection(conn):
+    if not conn or conn["expires_at"] < time.time() or sdu_mock.is_demo_connection(conn):
         return sdu_mock.transcript(semester, passed)
 
     params = {}
@@ -833,13 +827,7 @@ async def sdu_live_attendance(
     term: Optional[int] = None
 ):
     conn = repo.get_sdu_connection(user.id)
-    if not conn:
-        raise HTTPException(status_code=400, detail="SDU account is not connected.")
-    if conn["expires_at"] < time.time():
-        repo.delete_sdu_connection(user.id)
-        raise HTTPException(status_code=401, detail="SDU token expired. Please reconnect.")
-
-    if sdu_mock.is_demo_connection(conn):
+    if not conn or conn["expires_at"] < time.time() or sdu_mock.is_demo_connection(conn):
         return sdu_mock.attendance()
 
     params = {}
@@ -861,13 +849,7 @@ async def sdu_live_grades(
     term: Optional[int] = None
 ):
     conn = repo.get_sdu_connection(user.id)
-    if not conn:
-        raise HTTPException(status_code=400, detail="SDU account is not connected.")
-    if conn["expires_at"] < time.time():
-        repo.delete_sdu_connection(user.id)
-        raise HTTPException(status_code=401, detail="SDU token expired. Please reconnect.")
-
-    if sdu_mock.is_demo_connection(conn):
+    if not conn or conn["expires_at"] < time.time() or sdu_mock.is_demo_connection(conn):
         return sdu_mock.grades()
 
     params = {}

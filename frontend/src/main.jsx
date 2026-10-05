@@ -1706,9 +1706,9 @@ function calcGPA(transcript) {
 
 function calcOverallAttendance(attendanceList) {
   if (!attendanceList || !attendanceList.length) return 100.0
-  const valid = attendanceList.filter(a => a.absence_percent != null && !isNaN(Number(a.absence_percent)))
+  const valid = attendanceList.filter(a => (a.absence_percent != null || a.absence != null) && !isNaN(Number(a.absence_percent ?? a.absence)))
   if (!valid.length) return 100.0
-  const avgAbsence = valid.reduce((sum, a) => sum + Number(a.absence_percent), 0) / valid.length
+  const avgAbsence = valid.reduce((sum, a) => sum + Number(a.absence_percent ?? a.absence), 0) / valid.length
   return Math.max(0, Math.min(100, Math.round((100 - avgAbsence) * 10) / 10))
 }
 
@@ -2483,11 +2483,12 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDem
 
 /* ─── LIVE ATTENDANCE TAB ────────────────────────────────────────── */
 function AttendanceTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo, onRefresh }) {
-  if (!sduStatus?.connected) {
+  const attendanceList = sduData?.attendance || []
+  if (!sduStatus?.connected && !attendanceList.length) {
     return <SduOnboardCard onConnect={onConnect} onConnectDemo={onConnectDemo} />
   }
 
-  if (sduLoading && (!sduData.attendance || !sduData.attendance.length)) {
+  if (sduLoading && (!attendanceList || !attendanceList.length)) {
     return (
       <div className="page-fade" style={{ textAlign: 'center', padding: '60px 20px' }}>
         <div className="sdu-spinner" style={{ margin: '0 auto 20px auto', width: 36, height: 36 }} />
@@ -2496,8 +2497,6 @@ function AttendanceTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDem
       </div>
     )
   }
-
-  const attendanceList = sduData.attendance || []
   const overallAtt = calcOverallAttendance(attendanceList)
   const totalCourses = attendanceList.length
   const warningCourses = attendanceList.filter(a => Number(a.absence_percent) > 20).length
@@ -2638,7 +2637,8 @@ function AttendanceTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDem
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 18, marginBottom: 28 }}>
           {attendanceList.map((item, idx) => {
-            const absence = Number(item.absence_percent || 0)
+            const lessonTitle = item.lesson || item.course_name || item.course_title || item.course || item.subject || item.name || 'Course'
+            const absence = Number(item.absence_percent ?? item.absence ?? 0)
             const attRate = Math.max(0, Math.min(100, Math.round((100 - absence) * 10) / 10))
             const isCritical = absence >= 25
             const isWarning = absence >= 18 && absence < 25
@@ -2650,7 +2650,7 @@ function AttendanceTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDem
               <div key={idx} className="sdu-att-card">
                 <div className="sdu-att-header">
                   <div>
-                    <h4>{item.lesson}</h4>
+                    <h4>{lessonTitle}</h4>
                     <small>Term {item.term ?? '1'} · {item.year ?? '2026'}</small>
                   </div>
                   <span className={`status-badge ${statusClass}`}>{statusLabel}</span>
@@ -3111,9 +3111,9 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
       ])
 
       const prof = profRes.status === 'fulfilled' ? profRes.value : null
-      const sched = schedRes.status === 'fulfilled' ? (schedRes.value?.schedule || []) : []
-      const trans = transRes.status === 'fulfilled' ? (transRes.value?.courses || []) : []
-      const att = attRes.status === 'fulfilled' ? (attRes.value?.attendance || []) : []
+      const sched = schedRes.status === 'fulfilled' ? (Array.isArray(schedRes.value) ? schedRes.value : (schedRes.value?.schedule || schedRes.value?.items || [])) : []
+      const trans = transRes.status === 'fulfilled' ? (Array.isArray(transRes.value) ? transRes.value : (transRes.value?.courses || transRes.value?.transcript || [])) : []
+      const att = attRes.status === 'fulfilled' ? (Array.isArray(attRes.value) ? attRes.value : (attRes.value?.attendance || attRes.value?.items || attRes.value?.data || [])) : []
       const lastF = prof?.fetched_at || schedRes.value?.fetched_at || transRes.value?.fetched_at || new Date().toISOString()
 
       // Check for reconnect requirement
@@ -3138,11 +3138,8 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
   }, [token])
 
   useEffect(() => {
-    checkSduStatus().then(st => {
-      if (st?.connected) {
-        loadSduLiveData()
-      }
-    })
+    checkSduStatus()
+    loadSduLiveData()
   }, [checkSduStatus, loadSduLiveData])
 
   const handleSduConnect = async () => {

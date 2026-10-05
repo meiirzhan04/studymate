@@ -348,6 +348,15 @@ class SQLiteRepository:
         ]
         db.executemany("INSERT INTO notifications (student_id, type, title, detail, course, read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", notifs)
 
+        # Seed initial SDU connection for demo student accounts so attendance & schedule are active
+        now_iso = datetime.now(timezone.utc).isoformat()
+        exp_time = time.time() + 31536000  # 1 year
+        for uid in ["u-240103118", "u-240103188", "u-240103120"]:
+            db.execute(
+                "INSERT OR REPLACE INTO sdu_connections (user_id, access_token, expires_at, scope, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (uid, "demo_access_token_offline", exp_time, "offline_access profile:read schedule:read transcript:read grades-attendance:read", now_iso)
+            )
+
     def _seed(self, db):
         users = [
             ("u-240103118", "Meirzhan", "student", "240103118", None, "student1-salt", "studymate2026"),
