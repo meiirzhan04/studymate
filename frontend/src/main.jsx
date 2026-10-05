@@ -1598,26 +1598,57 @@ function Login({ onLogin, theme, toggleTheme }) {
 
 /* ─── WHAT-IF CALCULATOR MODAL ───────────────────────────────────── */
 function WhatIfModal({ token, courses, onClose }) {
-  const [courseCode, setCourseCode]    = useState(courses[0]?.code ?? '')
+  const [availableCourses, setAvailableCourses] = useState([])
+  const [courseCode, setCourseCode]    = useState('')
   const [component, setComponent]     = useState('')
-  const [target, setTarget]           = useState(80)
+  const [target, setTarget]           = useState(85)
   const [components, setComponents]   = useState([])
   const [result, setResult]           = useState(null)
   const [loading, setLoading]         = useState(false)
   const [loadingComp, setLoadingComp] = useState(false)
   const [err, setErr]                 = useState('')
 
-  // Load components when course changes
+  // 1. Initialize from props and auto-fetch spring-2026 courses
+  useEffect(() => {
+    const list = (courses || []).map(c => ({
+      code: c.code || c.course_code || '',
+      course: c.course || c.course_name || c.lesson || 'Course',
+      score: c.score ?? c.grade ?? c.grade_percent ?? null
+    })).filter(c => c.code)
+
+    if (list.length) {
+      setAvailableCourses(list)
+      setCourseCode(list[0].code)
+    }
+
+    if (token) {
+      api('/api/student/grades?semester=spring-2026', token)
+        .then(d => {
+          if (d?.items?.length) {
+            setAvailableCourses(d.items)
+            setCourseCode(prev => prev || d.items[0].code)
+          }
+        })
+        .catch(() => {})
+    }
+  }, [courses, token])
+
+  // 2. Load assessment breakdown components when courseCode changes
   useEffect(() => {
     if (!courseCode) return
-    setLoadingComp(true); setComponents([]); setComponent(''); setResult(null)
-    api(`/api/student/grades/breakdown?course_code=${courseCode}`, token)
-      .then(d => { setComponents(d.components); setComponent(d.components[0]?.name ?? '') })
+    setLoadingComp(true); setComponents([]); setComponent(''); setResult(null); setErr('')
+    api(`/api/student/grades/breakdown?course_code=${encodeURIComponent(courseCode)}`, token)
+      .then(d => {
+        const comps = d.components || []
+        setComponents(comps)
+        setComponent(comps[0]?.name ?? '')
+      })
       .catch(e => setErr(e.message))
       .finally(() => setLoadingComp(false))
   }, [courseCode, token])
 
   const calculate = async () => {
+    if (!courseCode || !component) return
     setLoading(true); setErr(''); setResult(null)
     try {
       const r = await api('/api/student/grades/whatif', token, {
@@ -1644,16 +1675,18 @@ function WhatIfModal({ token, courses, onClose }) {
           <label>
             Course
             <select value={courseCode} onChange={e => setCourseCode(e.target.value)}>
-              {courses.filter(c => c.score !== null).map(c =>
-                <option key={c.code} value={c.code}>{c.course} ({c.code})</option>
-              )}
+              {availableCourses.map(c => (
+                <option key={c.code} value={c.code}>
+                  {c.code} — {c.course} {c.score != null ? `(${c.score}%)` : ''}
+                </option>
+              ))}
             </select>
           </label>
 
           <label>
             Component / Assessment
             {loadingComp
-              ? <div className="loading-sm">Loading components…</div>
+              ? <div className="loading-sm" style={{ padding: '8px 0', fontSize: '.85rem', color: 'var(--text-muted)' }}>Loading components…</div>
               : <select value={component} onChange={e => setComponent(e.target.value)} disabled={!components.length}>
                   {components.map(c => <option key={c.name} value={c.name}>{c.name} (weight: {Math.round(c.weight * 100)}%)</option>)}
                 </select>
@@ -1665,7 +1698,7 @@ function WhatIfModal({ token, courses, onClose }) {
             <input type="number" min={0} max={100} value={target} onChange={e => setTarget(e.target.value)} />
           </label>
 
-          {err && <div className="error">{err}</div>}
+          {err && <div className="alert-box alert-danger">{err}</div>}
 
           {result && (
             <div className={`whatif-result ${result.feasible ? 'feasible' : 'infeasible'}`}>
@@ -1784,7 +1817,7 @@ function SduOnboardCard({ onConnect, onConnectDemo }) {
 }
 
 /* ─── LIVE DASHBOARD TAB ─────────────────────────────────────────── */
-function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo, onRefresh, user, setTab }) {
+function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo, onRefresh, user, setTab, onOpenWhatIf }) {
   if (!sduStatus?.connected) {
     return <SduOnboardCard onConnect={onConnect} onConnectDemo={onConnectDemo} />
   }
@@ -1861,7 +1894,15 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo
           </p>
         </div>
 
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={onOpenWhatIf}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '9px 16px', fontWeight: 600, fontSize: '.88rem' }}
+          >
+            <Icons.Sliders size={15} /> What-If Calculator
+          </button>
           <button
             type="button"
             className="btn-ghost"
@@ -2213,7 +2254,7 @@ function ScheduleTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo,
 }
 
 /* ─── LIVE TRANSCRIPT & GRADES TAB ───────────────────────────────── */
-function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo, onRefresh }) {
+function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo, onRefresh, onOpenWhatIf }) {
   const [semesterFilter, setSemesterFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
   const [search, setSearch] = useState('')
@@ -2290,6 +2331,14 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDem
         lastFetched={sduData.lastFetched}
         actions={
           <>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={onOpenWhatIf}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            >
+              <Icons.Sliders size={14} /> What-If Calculator
+            </button>
             <button
               type="button"
               className="btn-ghost"
@@ -3067,6 +3116,7 @@ function AvatarMenu({ user, logout, token, onUpdateUser }) {
 function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
   const [tab, setTab] = useState('dashboard')
   const [unread, setUnread] = useState(0)
+  const [showWhatIf, setShowWhatIf] = useState(false)
 
   // SDU status & live data state
   const [sduStatus, setSduStatus] = useState(null)
@@ -3262,6 +3312,28 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
             </button>
           )}
 
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={() => setShowWhatIf(true)}
+            title="Open Grade Planner (What-If Calculator)"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '6px 12px',
+              borderRadius: 8,
+              border: '1px solid var(--border)',
+              background: 'var(--surface)',
+              fontWeight: 600,
+              fontSize: '.82rem',
+              cursor: 'pointer'
+            }}
+          >
+            <Icons.Sliders size={14} color="var(--primary)" />
+            <span>What-If</span>
+          </button>
+
           {toggleTheme && <ThemeToggle theme={theme} toggleTheme={toggleTheme} />}
 
           <NotificationsDropdown
@@ -3288,13 +3360,21 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
       )}
 
       <main className="content">
-        {tab === 'dashboard'  && <DashboardTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRefresh={loadSduLiveData} user={user} setTab={setTab} />}
+        {tab === 'dashboard'  && <DashboardTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRefresh={loadSduLiveData} user={user} setTab={setTab} onOpenWhatIf={() => setShowWhatIf(true)} />}
         {tab === 'schedule'   && <ScheduleTab  sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRefresh={loadSduLiveData} />}
-        {tab === 'transcript' && <TranscriptTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRefresh={loadSduLiveData} />}
+        {tab === 'transcript' && <TranscriptTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRefresh={loadSduLiveData} onOpenWhatIf={() => setShowWhatIf(true)} />}
         {tab === 'attendance' && <AttendanceTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRefresh={loadSduLiveData} />}
         {tab === 'profile'    && <SduProfileTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onDisconnect={handleSduDisconnect} onRefresh={loadSduLiveData} user={user} />}
         {tab === 'alerts'     && <AlertsTab    token={token} onUnreadChange={setUnread} onSelectTab={setTab} />}
       </main>
+
+      {showWhatIf && (
+        <WhatIfModal
+          token={token}
+          courses={sduData.transcript || []}
+          onClose={() => setShowWhatIf(false)}
+        />
+      )}
     </div>
   )
 }
