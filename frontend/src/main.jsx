@@ -1138,22 +1138,15 @@ function Login({ onLogin, theme, toggleTheme }) {
   }
 
   const handleRegister = async e => {
-    e.preventDefault(); setBusy(true); setError('')
-    if (!regName.trim()) {
-      setError('Please enter your full name')
-      setBusy(false)
-      return
-    }
-    if (!regId.trim()) {
-      setError('Please enter your Student ID')
-      setBusy(false)
-      return
-    }
-    if (regPw.length < 6) {
-      setError('Password must be at least 6 characters')
-      setBusy(false)
-      return
-    }
+    e.preventDefault(); setError('')
+    const fe = {}
+    if (!regName.trim()) fe.regName = 'Please enter your full name'
+    if (!regId.trim()) fe.regId = 'Please enter your Student ID'
+    if (!regPw) fe.regPw = 'Please enter a password'
+    else if (regPw.length < 6) fe.regPw = 'Password must be at least 6 characters'
+    setFieldErr(fe)
+    if (Object.keys(fe).length) return
+    setBusy(true)
     try {
       const authData = await api('/api/auth/register', null, {
         method: 'POST',
@@ -1344,7 +1337,7 @@ function Login({ onLogin, theme, toggleTheme }) {
             <button
               type="button"
               className={`segmented-btn ${authMode === 'register' ? 'active' : ''}`}
-              onClick={() => { setAuthMode('register'); setError('') }}
+              onClick={() => { setAuthMode('register'); setError(''); setFieldErr({}) }}
             >
               Create Account
             </button>
@@ -1432,12 +1425,13 @@ function Login({ onLogin, theme, toggleTheme }) {
                     id="regName"
                     className="input-field"
                     value={regName}
-                    onChange={e => setRegName(e.target.value)}
+                    onChange={e => { setRegName(e.target.value); setFieldErr(f => ({ ...f, regName: '' })) }}
                     placeholder="e.g. Meirzhan"
                     autoComplete="name"
-                    required
+                    style={fieldErr.regName ? { borderColor: '#ef4444' } : undefined}
                   />
                 </div>
+                {fieldErr.regName && <div style={{ color: '#ef4444', fontSize: 13, marginTop: 6 }}>{fieldErr.regName}</div>}
               </div>
 
               <div className="field-group">
@@ -1448,12 +1442,13 @@ function Login({ onLogin, theme, toggleTheme }) {
                     id="regId"
                     className="input-field"
                     value={regId}
-                    onChange={e => setRegId(e.target.value)}
+                    onChange={e => { setRegId(e.target.value); setFieldErr(f => ({ ...f, regId: '' })) }}
                     placeholder="e.g. 240103118"
                     autoComplete="username"
-                    required
+                    style={fieldErr.regId ? { borderColor: '#ef4444' } : undefined}
                   />
                 </div>
+                {fieldErr.regId && <div style={{ color: '#ef4444', fontSize: 13, marginTop: 6 }}>{fieldErr.regId}</div>}
               </div>
 
               <div className="field-group">
@@ -1481,11 +1476,10 @@ function Login({ onLogin, theme, toggleTheme }) {
                     className="input-field"
                     type={showPw ? 'text' : 'password'}
                     value={regPw}
-                    onChange={e => setRegPw(e.target.value)}
+                    onChange={e => { setRegPw(e.target.value); setFieldErr(f => ({ ...f, regPw: '' })) }}
                     placeholder="At least 6 characters"
                     autoComplete="new-password"
-                    style={{ paddingRight: 44 }}
-                    required
+                    style={{ paddingRight: 44, ...(fieldErr.regPw ? { borderColor: '#ef4444' } : {}) }}
                   />
                   <button
                     type="button"
@@ -1497,6 +1491,7 @@ function Login({ onLogin, theme, toggleTheme }) {
                     {showPw ? <Icons.EyeOff size={16} /> : <Icons.Eye size={16} />}
                   </button>
                 </div>
+                {fieldErr.regPw && <div style={{ color: '#ef4444', fontSize: 13, marginTop: 6 }}>{fieldErr.regPw}</div>}
                 {regPw && (
                   <div>
                     <div className="pw-strength-bar">
