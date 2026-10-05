@@ -132,30 +132,66 @@ class SQLiteRepository:
                 );
                 """
             )
+            # Fresh database (e.g. a new Render deploy): seed demo accounts + curriculum
+            has_users = db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            if has_users == 0:
+                self._seed(db)
+                return
+
             # Check if the real SDU Information Systems curriculum is loaded
             has_is = db.execute("SELECT COUNT(*) FROM grades WHERE code = 'CSS 105'").fetchone()[0]
             if has_is == 0:
                 self._seed_is_curriculum(db)
             else:
-                user_240 = db.execute("SELECT id, password_salt FROM users WHERE student_id = '240103118'").fetchone()
-                if user_240:
-                    new_h = hash_password("studymate2026", user_240["password_salt"])
-                    db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_h, user_240["id"]))
-                    db.execute("INSERT OR IGNORE INTO login_identifiers (identifier, user_id) VALUES (?, ?)", ("amirzhanmeirzhan5@gmail.com", user_240["id"]))
+                # Ensure main student account 240103118 exists
+                user_240 = db.execute("SELECT id FROM users WHERE student_id = '240103118'").fetchone()
+                if not user_240:
+                    salt_240 = "student1-salt"
+                    h_240 = hash_password("studymate2026", salt_240)
+                    db.execute(
+                        "INSERT OR IGNORE INTO users VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        ("u-240103118", "Meirzhan", "student", "240103118", None, salt_240, h_240)
+                    )
+                    db.execute("INSERT OR IGNORE INTO students VALUES (?, ?, ?, ?, ?)",
+                               ("240103118", "Meirzhan", "Information Systems (IS-2024)", 96.0, 0))
+                    db.execute("INSERT OR IGNORE INTO teacher_scope VALUES (?, ?)", ("t1", "240103118"))
+                for ident in ("240103118", "240103118@sdu.edu.kz", "amirzhanmeirzhan5@gmail.com", "student@univ.edu", "STU-001"):
+                    db.execute("INSERT OR IGNORE INTO login_identifiers (identifier, user_id) VALUES (?, ?)", (ident, "u-240103118"))
 
-                # Ensure friend 240103188 has a dedicated student account
+                # Ensure student 240103188 has a dedicated student account
                 has_188 = db.execute("SELECT COUNT(*) FROM users WHERE student_id = '240103188'").fetchone()[0]
                 if has_188 == 0:
                     salt_188 = "student188-salt"
                     h_188 = hash_password("studymate2026", salt_188)
                     db.execute("INSERT OR IGNORE INTO users VALUES (?, ?, ?, ?, ?, ?, ?)",
                                ("u-240103188", "Student 240103188", "student", "240103188", None, salt_188, h_188))
-                    db.execute("DELETE FROM login_identifiers WHERE identifier = '240103188'")
-                    db.execute("INSERT INTO login_identifiers VALUES (?, ?)", ("240103188", "u-240103188"))
-                    db.execute("INSERT OR IGNORE INTO login_identifiers VALUES (?, ?)", ("240103188@sdu.edu.kz", "u-240103188"))
                     db.execute("INSERT OR IGNORE INTO students VALUES (?, ?, ?, ?, ?)",
                                ("240103188", "Student 240103188", "Information Systems (IS-2024)", 94.0, 0))
                     db.execute("INSERT OR IGNORE INTO teacher_scope VALUES (?, ?)", ("t1", "240103188"))
+                for ident in ("240103188", "240103188@sdu.edu.kz"):
+                    db.execute("INSERT OR IGNORE INTO login_identifiers (identifier, user_id) VALUES (?, ?)", (ident, "u-240103188"))
+
+                # Ensure student 240103120 exists
+                has_120 = db.execute("SELECT COUNT(*) FROM users WHERE student_id = '240103120'").fetchone()[0]
+                if has_120 == 0:
+                    salt_120 = "student2-salt"
+                    h_120 = hash_password("student123", salt_120)
+                    db.execute("INSERT OR IGNORE INTO users VALUES (?, ?, ?, ?, ?, ?, ?)",
+                               ("u-240103120", "Dias Omar", "student", "240103120", None, salt_120, h_120))
+                    db.execute("INSERT OR IGNORE INTO students VALUES (?, ?, ?, ?, ?)",
+                               ("240103120", "Dias Omar", "Information Systems (IS-2024)", 88.0, 1))
+                    db.execute("INSERT OR IGNORE INTO teacher_scope VALUES (?, ?)", ("t1", "240103120"))
+                for ident in ("240103120", "240103120@sdu.edu.kz", "STU-002"):
+                    db.execute("INSERT OR IGNORE INTO login_identifiers (identifier, user_id) VALUES (?, ?)", (ident, "u-240103120"))
+
+                # Ensure teacher account exists
+                has_t = db.execute("SELECT COUNT(*) FROM users WHERE role = 'teacher'").fetchone()[0]
+                if has_t == 0:
+                    salt_t = "teacher-salt"
+                    h_t = hash_password("teacher123", salt_t)
+                    db.execute("INSERT OR IGNORE INTO users VALUES (?, ?, ?, ?, ?, ?, ?)",
+                               ("u-teacher", "Dr. Nurlan Bek", "teacher", None, "t1", salt_t, h_t))
+                    db.execute("INSERT OR IGNORE INTO login_identifiers VALUES (?, ?)", ("teacher@univ.edu", "u-teacher"))
 
     def _seed_is_curriculum(self, db):
         db.execute("PRAGMA foreign_keys = OFF;")

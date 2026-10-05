@@ -1039,45 +1039,12 @@ function Login({ onLogin, theme, toggleTheme }) {
         body: JSON.stringify({ redirect_uri: callbackUri })
       })
       if (res && res.url) {
-        if (res.sdu_available === false) {
-          // External SDU portal (api-sdu.javazhan.tech) is offline.
-          // Automatically connect student in Demo SDU Mode so they aren't blocked by timeout!
-          const demoRes = await api('/api/sdu/demo-connect', null, { method: 'POST' })
-          if (demoRes && demoRes.access_token) {
-            onLogin(demoRes)
-            return
-          }
-        }
         window.location.href = res.url
       } else {
         throw new Error('Failed to obtain authorization URL')
       }
     } catch (err) {
-      // If network failure occurred reaching authorize-url, try demo-connect fallback
-      try {
-        const demoRes = await api('/api/sdu/demo-connect', null, { method: 'POST' })
-        if (demoRes && demoRes.access_token) {
-          onLogin(demoRes)
-          return
-        }
-      } catch {}
       setError(err.message || 'Failed to initiate SDU authorization')
-      setSduBusy(false)
-    }
-  }
-
-  const handleConnectDemo = async () => {
-    setSduBusy(true)
-    setError('')
-    try {
-      const demoRes = await api('/api/sdu/demo-connect', null, { method: 'POST' })
-      if (demoRes && demoRes.access_token) {
-        onLogin(demoRes)
-      } else {
-        throw new Error('Failed to start Demo SDU session')
-      }
-    } catch (err) {
-      setError(err.message || 'Failed to start Demo SDU session')
       setSduBusy(false)
     }
   }
@@ -1277,20 +1244,6 @@ function Login({ onLogin, theme, toggleTheme }) {
                 <span>{sduBusy ? 'Connecting to SDU Platform…' : 'Connect with SDU Platform'}</span>
               </div>
               <Icons.ArrowRight size={18} color="#ffffff" />
-            </button>
-
-            <button
-              type="button"
-              className="sdu-demo-hero-btn"
-              disabled={sduBusy || busy}
-              onClick={handleConnectDemo}
-              title="Instant access with realistic SDU student dataset (use when api-sdu.javazhan.tech is offline)"
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: '1rem' }}>⚡</span>
-                <span>Try with Demo SDU Data (Offline Mode)</span>
-              </div>
-              <Icons.ArrowRight size={15} />
             </button>
           </div>
 
@@ -1821,21 +1774,10 @@ function SduOnboardCard({ onConnect, onConnectDemo }) {
           </div>
           <Icons.ArrowRight size={18} color="#ffffff" />
         </button>
-
-        {onConnectDemo && (
-          <button
-            type="button"
-            className="sdu-demo-hero-btn"
-            onClick={onConnectDemo}
-            style={{ width: '100%', justifyContent: 'center', textAlign: 'center', gap: 8, padding: '11px 16px' }}
-          >
-            <span>⚡ Connect with Demo SDU (Offline Mode)</span>
-          </button>
-        )}
       </div>
 
       <div style={{ marginTop: 20, fontSize: '.78rem', color: 'var(--text-muted)' }}>
-        Direct SDU Platform OAuth 2.0 PKCE. If the external university server is offline, Demo mode is automatically provided so your workflow is never blocked.
+        Official SDU Platform OAuth 2.0 PKCE authorization. Connect directly to synchronize your student records.
       </div>
     </div>
   )
@@ -3211,49 +3153,10 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
         body: JSON.stringify({ redirect_uri: callbackUri })
       })
       if (res && res.url) {
-        if (res.sdu_available === false) {
-          // External portal offline; connect to demo mode seamlessly
-          const demoRes = await api('/api/sdu/demo-connect', token, { method: 'POST' })
-          if (demoRes && demoRes.ok) {
-            setSduStatus({ connected: true, demo_mode: true, updated_at: new Date().toISOString() })
-            await loadSduLiveData()
-            setSduToast('Connected to Demo SDU (external server offline)')
-            setTimeout(() => setSduToast(''), 4000)
-            return
-          }
-        }
         window.location.href = res.url
       }
     } catch (e) {
-      // If error obtaining url, attempt demo fallback
-      try {
-        const demoRes = await api('/api/sdu/demo-connect', token, { method: 'POST' })
-        if (demoRes && demoRes.ok) {
-          setSduStatus({ connected: true, demo_mode: true, updated_at: new Date().toISOString() })
-          await loadSduLiveData()
-          setSduToast('Connected to Demo SDU')
-          setTimeout(() => setSduToast(''), 4000)
-          return
-        }
-      } catch {}
       alert(e.message)
-    }
-  }
-
-  const handleSduDemoConnect = async () => {
-    try {
-      setSduLoading(true)
-      const demoRes = await api('/api/sdu/demo-connect', token, { method: 'POST' })
-      if (demoRes && demoRes.ok) {
-        setSduStatus({ connected: true, demo_mode: true, updated_at: new Date().toISOString() })
-        await loadSduLiveData()
-        setSduToast('Connected to Demo SDU Platform!')
-        setTimeout(() => setSduToast(''), 4000)
-      }
-    } catch (e) {
-      alert(e.message || 'Demo connect failed')
-    } finally {
-      setSduLoading(false)
     }
   }
 
@@ -3388,11 +3291,11 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
       )}
 
       <main className="content">
-        {tab === 'dashboard'  && <DashboardTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onConnectDemo={handleSduDemoConnect} onRefresh={loadSduLiveData} user={user} setTab={setTab} />}
-        {tab === 'schedule'   && <ScheduleTab  sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onConnectDemo={handleSduDemoConnect} onRefresh={loadSduLiveData} />}
-        {tab === 'transcript' && <TranscriptTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onConnectDemo={handleSduDemoConnect} onRefresh={loadSduLiveData} />}
-        {tab === 'attendance' && <AttendanceTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onConnectDemo={handleSduDemoConnect} onRefresh={loadSduLiveData} />}
-        {tab === 'profile'    && <SduProfileTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onConnectDemo={handleSduDemoConnect} onDisconnect={handleSduDisconnect} onRefresh={loadSduLiveData} user={user} />}
+        {tab === 'dashboard'  && <DashboardTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRefresh={loadSduLiveData} user={user} setTab={setTab} />}
+        {tab === 'schedule'   && <ScheduleTab  sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRefresh={loadSduLiveData} />}
+        {tab === 'transcript' && <TranscriptTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRefresh={loadSduLiveData} />}
+        {tab === 'attendance' && <AttendanceTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRefresh={loadSduLiveData} />}
+        {tab === 'profile'    && <SduProfileTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onDisconnect={handleSduDisconnect} onRefresh={loadSduLiveData} user={user} />}
         {tab === 'alerts'     && <AlertsTab    token={token} onUnreadChange={setUnread} onSelectTab={setTab} />}
       </main>
     </div>
@@ -3846,25 +3749,6 @@ function SduCallback({ onLogin }) {
             <button
               type="button"
               className="btn-primary"
-              style={{ width: '100%', padding: '11px 20px', fontSize: '.9rem' }}
-              onClick={async () => {
-                try {
-                  const demoRes = await api('/api/sdu/demo-connect', null, { method: 'POST' })
-                  if (demoRes && demoRes.access_token) {
-                    window.history.replaceState({}, '', '/')
-                    onLogin(demoRes)
-                  }
-                } catch {
-                  window.history.replaceState({}, '', '/')
-                  window.location.href = '/'
-                }
-              }}
-            >
-              ⚡ Continue with Demo SDU Mode
-            </button>
-            <button
-              type="button"
-              className="btn-secondary"
               style={{ width: '100%', padding: '10px 20px', fontSize: '.9rem' }}
               onClick={() => {
                 window.history.replaceState({}, '', '/')
