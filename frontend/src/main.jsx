@@ -2757,8 +2757,6 @@ function SduProfileTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDem
   }
 
   const p = sduData.profile || {}
-  const transcript = sduData.transcript || []
-  const gpa = calcGPA(transcript)
 
   return (
     <div className="page-fade" style={{ maxWidth: 740, margin: '0 auto' }}>
@@ -2794,10 +2792,6 @@ function SduProfileTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDem
           <div style={{ background: 'var(--bg)', padding: '14px 16px', borderRadius: 10, border: '1px solid var(--border)' }}>
             <small style={{ color: 'var(--text-muted)', display: 'block', marginBottom: 3 }}>Official University Email</small>
             <b style={{ fontSize: '.9rem', color: 'var(--text-primary)' }}>{p.email || `${p.student_id || 'student'}@sdu.edu.kz`}</b>
-          </div>
-          <div style={{ background: 'var(--bg)', padding: '14px 16px', borderRadius: 10, border: '1px solid var(--border)' }}>
-            <small style={{ color: 'var(--text-muted)', display: 'block', marginBottom: 3 }}>Cumulative GPA</small>
-            <b style={{ fontSize: '.9rem', color: 'var(--primary)' }}>{gpa != null ? `${gpa.toFixed(2)} / 4.00` : '3.67 / 4.00'}</b>
           </div>
           <div style={{ background: 'var(--bg)', padding: '14px 16px', borderRadius: 10, border: '1px solid var(--border)' }}>
             <small style={{ color: 'var(--text-muted)', display: 'block', marginBottom: 3 }}>Portal Data Origin</small>
