@@ -1932,36 +1932,8 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo
         </div>
       </header>
 
-      {/* 4 Distinct Stat Cards */}
-      <section className="metrics-grid-redesigned">
-        {/* Card 1: Cumulative GPA */}
-        <article className="stat-card-custom">
-          <div>
-            <div className="stat-card-head">
-              <span className="stat-card-label">Cumulative GPA</span>
-              <div className="stat-card-icon-pill pill-purple">
-                <Icons.Target size={18} />
-              </div>
-            </div>
-            <div className="gpa-gauge-row">
-              <div>
-                <div className="stat-card-value">
-                  {gpa != null ? gpa.toFixed(2) : '—'}
-                  <span style={{ fontSize: '1rem', color: 'var(--text-muted)', fontWeight: 600 }}> / 4.00</span>
-                </div>
-                <div className="stat-card-subtext">SDU 4.00 Grade Scale</div>
-              </div>
-              <GpaGauge gpa={gpa} maxGpa={4.0} />
-            </div>
-          </div>
-          <div style={{ marginTop: 14 }}>
-            <span className="gpa-trend-pill trend-positive">
-              <Icons.TrendingUp size={13} />
-              <span>{gpa >= 3.5 ? 'Dean’s List Eligible' : (gpa >= 2.0 ? 'Satisfactory Progress' : 'Academic Alert')}</span>
-            </span>
-          </div>
-        </article>
-
+      {/* 3 Distinct Stat Cards (Cumulative GPA is shown only in the Transcript & Grades tab) */}
+      <section className="stat-grid-3">
         {/* Card 2: Overall Attendance */}
         <article className="stat-card-custom">
           <div>
