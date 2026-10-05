@@ -900,6 +900,13 @@ def student_dashboard(user: Annotated[User, Depends(require_role("student"))], s
     alerts = risks(user.student_id)
     weak = sorted(valid, key=lambda c: c["score"])[:2]
     recommendations = [{"course": c["course"], "reason": f"Current weighted score is {c['score']}%", "action": f"Review the lowest-scoring assessment components in {c['course']}"} for c in weak if c["score"] < 75]
+    if not recommendations and weak:
+        for c in weak:
+            recommendations.append({
+                "course": c["course"],
+                "reason": f"Current score is {c['score']}% (lowest in current semester)",
+                "action": f"Focus on upcoming milestone assessments in {c['course']} to boost towards 90%+ (A)."
+            })
     
     # Calculate attendance per course for progress %
     all_sessions = repo.get_attendance_sessions(user.student_id)

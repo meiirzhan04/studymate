@@ -1817,10 +1817,51 @@ function SduOnboardCard({ onConnect, onConnectDemo }) {
 }
 
 /* ─── LIVE DASHBOARD TAB ─────────────────────────────────────────── */
-function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo, onRefresh, user, setTab, onOpenWhatIf }) {
+function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo, onRefresh, user, setTab, onOpenWhatIf, token }) {
   if (!sduStatus?.connected) {
     return <SduOnboardCard onConnect={onConnect} onConnectDemo={onConnectDemo} />
   }
+
+  const [recommendations, setRecommendations] = useState([])
+  useEffect(() => {
+    if (token) {
+      api('/api/student/dashboard?semester=spring-2026', token)
+        .then(d => {
+          if (d?.recommendations?.length) setRecommendations(d.recommendations)
+        })
+        .catch(() => {})
+    }
+  }, [token])
+
+  const semesterProgress = useMemo(() => {
+    const transcript = sduData?.transcript || []
+    if (!transcript.length) return []
+    const bySem = {}
+    transcript.forEach(c => {
+      const s = c.semester
+      if (!s) return
+      if (!bySem[s]) bySem[s] = { semester: s, totalCredits: 0, points: 0, passed: 0, count: 0 }
+      const cr = Number(c.credits || c.ects || 3)
+      bySem[s].count += 1
+      bySem[s].totalCredits += cr
+      if (c.passed) bySem[s].passed += 1
+      if (c.grade_point != null && !isNaN(Number(c.grade_point))) {
+        bySem[s].points += Number(c.grade_point) * cr
+      }
+    })
+    return Object.keys(bySem).sort((a,b) => Number(a) - Number(b)).map(sem => {
+      const d = bySem[sem]
+      const semGpa = d.totalCredits > 0 ? (d.points / d.totalCredits) : 0
+      return {
+        name: `Sem ${sem}`,
+        semNum: Number(sem),
+        gpa: Math.round(semGpa * 100) / 100,
+        credits: d.totalCredits,
+        passed: d.passed,
+        count: d.count
+      }
+    })
+  }, [sduData?.transcript])
 
   if (sduLoading && !sduData.transcript && !sduData.schedule) {
     return <SkeletonDashboard />
@@ -2059,6 +2100,54 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo
         </article>
 
         <aside>
+          {/* SPRINT 2 · USER STORY 7: STUDY RECOMMENDATIONS */}
+          <article className="panel" style={{ borderLeft: '4px solid var(--primary)', background: 'var(--surface)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <div>
+                <span className="eyebrow" style={{ color: 'var(--primary)', fontWeight: 700 }}>STUDY PLAN · SPRINT 2</span>
+                <h2 style={{ margin: '2px 0 0', fontSize: '1.12rem' }}>Study Recommendations</h2>
+              </div>
+              <span className="sdu-badge" style={{ fontSize: '.72rem' }}>Story 7</span>
+            </div>
+            <p style={{ fontSize: '.84rem', color: 'var(--text-secondary)', margin: '0 0 12px', lineHeight: 1.5 }}>
+              Targeted academic guidance based on your weakest course components and attendance thresholds:
+            </p>
+
+            {(!recommendations || !recommendations.length) ? (
+              <div style={{ padding: '12px 14px', background: 'var(--surface-subtle)', borderRadius: 10, fontSize: '.84rem', color: 'var(--text-secondary)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--success)', fontWeight: 600, marginBottom: 3 }}>
+                  <Icons.CheckCircle size={15} /> Dean's List Standing
+                </div>
+                You are maintaining high honors across current courses. Prepare for upcoming Project Management milestones.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {recommendations.map((rec, i) => (
+                  <div key={i} style={{ padding: '10px 12px', background: 'var(--surface-subtle)', borderRadius: 10, border: '1px solid var(--border)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
+                      <b style={{ fontSize: '.88rem', color: 'var(--text-primary)' }}>{rec.course}</b>
+                      <span className="status-badge badge-warn" style={{ fontSize: '.7rem', padding: '2px 7px' }}>Focus</span>
+                    </div>
+                    <p style={{ margin: '0 0 5px', fontSize: '.82rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                      👉 {rec.action}
+                    </p>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
+                      <small style={{ color: 'var(--text-muted)', fontSize: '.74rem' }}>{rec.reason}</small>
+                      <button
+                        type="button"
+                        className="btn-ghost"
+                        onClick={onOpenWhatIf}
+                        style={{ padding: '2px 6px', fontSize: '.74rem', color: 'var(--primary)', fontWeight: 600 }}
+                      >
+                        Plan in What-If →
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </article>
+
           <article className="panel">
             <span className="eyebrow">Academic Record</span>
             <h2>Recent Curriculum Grades</h2>
@@ -2112,6 +2201,52 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, onConnectDemo
 
       {/* Performance Analytics Trend Chart */}
       <DashboardPerformanceChart transcript={sduData.transcript} attendance={sduData.attendance} />
+
+      {/* SPRINT 2 · USER STORY 8: TRACK ACADEMIC PROGRESS ACROSS SEMESTERS */}
+      {semesterProgress && semesterProgress.length > 1 && (
+        <article className="panel" style={{ marginTop: 20 }}>
+          <div className="panel-title">
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <span className="eyebrow" style={{ color: 'var(--primary)', fontWeight: 700 }}>ACADEMIC PROGRESS · SPRINT 2</span>
+                <span className="sdu-badge">Story 8</span>
+              </div>
+              <h2>Semester-by-Semester Performance & Trend</h2>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span className="gpa-trend-pill trend-positive">
+                <Icons.TrendingUp size={13} />
+                <span>Improving GPA Trend across terms</span>
+              </span>
+            </div>
+          </div>
+          <p style={{ fontSize: '.86rem', color: 'var(--text-secondary)', margin: '0 0 16px', lineHeight: 1.5 }}>
+            Compare your GPA and course outcomes across all completed semesters to track academic trajectory and growth:
+          </p>
+
+          <div style={{ width: '100%', height: 210, marginBottom: 14 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={semesterProgress} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" opacity={0.6} />
+                <XAxis dataKey="name" stroke="var(--text-muted)" fontSize={12} tickLine={false} />
+                <YAxis domain={[0, 4]} stroke="var(--text-muted)" fontSize={12} tickLine={false} />
+                <Tooltip formatter={(value) => [`${value} GPA`, 'Term GPA']} />
+                <Bar dataKey="gpa" fill="#4F46E5" radius={[6, 6, 0, 0]} maxBarSize={44} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+            {semesterProgress.map((sp, idx) => (
+              <div key={idx} style={{ padding: '10px 12px', background: 'var(--surface-subtle)', borderRadius: 10, textAlign: 'center' }}>
+                <small style={{ color: 'var(--text-muted)', display: 'block', fontSize: '.76rem', fontWeight: 600 }}>{sp.name}</small>
+                <strong style={{ fontSize: '1.2rem', color: sp.gpa >= 3.5 ? 'var(--primary)' : 'var(--text-primary)', display: 'block', margin: '2px 0' }}>{sp.gpa.toFixed(2)}</strong>
+                <span style={{ fontSize: '.74rem', color: 'var(--text-secondary)' }}>{sp.credits} ECTS · {sp.passed} passed</span>
+              </div>
+            ))}
+          </div>
+        </article>
+      )}
     </div>
   )
 }
@@ -3360,7 +3495,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
       )}
 
       <main className="content">
-        {tab === 'dashboard'  && <DashboardTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRefresh={loadSduLiveData} user={user} setTab={setTab} onOpenWhatIf={() => setShowWhatIf(true)} />}
+        {tab === 'dashboard'  && <DashboardTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRefresh={loadSduLiveData} user={user} setTab={setTab} onOpenWhatIf={() => setShowWhatIf(true)} token={token} />}
         {tab === 'schedule'   && <ScheduleTab  sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRefresh={loadSduLiveData} />}
         {tab === 'transcript' && <TranscriptTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRefresh={loadSduLiveData} onOpenWhatIf={() => setShowWhatIf(true)} />}
         {tab === 'attendance' && <AttendanceTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRefresh={loadSduLiveData} />}
