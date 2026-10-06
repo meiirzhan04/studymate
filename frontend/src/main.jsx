@@ -829,6 +829,14 @@ function Login({ onLogin, theme, toggleTheme }) {
   const [forgotMsg, setForgotMsg]   = useState('')
   const [forgotErr, setForgotErr]   = useState('')
   const [forgotBusy, setForgotBusy] = useState(false)
+  const [sentTo, setSentTo]         = useState('')
+  const [resendIn, setResendIn]     = useState(0)
+
+  useEffect(() => {
+    if (resendIn <= 0) return
+    const t = setTimeout(() => setResendIn(v => v - 1), 1000)
+    return () => clearTimeout(t)
+  }, [resendIn])
   const [sduBusy, setSduBusy]       = useState(false)
   const [showSupport, setShowSupport] = useState(false)
 
@@ -894,23 +902,27 @@ function Login({ onLogin, theme, toggleTheme }) {
     }
   }
 
+  // Step 1 → send (or re-send) the code. The server allows one email per minute.
   const handleSendCode = async e => {
     e?.preventDefault()
     if (!forgotEmail.trim()) {
       setForgotErr('Please enter your registered email or Student ID')
       return
     }
+    if (forgotBusy || resendIn > 0) return
     setForgotBusy(true); setForgotErr(''); setForgotMsg('')
     try {
       const res = await api('/api/auth/send-reset-code', null, {
         method: 'POST',
         body: JSON.stringify({ email: forgotEmail.trim() })
       })
-      if (res.target_email) {
-        setForgotEmail(res.target_email)
-      }
-      setResetCode('')
-      setForgotMsg(res.message || 'Verification code sent to your email! Please check your inbox.')
+      if (res.target_email) setSentTo(res.target_email)
+      setResendIn(res.resend_in || 60)
+      setForgotMsg(res.already_sent
+        ? `A code was already sent to ${res.target_email}. Use the latest email.`
+        : res.sent_via_email === false
+          ? `We could not confirm delivery to ${res.target_email}. If no email arrives in a minute, use Resend or contact support.`
+          : `We sent a 6-digit code to ${res.target_email}.`)
       setForgotStep(2)
     } catch (err) {
       setForgotErr(err.message)
@@ -919,41 +931,48 @@ function Login({ onLogin, theme, toggleTheme }) {
     }
   }
 
-  const handleVerifyAndReset = async e => {
+  // Step 2 → confirm the code
+  const handleCheckCode = async e => {
     e?.preventDefault()
-    if (!resetCode.trim() || resetCode.trim().length !== 6) {
-      setForgotErr('Please enter the 6-digit verification code')
+    if (resetCode.trim().length !== 6) {
+      setForgotErr('Enter the 6-digit code from the email')
       return
     }
+    setForgotBusy(true); setForgotErr('')
+    try {
+      await api('/api/auth/check-reset-code', null, {
+        method: 'POST',
+        body: JSON.stringify({ email: forgotEmail.trim(), code: resetCode.trim() })
+      })
+      setForgotMsg('')
+      setForgotStep(3)
+    } catch (err) {
+      setForgotErr(err.message)
+    } finally {
+      setForgotBusy(false)
+    }
+  }
+
+  // Step 3 → set the new password
+  const handleSetNewPassword = async e => {
+    e?.preventDefault()
     if (newPw.length < 6) {
       setForgotErr('Password must be at least 6 characters long')
       return
     }
-    if (confirmPw && newPw !== confirmPw) {
+    if (newPw !== confirmPw) {
       setForgotErr('Passwords do not match')
       return
     }
-    setForgotBusy(true); setForgotErr(''); setForgotMsg('')
+    setForgotBusy(true); setForgotErr('')
     try {
-      const res = await api('/api/auth/verify-reset-code', null, {
+      await api('/api/auth/verify-reset-code', null, {
         method: 'POST',
-        body: JSON.stringify({
-          email: forgotEmail.trim(),
-          code: resetCode.trim(),
-          new_password: newPw
-        })
+        body: JSON.stringify({ email: forgotEmail.trim(), code: resetCode.trim(), new_password: newPw })
       })
-      setForgotMsg(res.message || 'Password updated successfully!')
       setPassword(newPw)
       setIdentifier(forgotEmail.trim())
-      setTimeout(() => {
-        setShowForgot(false)
-        setForgotStep(1)
-        setResetCode('')
-        setNewPw('')
-        setConfirmPw('')
-        setForgotMsg('')
-      }, 1500)
+      setForgotStep(4)
     } catch (err) {
       setForgotErr(err.message)
     } finally {
@@ -965,12 +984,15 @@ function Login({ onLogin, theme, toggleTheme }) {
     setShowForgot(true)
     setForgotStep(1)
     setForgotEmail(identifier || '')
+    setSentTo('')
     setResetCode('')
     setNewPw('')
     setConfirmPw('')
     setForgotMsg('')
     setForgotErr('')
   }
+
+  const closeForgot = () => setShowForgot(false)
 
   return (
     <main className="login-page">
@@ -1232,78 +1254,87 @@ function Login({ onLogin, theme, toggleTheme }) {
           </button>
           {showSupport && <SupportModal token={null} page="login" onClose={() => setShowSupport(false)} />}
 
-          {/* 6-Digit Code Reset Modal */}
+          {/* Password reset: 1 email → 2 code → 3 new password → done */}
           {showForgot && (
-            <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowForgot(false)}>
-              <div className="modal" style={{ maxWidth: 460 }}>
+            <div className="modal-overlay" onClick={e => e.target === e.currentTarget && closeForgot()}>
+              <div className="modal">
                 <div className="modal-head">
                   <div>
-                    <h2>Reset password</h2>
-                    <p>We will send you a 6-digit code</p>
+                    <h2>{['', 'Reset password', 'Enter the code', 'New password', 'Password updated'][forgotStep]}</h2>
+                    <p>{forgotStep < 4 ? `Step ${forgotStep} of 3` : 'You can sign in now'}</p>
                   </div>
-                  <button type="button" className="icon-btn" onClick={() => setShowForgot(false)}><Icons.Close size={18} /></button>
+                  <button type="button" className="icon-btn" onClick={closeForgot} aria-label="Close"><Icons.Close size={18} /></button>
                 </div>
+                {forgotStep < 4 && (
+                  <div className="steps" aria-hidden="true">
+                    {[1, 2, 3].map(n => <span key={n} className={`step ${forgotStep >= n ? 'on' : ''}`} />)}
+                  </div>
+                )}
 
-                {forgotStep === 1 ? (
+                {forgotStep === 1 && (
                   <form onSubmit={handleSendCode}>
                     <div className="modal-body">
-                      <p style={{ color: 'var(--text-secondary)', fontSize: '.88rem', margin: 0, lineHeight: 1.5 }}>
-                        Enter your registered email address (e.g. your Gmail) or Student ID. We will generate and send a <b>6-digit confirmation code</b>.
-                      </p>
+                      <p>Enter the email or Student ID of your account. We will email you a 6-digit code.</p>
                       <label>
-                        University Email or Student ID
+                        Email or Student ID
                         <input
                           type="text"
                           value={forgotEmail}
                           onChange={e => setForgotEmail(e.target.value)}
-                          placeholder="e.g. 240103118 or user@gmail.com"
+                          placeholder="e.g. 240103118 or you@gmail.com"
                           autoComplete="email"
                           autoFocus
-                          required
                         />
                       </label>
                       {forgotErr && <div className="alert-box alert-danger">{forgotErr}</div>}
                     </div>
                     <div className="modal-foot">
-                      <button type="button" className="btn-ghost" onClick={() => setShowForgot(false)}>Cancel</button>
-                      <button
-                        type="submit"
-                        className="btn-primary"
-                        disabled={!forgotEmail.trim() || forgotBusy}
-                        style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                      >
-                        {forgotBusy ? 'Sending code…' : <><Icons.Send size={15} /> Send 6-Digit Code</>}
+                      <button type="button" className="btn-ghost" onClick={closeForgot}>Cancel</button>
+                      <button type="submit" className="btn-primary" disabled={!forgotEmail.trim() || forgotBusy}>
+                        {forgotBusy ? 'Sending…' : <><Icons.Send size={15} /> Send code</>}
                       </button>
                     </div>
                   </form>
-                ) : (
-                  <form onSubmit={handleVerifyAndReset}>
-                    <div className="modal-body">
-                      {forgotMsg && (
-                        <div className="alert-box alert-success">
-                          <Icons.CheckCircle size={16} /> {forgotMsg}
-                        </div>
-                      )}
-                      <p style={{ color: 'var(--text-secondary)', fontSize: '.84rem', margin: '4px 0 0' }}>
-                        Check your inbox for <b>{forgotEmail}</b> (also check Spam/Junk folder) and enter the 6-digit code:
-                      </p>
+                )}
 
+                {forgotStep === 2 && (
+                  <form onSubmit={handleCheckCode}>
+                    <div className="modal-body">
+                      {forgotMsg && <div className="alert-box alert-success"><Icons.CheckCircle size={16} /> {forgotMsg}</div>}
+                      <p>Check <b>{sentTo || 'your inbox'}</b> (and the Spam folder), then enter the code.</p>
                       <label>
-                        6-Digit Verification Code
+                        6-digit code
                         <input
+                          className="otp-input"
                           type="text"
+                          inputMode="numeric"
+                          autoComplete="one-time-code"
                           maxLength={6}
                           value={resetCode}
-                          onChange={e => setResetCode(e.target.value.replace(/\D/g, ''))}
+                          onChange={e => { setResetCode(e.target.value.replace(/\D/g, '')); setForgotErr('') }}
                           placeholder="••••••"
-                          style={{ textAlign: 'center', fontSize: '1.4rem', letterSpacing: 8, fontWeight: 800, fontFamily: 'monospace' }}
                           autoFocus
-                          required
                         />
                       </label>
+                      {forgotErr && <div className="alert-box alert-danger">{forgotErr}</div>}
+                      <button type="button" className="link-btn resend" onClick={handleSendCode} disabled={resendIn > 0 || forgotBusy}>
+                        {resendIn > 0 ? `Resend code in ${resendIn}s` : 'Resend code'}
+                      </button>
+                    </div>
+                    <div className="modal-foot">
+                      <button type="button" className="btn-ghost" onClick={() => { setForgotStep(1); setForgotErr('') }}>Back</button>
+                      <button type="submit" className="btn-primary" disabled={resetCode.length !== 6 || forgotBusy}>
+                        {forgotBusy ? 'Checking…' : 'Continue'}
+                      </button>
+                    </div>
+                  </form>
+                )}
 
+                {forgotStep === 3 && (
+                  <form onSubmit={handleSetNewPassword}>
+                    <div className="modal-body">
                       <label>
-                        New Password
+                        New password
                         <div style={{ position: 'relative' }}>
                           <input
                             type={showNewPw ? 'text' : 'password'}
@@ -1311,8 +1342,8 @@ function Login({ onLogin, theme, toggleTheme }) {
                             onChange={e => setNewPw(e.target.value)}
                             placeholder="At least 6 characters"
                             autoComplete="new-password"
-                            style={{ paddingRight: 44, width: '100%' }}
-                            required
+                            style={{ paddingRight: 44 }}
+                            autoFocus
                           />
                           <button
                             type="button"
@@ -1325,33 +1356,36 @@ function Login({ onLogin, theme, toggleTheme }) {
                           </button>
                         </div>
                       </label>
-
                       <label>
-                        Confirm New Password
+                        Repeat new password
                         <input
                           type={showNewPw ? 'text' : 'password'}
                           value={confirmPw}
                           onChange={e => setConfirmPw(e.target.value)}
-                          placeholder="Repeat new password"
+                          placeholder="Repeat the password"
                           autoComplete="new-password"
-                          required
                         />
                       </label>
-
                       {forgotErr && <div className="alert-box alert-danger">{forgotErr}</div>}
                     </div>
                     <div className="modal-foot">
-                      <button type="button" className="btn-ghost" onClick={() => setForgotStep(1)}>← Back</button>
-                      <button
-                        type="submit"
-                        className="btn-primary"
-                        disabled={resetCode.length !== 6 || newPw.length < 6 || forgotBusy}
-                        style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                      >
-                        {forgotBusy ? 'Verifying…' : <><Icons.Lock size={15} /> Update Password</>}
+                      <button type="submit" className="btn-primary" disabled={newPw.length < 6 || !confirmPw || forgotBusy}>
+                        {forgotBusy ? 'Saving…' : <><Icons.Lock size={15} /> Save password</>}
                       </button>
                     </div>
                   </form>
+                )}
+
+                {forgotStep === 4 && (
+                  <>
+                    <div className="modal-body">
+                      <div className="alert-box alert-success"><Icons.CheckCircle size={16} /> Your password was changed.</div>
+                      <p>Sign in with <b>{forgotEmail}</b> and your new password.</p>
+                    </div>
+                    <div className="modal-foot">
+                      <button type="button" className="btn-primary" onClick={closeForgot}>Back to sign in</button>
+                    </div>
+                  </>
                 )}
               </div>
             </div>

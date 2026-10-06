@@ -909,6 +909,17 @@ class SQLiteRepository:
             )
             db.commit()
 
+    def get_active_reset_code(self, email: str) -> dict | None:
+        """The newest unused, unexpired code for this address (code, expires_at), if any."""
+        with self.connect() as db:
+            row = db.execute(
+                """SELECT code, expires_at FROM password_reset_codes
+                   WHERE email = ? COLLATE NOCASE AND used = 0 AND expires_at >= ?
+                   ORDER BY id DESC LIMIT 1""",
+                (email.strip(), time.time())
+            ).fetchone()
+            return dict(row) if row else None
+
     def verify_reset_code(self, email: str, code: str) -> bool:
         clean_email = email.strip()
         with self.connect() as db:

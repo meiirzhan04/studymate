@@ -916,3 +916,46 @@ def test_admin_reply_kept_when_email_fails(monkeypatch):
     assert res["emailed"] is False
     last = res["ticket"]["messages"][-1]
     assert last["author"] == "admin" and last["emailed"] is False and "SMTP" in last["email_error"]
+
+
+def _fresh_student():
+    ident = f"9{secrets.randbelow(10**8):08d}"
+    client.post("/api/auth/register", json={"name": "Reset Student", "identifier": ident, "password": "password123"})
+    return ident
+
+
+def test_reset_code_is_emailed_once_per_minute_and_reused(no_real_email):
+    from app.main import repo
+    ident = _fresh_student()
+
+    first = client.post("/api/auth/send-reset-code", json={"email": ident}).json()
+    second = client.post("/api/auth/send-reset-code", json={"email": ident}).json()
+    assert first["resend_in"] == 60 and second["already_sent"] is True
+    assert len([s for s in no_real_email if s[0] == "code"]) == 1
+
+    # After the cooldown a resend repeats the same code, so every email matches
+    with repo.connect() as db:
+        db.execute("UPDATE password_reset_codes SET expires_at = expires_at - 120 WHERE email LIKE ?", (f"{ident}%",))
+        db.commit()
+    client.post("/api/auth/send-reset-code", json={"email": ident})
+    codes = [s[2] for s in no_real_email if s[0] == "code"]
+    assert len(codes) == 2 and codes[0] == codes[1]
+
+
+def test_reset_is_step_by_step_and_limits_wrong_codes(no_real_email):
+    ident = _fresh_student()
+    client.post("/api/auth/send-reset-code", json={"email": ident})
+    code = [s[2] for s in no_real_email if s[0] == "code"][-1]
+
+    # Step 2 checks the code without using it up
+    assert client.post("/api/auth/check-reset-code", json={"email": ident, "code": code}).status_code == 200
+    # Step 3 sets the password with the same code
+    res = client.post("/api/auth/verify-reset-code", json={"email": ident, "code": code, "new_password": "newpass789"})
+    assert res.status_code == 200
+    assert token(ident, "newpass789")
+
+    # Wrong codes are limited
+    other = _fresh_student()
+    client.post("/api/auth/send-reset-code", json={"email": other})
+    statuses = [client.post("/api/auth/check-reset-code", json={"email": other, "code": "000000"}).status_code for _ in range(6)]
+    assert statuses[:5] == [400] * 5 and statuses[5] == 429

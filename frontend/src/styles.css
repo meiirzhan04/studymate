@@ -993,3 +993,11 @@ button.avatar:hover { box-shadow: 0 0 0 3px var(--accent-ring); }
 .thread-reply { display: flex; gap: 8px; margin-top: 4px; }
 .login-help { display: block; margin: 22px auto 0; font-size: 13px; color: var(--text-muted); }
 .login-help:hover { color: var(--accent-text); text-decoration: underline; text-underline-offset: 3px; }
+
+/* ─── Password reset steps ──────────────────────────────────── */
+.steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 14px 24px 0; }
+.step { height: 4px; border-radius: 2px; background: var(--surface-3); transition: background-color .2s; }
+.step.on { background: var(--accent); }
+.otp-input { text-align: center; font-size: 22px !important; letter-spacing: 10px; font-weight: 600; font-variant-numeric: tabular-nums; height: 48px !important; }
+.resend { align-self: flex-start; }
+.resend:disabled { color: var(--text-muted); text-decoration: none; cursor: default; opacity: 1; }

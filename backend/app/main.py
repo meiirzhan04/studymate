@@ -8,6 +8,7 @@ import math
 import os
 import secrets
 import smtplib
+import socket
 import time
 import urllib.request
 from datetime import datetime, timezone
@@ -312,9 +313,12 @@ def send_gmail_code(to_email: str, code: str) -> tuple[bool, str]:
             data=req_payload,
             headers=headers
         )
-        with urllib.request.urlopen(h_req, timeout=12) as resp:
+        with urllib.request.urlopen(h_req, timeout=25) as resp:
             if resp.status == 200:
                 return True, "Email sent successfully via HTTPS Mailer"
+    except (TimeoutError, socket.timeout):
+        # The mailer may still deliver this email; falling back to SMTP would send a duplicate
+        return False, "Mailer timed out; the email may still arrive"
     except Exception:
         pass
 
@@ -541,58 +545,107 @@ def register(req: RegisterRequest):
     }
 
 
+RESET_CODE_TTL = 15 * 60          # a code stays valid for 15 minutes
+RESEND_COOLDOWN = 60              # at most one email per minute per account
+MAX_CODE_ATTEMPTS = 5             # wrong codes allowed per 15 minutes
+
+
+def _reset_target(clean_email: str, user: dict) -> str:
+    if "@" in clean_email:
+        return clean_email
+    return f"{user.get('student_id') or clean_email}@sdu.edu.kz"
+
+
+def _check_code_for(clean_email: str, code: str) -> Optional[str]:
+    """The address the code was issued for, or None if the code is wrong/expired."""
+    if repo.verify_reset_code(clean_email, code):
+        return clean_email
+    user = repo.get_user_by_email(clean_email)
+    if user:
+        found_email = repo.get_email_for_user(user["id"])
+        if found_email and found_email != clean_email and repo.verify_reset_code(found_email, code):
+            return found_email
+    return None
+
+
+def _guard_code_attempts(clean_email: str) -> str:
+    key = f"reset-verify:{clean_email.lower()}"
+    if repo.check_brute_force(key):
+        raise HTTPException(status_code=429, detail="Too many wrong codes. Request a new code in 15 minutes.")
+    return key
+
+
 @app.post("/api/auth/send-reset-code")
 def send_reset_code(req: SendCodeRequest):
     clean_email = req.email.strip()
     user = repo.get_user_by_email(clean_email)
     if not user:
         raise HTTPException(status_code=404, detail="No registered account found with this email or Student ID.")
+    target_email = _reset_target(clean_email, user)
 
-    if "@" in clean_email:
-        target_email = clean_email
-    else:
-        sid = user.get("student_id") or clean_email
-        target_email = f"{sid}@sdu.edu.kz"
+    # One email per minute: a repeated click returns the same state instead of sending again
+    active = repo.get_active_reset_code(target_email)
+    if active:
+        age = RESET_CODE_TTL - (active["expires_at"] - time.time())
+        if age < RESEND_COOLDOWN:
+            wait = int(RESEND_COOLDOWN - age) + 1
+            return {
+                "ok": True,
+                "already_sent": True,
+                "message": f"We already sent a code to {target_email}. You can request another one in {wait} s.",
+                "target_email": target_email,
+                "resend_in": wait,
+            }
 
-    code = f"{secrets.randbelow(900000) + 100000}"
-    expires_at = time.time() + 900
-    repo.create_reset_code(clean_email, code, expires_at)
-    if target_email != clean_email:
-        repo.create_reset_code(target_email, code, expires_at)
-    if user.get("student_id"):
-        repo.create_reset_code(user["student_id"], code, expires_at)
+    send_key = f"reset-send:{user['id']}"
+    if repo.check_brute_force(send_key):
+        raise HTTPException(status_code=429, detail="Too many codes requested. Please try again in 15 minutes.")
+    repo.record_attempt(send_key)
+
+    # Re-sending inside the 15-minute window repeats the same code, so every email matches
+    code = active["code"] if active else f"{secrets.randbelow(900000) + 100000}"
+    expires_at = time.time() + RESET_CODE_TTL
+    for address in {clean_email, target_email, user.get("student_id") or clean_email}:
+        repo.create_reset_code(address, code, expires_at)
 
     sent, detail = send_gmail_code(target_email, code)
+    return {
+        "ok": True,
+        "message": f"We sent a 6-digit code to {target_email}." if sent
+                   else f"We could not confirm delivery to {target_email}. Check your inbox and spam folder.",
+        "sent_via_email": sent,
+        "target_email": target_email,
+        "resend_in": RESEND_COOLDOWN,
+        **({} if sent else {"smtp_note": detail}),
+    }
 
-    if sent:
-        return {
-            "ok": True,
-            "message": f"6-digit verification code sent to {target_email}!",
-            "sent_via_email": True,
-            "target_email": target_email
-        }
-    else:
-        return {
-            "ok": True,
-            "message": f"Verification code generated for {target_email}! Please check your email inbox and spam folder.",
-            "sent_via_email": False,
-            "target_email": target_email,
-            "smtp_note": detail
-        }
+
+class CheckCodeRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=120)
+    code: str = Field(min_length=6, max_length=6)
+
+
+@app.post("/api/auth/check-reset-code")
+def check_reset_code(req: CheckCodeRequest):
+    """Step 2: confirm the code before asking for a new password (does not use the code up)."""
+    clean_email = req.email.strip()
+    key = _guard_code_attempts(clean_email)
+    if not _check_code_for(clean_email, req.code.strip()):
+        repo.record_attempt(key)
+        raise HTTPException(status_code=400, detail="Wrong or expired code. Check the latest email or request a new code.")
+    return {"ok": True}
 
 
 @app.post("/api/auth/verify-reset-code")
 def verify_reset_code(req: VerifyCodeRequest):
+    """Step 3: set the new password (uses the code up)."""
     clean_email = req.email.strip()
-    success = repo.reset_password_with_code(clean_email, req.code, req.new_password)
-    if not success:
-        user = repo.get_user_by_email(clean_email)
-        if user:
-            found_email = repo.get_email_for_user(user["id"])
-            if found_email and found_email != clean_email:
-                success = repo.reset_password_with_code(found_email, req.code, req.new_password)
-    if not success:
+    key = _guard_code_attempts(clean_email)
+    issued_for = _check_code_for(clean_email, req.code.strip())
+    if not issued_for or not repo.reset_password_with_code(issued_for, req.code, req.new_password):
+        repo.record_attempt(key)
         raise HTTPException(status_code=400, detail="Invalid or expired 6-digit verification code. Please request a new code.")
+    repo.clear_attempts(key)
     return {
         "ok": True,
         "message": "Password updated successfully! You can now sign in."
