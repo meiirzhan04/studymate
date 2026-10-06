@@ -125,6 +125,13 @@ class SQLiteRepository:
                     expires_at REAL NOT NULL,
                     used INTEGER NOT NULL DEFAULT 0
                 );
+                CREATE TABLE IF NOT EXISTS sdu_snapshots (
+                    user_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    data_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (user_id, kind)
+                );
                 CREATE TABLE IF NOT EXISTS sdu_connections (
                     user_id TEXT PRIMARY KEY REFERENCES users(id),
                     access_token TEXT NOT NULL,
@@ -341,14 +348,7 @@ class SQLiteRepository:
                     att_rows.append((student_id, code, f"2026-02-{i+1:02d}", status))
         db.executemany("INSERT INTO attendance_sessions (student_id, course_code, session_date, status) VALUES (?, ?, ?, ?)", att_rows)
 
-        # Seed realistic notifications for 240103118
-        notifs = [
-            ("240103118", "info", "Semester 5 Enrollment Confirmed", "Enrolled in 8 courses for Information Systems (IS-2024).", "INF 381", 0, "2026-02-01T09:00:00Z"),
-            ("240103118", "info", "Sprint 2 Review Notice", "Project Management (INF 381): Sprint 2 deliverables and Jira backlog submission deadline is Friday.", "INF 381", 0, "2026-03-01T10:00:00Z"),
-            ("240103118", "low_attendance", "Attendance Alert", "Business Intelligence (INF 376): 2 unexcused absences recorded. 2 remaining before drop limit!", "INF 376", 0, "2026-03-15T12:00:00Z"),
-            ("240103120", "low_attendance", "Attendance Warning", "Business Intelligence (INF 376): 3 unexcused absences recorded. 1 remaining!", "INF 376", 0, "2026-03-12T11:00:00Z"),
-        ]
-        db.executemany("INSERT INTO notifications (student_id, type, title, detail, course, read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", notifs)
+        # Notifications are generated only from real events (SDU changes, teacher notes), never seeded.
 
         # Seed initial SDU connection for demo student accounts so attendance & schedule are active
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -872,7 +872,7 @@ class SQLiteRepository:
         with self.connect() as db:
             if not db.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone():
                 return False
-            for table in ("sdu_connections", "password_reset_tokens", "sdu_oauth_attempts", "login_identifiers"):
+            for table in ("sdu_connections", "sdu_snapshots", "password_reset_tokens", "sdu_oauth_attempts", "login_identifiers"):
                 db.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
             db.execute("DELETE FROM users WHERE id = ?", (user_id,))
             db.commit()
@@ -971,7 +971,8 @@ class SQLiteRepository:
                         continue
                     grade_val = g.get("grade")
                     credits_val = g.get("credits") or g.get("ects") or 3
-                    code_val = f"SDU-{abs(hash(course_name)) % 900 + 100}"
+                    # Stable across restarts (built-in hash() is randomized per process)
+                    code_val = f"SDU-{int(hashlib.sha1(course_name.encode()).hexdigest(), 16) % 900 + 100}"
 
                     existing_grade = db.execute(
                         "SELECT id, components_json FROM grades WHERE student_id = ? AND course = ?",
@@ -992,15 +993,83 @@ class SQLiteRepository:
                             (sid, course_name, code_val, credits_val, json.dumps(comps))
                         )
 
-            # Record SDU sync notification
+            # Notify only about real changes since the previous sync
             now = datetime.now(timezone.utc).isoformat()
+            created = 0
             if sid:
-                db.execute(
-                    "INSERT INTO notifications (student_id, type, title, detail, course, read, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)",
-                    (sid, "sdu_sync", "SDU Platform Data Synchronized", "Your profile, schedule, and attendance records were updated from SDU.", "SDU Portal", now)
-                )
+                created += self._notify_grade_changes(db, user_id, sid, grades, now)
+                created += self._notify_absence_changes(db, user_id, sid, attendance, now)
 
             db.execute("UPDATE sdu_connections SET updated_at = ? WHERE user_id = ?", (now, user_id))
             db.commit()
-            return {"synced": True, "updated_at": now}
+            return {"synced": True, "updated_at": now, "new_notifications": created}
+
+    # ─── Change detection between SDU syncs ────────────────────────
+    ABSENCE_THRESHOLDS = (20.0, 15.0)
+
+    def _swap_snapshot(self, db, user_id: str, kind: str, data: dict, now: str) -> dict | None:
+        row = db.execute("SELECT data_json FROM sdu_snapshots WHERE user_id = ? AND kind = ?", (user_id, kind)).fetchone()
+        db.execute(
+            "INSERT OR REPLACE INTO sdu_snapshots (user_id, kind, data_json, updated_at) VALUES (?, ?, ?, ?)",
+            (user_id, kind, json.dumps(data), now)
+        )
+        return json.loads(row["data_json"]) if row else None
+
+    def _add_notification(self, db, sid: str, ntype: str, title: str, detail: str, course: str | None, now: str) -> int:
+        db.execute(
+            "INSERT INTO notifications (student_id, type, title, detail, course, read, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)",
+            (sid, ntype, title, detail, course, now)
+        )
+        return 1
+
+    def _notify_grade_changes(self, db, user_id: str, sid: str, grades: list | None, now: str) -> int:
+        if not isinstance(grades, list):
+            return 0
+        current = {}
+        letters = {}
+        for g in grades:
+            if isinstance(g, dict) and g.get("lesson") and g.get("grade") is not None:
+                try:
+                    current[g["lesson"]] = round(float(g["grade"]), 1)
+                    letters[g["lesson"]] = g.get("letter_grade")
+                except (TypeError, ValueError):
+                    continue
+        previous = self._swap_snapshot(db, user_id, "grades", current, now)
+        if previous is None:
+            return 0  # first sync is the baseline: don't announce every existing grade
+        created = 0
+        for lesson, grade in current.items():
+            letter = f" ({letters[lesson]})" if letters.get(lesson) else ""
+            old = previous.get(lesson)
+            ntype = "low_grade" if grade < 50 else "grade_posted"
+            if old is None:
+                created += self._add_notification(db, sid, ntype, "New grade posted", f"{lesson}: {grade}%{letter}", lesson, now)
+            elif abs(old - grade) >= 0.1:
+                created += self._add_notification(db, sid, ntype, "Grade updated", f"{lesson}: {old}% → {grade}%{letter}", lesson, now)
+        return created
+
+    def _notify_absence_changes(self, db, user_id: str, sid: str, attendance: list | None, now: str) -> int:
+        if not isinstance(attendance, list):
+            return 0
+        current = {}
+        for a in attendance:
+            if isinstance(a, dict) and a.get("lesson") and a.get("absence_percent") is not None:
+                try:
+                    current[a["lesson"]] = round(float(a["absence_percent"]), 1)
+                except (TypeError, ValueError):
+                    continue
+        previous = self._swap_snapshot(db, user_id, "attendance", current, now) or {}
+        created = 0
+        for lesson, absence in current.items():
+            old = previous.get(lesson)
+            for limit in self.ABSENCE_THRESHOLDS:
+                # Alert once when a course crosses a threshold (also on the first sync if it is already over)
+                if absence >= limit and (old is None or old < limit):
+                    if limit >= 20:
+                        title, detail = "Absence limit exceeded", f"{lesson}: {absence}% absent. Over {int(limit)}% puts the course at risk of an FX grade."
+                    else:
+                        title, detail = "Absence warning", f"{lesson}: {absence}% absent, close to the 20% limit."
+                    created += self._add_notification(db, sid, "low_attendance", title, detail, lesson, now)
+                    break
+        return created
 

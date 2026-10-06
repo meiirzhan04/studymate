@@ -261,13 +261,7 @@ def login(request: LoginRequest):
         repo.record_attempt(request.identifier)
         raise HTTPException(status_code=401, detail="Invalid identifier or password")
     repo.clear_attempts(request.identifier)
-    if user.get("role") == "student" and not repo.get_sdu_connection(user["id"]):
-        repo.save_sdu_connection(
-            user_id=user["id"],
-            access_token=sdu_mock.DEMO_ACCESS_TOKEN,
-            expires_at=time.time() + 2592000,
-            scope=sdu_mock.DEMO_SCOPE
-        )
+    # No silent demo data: students without SDU see the "Connect SDU" screen.
     return {"access_token": issue_token(user), "token_type": "bearer", "expires_in": 1800, "user": user}
 
 
@@ -727,13 +721,17 @@ def sdu_status(user: Annotated[User, Depends(current_user)]):
 
 
 @app.post("/api/sdu/sync")
-async def sdu_sync(user: Annotated[User, Depends(current_user)]):
+async def sdu_sync(user: Annotated[User, Depends(current_user)], auto: bool = Query(False)):
     conn = repo.get_sdu_connection(user.id)
     if not conn:
         raise HTTPException(status_code=400, detail="No SDU account connected.")
     if conn["expires_at"] < time.time():
         repo.delete_sdu_connection(user.id)
-        raise HTTPException(status_code=401, detail="SDU token has expired. Please reconnect.")
+        raise HTTPException(status_code=409, detail="SDU token has expired. Please reconnect.")
+
+    # Automatic sync on app open is throttled; the manual sync button always runs.
+    if auto and seconds_since(conn.get("updated_at")) < AUTO_SYNC_INTERVAL_SECONDS:
+        return {"ok": True, "connected": True, "synced": False, "skipped": True, "updated_at": conn.get("updated_at")}
 
     if sdu_mock.is_demo_connection(conn):
         res = repo.sync_sdu_student_data(
@@ -749,7 +747,7 @@ async def sdu_sync(user: Annotated[User, Depends(current_user)]):
     status_code, profile_data = await sdu_client.fetch_sdu_data("profile", access_token)
     if status_code == 401:
         repo.delete_sdu_connection(user.id)
-        raise HTTPException(status_code=401, detail="SDU token revoked or expired. Please reconnect.")
+        raise HTTPException(status_code=409, detail="SDU token revoked or expired. Please reconnect.")
     if status_code == 403:
         raise HTTPException(status_code=403, detail="Missing required SDU scope or account restricted.")
     if status_code == 409:
@@ -757,15 +755,12 @@ async def sdu_sync(user: Annotated[User, Depends(current_user)]):
         raise HTTPException(status_code=409, detail=f"{sdu_short_message(profile_data)} {SDU_ERROR_HINTS[409]}".strip())
 
     if status_code in (502, 504):
-        # Graceful fallback when upstream SDU server is unreachable
-        res = repo.sync_sdu_student_data(
-            user.id,
-            profile=sdu_mock.profile(),
-            schedule=sdu_mock.schedule().get("schedule"),
-            grades=sdu_mock.grades().get("grades"),
-            attendance=sdu_mock.attendance().get("attendance"),
-        )
-        return {"ok": True, "connected": True, "synced": True, "demo_fallback": True, "updated_at": res.get("updated_at")}
+        # Never substitute demo data for a real student; keep the last synced data instead.
+        admin.record_sdu_error("sync/profile", status_code, sdu_short_message(profile_data), user.student_id)
+        raise HTTPException(status_code=status_code, detail=f"{SDU_ERROR_HINTS[status_code]} Showing your last synced data.")
+    if status_code != 200 or not isinstance(profile_data, dict):
+        admin.record_sdu_error("sync/profile", status_code, sdu_short_message(profile_data), user.student_id)
+        raise HTTPException(status_code=502, detail=f"SDU profile request failed ({status_code}).")
 
     active_term_params = {"year": 2026, "term": 1}
     _, sched_data = await sdu_client.fetch_sdu_data("schedule", access_token)
@@ -779,17 +774,43 @@ async def sdu_sync(user: Annotated[User, Depends(current_user)]):
         grades=grades_data.get("grades") if isinstance(grades_data, dict) else None,
         attendance=att_data.get("attendance") if isinstance(att_data, dict) else None,
     )
-    return {"ok": True, "connected": True, "synced": True, "updated_at": res.get("updated_at")}
+    return {"ok": True, "connected": True, "synced": True, "updated_at": res.get("updated_at"), "new_notifications": res.get("new_notifications", 0)}
+
+
+AUTO_SYNC_INTERVAL_SECONDS = 10 * 60
+
+
+def seconds_since(iso_time: Optional[str]) -> float:
+    if not iso_time:
+        return float("inf")
+    try:
+        then = datetime.fromisoformat(str(iso_time).replace("Z", "+00:00"))
+        if then.tzinfo is None:
+            then = then.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - then).total_seconds()
+    except ValueError:
+        return float("inf")
+
+
+def require_sdu_connection(user_id: str) -> dict:
+    """The user's SDU connection. Demo data is served only for an explicit demo connection."""
+    conn = repo.get_sdu_connection(user_id)
+    if not conn:
+        raise HTTPException(status_code=404, detail="SDU account is not connected.")
+    if conn["expires_at"] < time.time() and not sdu_mock.is_demo_connection(conn):
+        repo.delete_sdu_connection(user_id)
+        raise HTTPException(status_code=409, detail="SDU session expired. Please reconnect.")
+    return conn
 
 
 def _handle_sdu_error_response(user_id: str, status_code: int, data: dict):
     if status_code == 401:
         repo.delete_sdu_connection(user_id)
-        raise HTTPException(status_code=401, detail="SDU token expired or revoked. Please reconnect.")
+        raise HTTPException(status_code=409, detail="SDU token expired or revoked. Please reconnect.")
     if status_code == 403:
         raise HTTPException(status_code=403, detail="Missing required SDU scope or account restricted.")
     if status_code == 409:
-        raise HTTPException(status_code=409, detail=data)
+        raise HTTPException(status_code=409, detail=f"{sdu_short_message(data) or sdu_short_message(data.get('detail') if isinstance(data, dict) else None)} {SDU_ERROR_HINTS[409]}".strip())
     if status_code == 502:
         raise HTTPException(status_code=502, detail="SDU portal upstream unavailable.")
     if status_code == 504:
@@ -802,9 +823,9 @@ def _handle_sdu_error_response(user_id: str, status_code: int, data: dict):
 
 @app.get("/api/sdu/profile")
 async def sdu_live_profile(user: Annotated[User, Depends(current_user)]):
-    conn = repo.get_sdu_connection(user.id)
-    if not conn or conn["expires_at"] < time.time() or sdu_mock.is_demo_connection(conn):
-        sid = user.student_id or "240103118"
+    conn = require_sdu_connection(user.id)
+    if sdu_mock.is_demo_connection(conn):
+        sid = user.student_id or sdu_mock.DEMO_PROFILE["student_id"]
         p = sdu_mock.profile()
         p["student_id"] = sid
         p["fullname"] = user.name
@@ -822,8 +843,8 @@ async def sdu_live_schedule(
     year: Optional[int] = None,
     term: Optional[int] = None
 ):
-    conn = repo.get_sdu_connection(user.id)
-    if not conn or conn["expires_at"] < time.time() or sdu_mock.is_demo_connection(conn):
+    conn = require_sdu_connection(user.id)
+    if sdu_mock.is_demo_connection(conn):
         return sdu_mock.schedule()
 
     params = {}
@@ -844,8 +865,8 @@ async def sdu_live_transcript(
     semester: Optional[int] = None,
     passed: Optional[bool] = None
 ):
-    conn = repo.get_sdu_connection(user.id)
-    if not conn or conn["expires_at"] < time.time() or sdu_mock.is_demo_connection(conn):
+    conn = require_sdu_connection(user.id)
+    if sdu_mock.is_demo_connection(conn):
         return sdu_mock.transcript(semester, passed)
 
     params = {}
@@ -866,8 +887,8 @@ async def sdu_live_attendance(
     term: Optional[int] = None,
     all_terms: Optional[bool] = Query(False)
 ):
-    conn = repo.get_sdu_connection(user.id)
-    if not conn or conn["expires_at"] < time.time() or sdu_mock.is_demo_connection(conn):
+    conn = require_sdu_connection(user.id)
+    if sdu_mock.is_demo_connection(conn):
         return sdu_mock.attendance()
 
     params = {}
@@ -892,8 +913,8 @@ async def sdu_live_grades(
     term: Optional[int] = None,
     all_terms: Optional[bool] = Query(False)
 ):
-    conn = repo.get_sdu_connection(user.id)
-    if not conn or conn["expires_at"] < time.time() or sdu_mock.is_demo_connection(conn):
+    conn = require_sdu_connection(user.id)
+    if sdu_mock.is_demo_connection(conn):
         return sdu_mock.grades()
 
     params = {}

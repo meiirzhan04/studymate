@@ -496,6 +496,8 @@ function notifMeta(type) {
     case 'critical':
     case 'danger':         return { icon: <Icons.AlertTriangle size={16} />, tone: 'danger' }
     case 'success':        return { icon: <Icons.CheckCircle size={16} />, tone: 'success' }
+    case 'grade_posted':   return { icon: <Icons.Award size={16} />, tone: 'success' }
+    case 'teacher_intervention': return { icon: <Icons.Mail size={16} />, tone: 'accent' }
     default:               return { icon: <Icons.Bell size={16} />, tone: 'accent' }
   }
 }
@@ -1366,7 +1368,8 @@ function WhatIfModal({ token, courses, onClose }) {
         .then(d => {
           if (d?.items?.length) {
             setAvailableCourses(d.items)
-            setCourseCode(prev => prev || d.items[0].code)
+            // The transcript codes used for the first render may not exist in this term's grade list
+            setCourseCode(prev => (d.items.some(c => c.code === prev) ? prev : d.items[0].code))
           }
         })
         .catch(() => {})
@@ -2326,12 +2329,14 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
     error: null,
   })
 
-  // Eagerly fetch unread count for bell badge
-  useEffect(() => {
+  // Unread count for the bell badge
+  const refreshUnread = useCallback(() => {
     api('/api/student/notifications', token)
       .then(d => setUnread(d.unread_count))
       .catch(() => {})
   }, [token])
+
+  useEffect(() => { refreshUnread() }, [refreshUnread])
 
   // Check SDU status
   const checkSduStatus = useCallback(async () => {
@@ -2386,9 +2391,21 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
   }, [token])
 
   useEffect(() => {
-    checkSduStatus()
-    loadSduLiveData()
-  }, [checkSduStatus, loadSduLiveData])
+    let cancelled = false
+    ;(async () => {
+      const status = await checkSduStatus()
+      if (cancelled || !status?.connected) return
+      loadSduLiveData()
+      // Background sync (server throttles to every 10 min) turns SDU changes into notifications
+      try {
+        const res = await api('/api/sdu/sync?auto=true', token, { method: 'POST' })
+        if (!cancelled && res?.new_notifications) refreshUnread()
+      } catch (e) {
+        if (!cancelled && /reconnect|expired/i.test(e.message || '')) setSduStatus({ connected: false })
+      }
+    })()
+    return () => { cancelled = true }
+  }, [checkSduStatus, loadSduLiveData, refreshUnread, token])
 
   const showToast = (text, ms = 3500) => {
     setSduToast(text)
@@ -2417,7 +2434,8 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
       const res = await api('/api/sdu/sync', token, { method: 'POST' })
       setSduStatus(prev => ({ ...prev, connected: true, demo_mode: res.demo_mode ?? prev.demo_mode, updated_at: res.updated_at }))
       await loadSduLiveData()
-      showToast(res.demo_mode ? 'Demo data updated' : 'Synced with SDU')
+      refreshUnread()
+      showToast(res.new_notifications ? `Synced · ${res.new_notifications} new update${res.new_notifications > 1 ? 's' : ''}` : (res.demo_mode ? 'Demo data updated' : 'Synced with SDU'))
     } catch (e) {
       if (e.message && (e.message.includes('reconnect') || e.message.includes('expired'))) {
         setSduStatus({ connected: false })

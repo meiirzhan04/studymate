@@ -409,7 +409,8 @@ def test_sdu_token_expiry_and_revocation(monkeypatch):
     monkeypatch.setattr(sdu_mod, "fetch_sdu_data", mock_fetch_401)
 
     sync_res = client.post("/api/sdu/sync", headers=auth(user_tok))
-    assert sync_res.status_code == 401
+    # 409, not 401: a revoked SDU token must not log the user out of StudyMate itself
+    assert sync_res.status_code == 409
     assert "revoked or expired" in sync_res.json()["detail"].lower()
 
     # Verify connection was deleted locally
@@ -706,3 +707,56 @@ def test_admin_and_user_tokens_are_not_interchangeable(monkeypatch):
     assert client.get("/api/admin/users", headers=auth(student)).status_code == 403
     assert client.get("/api/admin/users").status_code == 401
     assert client.get("/api/me", headers=auth(admin)).status_code == 401
+
+
+def _notifications_for(student_id):
+    from app.main import repo
+    return repo.get_notifications(student_id)
+
+
+def test_sdu_sync_notifies_only_about_real_changes():
+    from app.main import repo
+
+    u = repo.create_user("Notify Student", f"9{secrets.randbelow(10**8):08d}", "password123")
+    sid = u["student_id"]
+    profile = {"student_id": sid}
+    grades = [{"lesson": "Databases", "grade": 80}, {"lesson": "Networks", "grade": 70}]
+    attendance = [{"lesson": "Databases", "absence_percent": 5}, {"lesson": "Networks", "absence_percent": 10}]
+    baseline = len(_notifications_for(sid))  # welcome message from registration
+
+    # First sync is the baseline: no "new grade" spam
+    repo.sync_sdu_student_data(u["id"], profile, None, grades, attendance)
+    assert len(_notifications_for(sid)) == baseline
+
+    # One grade changes, one course crosses the 20% absence limit, one new grade appears
+    grades2 = [{"lesson": "Databases", "grade": 85}, {"lesson": "Networks", "grade": 70}, {"lesson": "Security", "grade": 40}]
+    attendance2 = [{"lesson": "Databases", "absence_percent": 5}, {"lesson": "Networks", "absence_percent": 21}]
+    res = repo.sync_sdu_student_data(u["id"], profile, None, grades2, attendance2)
+    assert res["new_notifications"] == 3
+    new = _notifications_for(sid)[:3]
+    titles = {n["title"] for n in new}
+    assert titles == {"Grade updated", "New grade posted", "Absence limit exceeded"}
+    assert any(n["type"] == "low_grade" and n["course"] == "Security" for n in new)
+
+    # Identical sync creates nothing
+    res = repo.sync_sdu_student_data(u["id"], profile, None, grades2, attendance2)
+    assert res["new_notifications"] == 0
+
+
+def test_password_only_student_gets_no_demo_data():
+    ident = f"stu_real_{secrets.token_hex(4)}"
+    reg = client.post("/api/auth/register", json={"name": "Real Student", "identifier": ident, "password": "password123"})
+    assert reg.status_code == 200
+    tok = token(ident, "password123")
+    assert client.get("/api/sdu/status", headers=auth(tok)).json()["connected"] is False
+    for path in ("/api/sdu/profile", "/api/sdu/schedule", "/api/sdu/transcript", "/api/sdu/attendance", "/api/sdu/grades"):
+        response = client.get(path, headers=auth(tok))
+        assert response.status_code == 404, path
+        assert "demo_mock" not in response.text
+
+
+def test_auto_sync_is_throttled():
+    session = client.post("/api/sdu/demo-connect", json={}).json()
+    headers = auth(session["access_token"])
+    assert client.post("/api/sdu/sync", headers=headers).json()["synced"] is True
+    assert client.post("/api/sdu/sync", params={"auto": "true"}, headers=headers).json()["skipped"] is True
