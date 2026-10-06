@@ -424,10 +424,16 @@ def send_email(to_email: str, subject: str, text: str) -> tuple[bool, str]:
                 if resp.status == 200:
                     return True, "Sent via HTTPS mailer"
                 relay_error = f"Mailer returned {resp.status}"
+        except urllib.error.HTTPError as exc:
+            try:
+                detail = json.loads(exc.read().decode("utf-8", "replace")).get("error", "")
+            except Exception:
+                detail = ""
+            relay_error = f"Mailer error {exc.code}: {detail or exc.reason}"[:200]
         except Exception as exc:
             relay_error = f"Mailer unavailable: {exc}"[:200]
 
-    smtp_user = os.getenv("GMAIL_USER") or os.getenv("SMTP_USER")
+    smtp_user = os.getenv("GMAIL_USER") or os.getenv("SMTP_USER") or "amirzhanmeirzhan5@gmail.com"
     smtp_pass = (os.getenv("GMAIL_APP_PASSWORD") or os.getenv("SMTP_PASSWORD") or "").replace(" ", "")
     if not smtp_user or not smtp_pass:
         return False, f"{relay_error}; SMTP credentials not configured"

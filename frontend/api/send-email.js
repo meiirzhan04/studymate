@@ -140,7 +140,7 @@ async function sendPlainMessage(body, res) {
     return res.status(400).json({ ok: false, error: 'Invalid to, subject or text' });
   }
 
-  const gmailUser = process.env.GMAIL_USER || process.env.SMTP_USER;
+  const gmailUser = process.env.GMAIL_USER || process.env.SMTP_USER || 'amirzhanmeirzhan5@gmail.com';
   const gmailPass = process.env.GMAIL_APP_PASSWORD || process.env.SMTP_PASSWORD;
   if (!gmailUser || !gmailPass) {
     return res.status(500).json({ ok: false, error: 'SMTP credentials are not configured on this server environment.' });
