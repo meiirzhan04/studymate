@@ -978,3 +978,18 @@ button.avatar:hover { box-shadow: 0 0 0 3px var(--accent-ring); }
   .kv > div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .notif-popover { position: fixed; top: 64px; left: 12px; right: 12px; width: auto; }
 }
+
+/* ─── Help & support ────────────────────────────────────────── */
+.form-stack label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 500; color: var(--text-secondary); }
+.select-block { width: 100%; }
+.textarea { height: auto; padding: 10px 12px; resize: vertical; line-height: 1.5; }
+.ticket-row { width: 100%; text-align: left; transition: background-color .15s; }
+.ticket-row:hover { background: var(--surface-2); }
+.thread { display: flex; flex-direction: column; gap: 10px; padding: 4px 24px 18px; }
+.bubble { max-width: 88%; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); }
+.bubble p { margin-top: 2px; font-size: 13.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.bubble-admin { align-self: flex-end; background: var(--accent-soft); }
+.bubble-meta { font-size: 11.5px; color: var(--text-muted); }
+.thread-reply { display: flex; gap: 8px; margin-top: 4px; }
+.login-help { display: block; margin: 22px auto 0; font-size: 13px; color: var(--text-muted); }
+.login-help:hover { color: var(--accent-text); text-decoration: underline; text-underline-offset: 3px; }

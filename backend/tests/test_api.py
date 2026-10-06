@@ -852,3 +852,67 @@ def test_admin_deleted_accounts_stay_deleted_after_restart(tmp_path):
     for u in repo1.admin_list_users():
         repo1.admin_delete_user(u["id"])
     assert SQLiteRepository(path).admin_list_users() == []
+
+
+def _support_payload(**over):
+    body = {"category": "bug", "subject": "Grades page error", "message": "The grades page shows an error after login."}
+    body.update(over)
+    return body
+
+
+def test_support_ticket_requires_email_when_logged_out():
+    res = client.post("/api/support/tickets", json=_support_payload(), headers={"X-Forwarded-For": f"10.0.{secrets.randbelow(250)}.1"})
+    assert res.status_code == 422
+
+
+def test_support_ticket_rate_limit():
+    ip = f"10.9.{secrets.randbelow(250)}.{secrets.randbelow(250)}"
+    email = f"spam_{secrets.token_hex(3)}@example.com"
+    codes = [client.post("/api/support/tickets", json=_support_payload(email=email), headers={"X-Forwarded-For": ip}).status_code for _ in range(6)]
+    assert codes[:5] == [200] * 5 and codes[5] == 429
+
+
+def test_support_ticket_privacy_and_admin_only():
+    a = client.post("/api/sdu/demo-connect", json={}).json()["access_token"]
+    ident = f"stu_sup_{secrets.token_hex(3)}"
+    client.post("/api/auth/register", json={"name": "Other Student", "identifier": ident, "password": "password123"})
+    b = token(ident, "password123")
+
+    ticket = client.post("/api/support/tickets", json=_support_payload(email="owner@example.com"), headers={**auth(a), "X-Forwarded-For": f"10.5.{secrets.randbelow(250)}.{secrets.randbelow(250)}"}).json()["ticket"]
+    assert all(t["id"] != ticket["id"] for t in client.get("/api/support/tickets", headers=auth(b)).json()["items"])
+    assert client.post(f"/api/support/tickets/{ticket['id']}/messages", json={"message": "hi"}, headers=auth(b)).status_code == 404
+    assert client.get("/api/admin/support", headers=auth(a)).status_code == 403
+
+
+def test_admin_reply_is_stored_emailed_and_notified(monkeypatch):
+    import app.main as main_mod
+    sent = []
+    monkeypatch.setattr(main_mod, "send_email", lambda to, subject, text: (sent.append((to, subject, text)) or (True, "ok")))
+
+    session = client.post("/api/sdu/demo-connect", json={}).json()
+    st = session["access_token"]
+    ticket = client.post("/api/support/tickets", json=_support_payload(email="student@example.com"), headers={**auth(st), "X-Forwarded-For": f"10.6.{secrets.randbelow(250)}.{secrets.randbelow(250)}"}).json()["ticket"]
+
+    admin = admin_token(monkeypatch)
+    res = client.post(f"/api/admin/support/{ticket['id']}/reply", json={"message": "Fixed, please refresh."}, headers=auth(admin)).json()
+    assert res["emailed"] is True
+    assert res["ticket"]["status"] == "answered"
+    assert sent[0][0] == "student@example.com" and "Fixed, please refresh." in sent[0][2]
+    titles = [n["title"] for n in client.get("/api/student/notifications", headers=auth(st)).json()["items"]]
+    assert "Support replied" in titles
+
+    # A user follow-up reopens the ticket
+    mine = client.post(f"/api/support/tickets/{ticket['id']}/messages", json={"message": "Still broken"}, headers=auth(st)).json()["ticket"]
+    assert mine["status"] == "open" and mine["messages"][-1]["author"] == "user"
+
+
+def test_admin_reply_kept_when_email_fails(monkeypatch):
+    import app.main as main_mod
+    monkeypatch.setattr(main_mod, "send_email", lambda to, subject, text: (False, "SMTP credentials not configured"))
+    ticket = client.post("/api/support/tickets", json=_support_payload(email=f"x_{secrets.token_hex(3)}@example.com"),
+                         headers={"X-Forwarded-For": f"10.7.{secrets.randbelow(250)}.1"}).json()["ticket"]
+    admin = admin_token(monkeypatch)
+    res = client.post(f"/api/admin/support/{ticket['id']}/reply", json={"message": "We are on it"}, headers=auth(admin)).json()
+    assert res["emailed"] is False
+    last = res["ticket"]["messages"][-1]
+    assert last["author"] == "admin" and last["emailed"] is False and "SMTP" in last["email_error"]

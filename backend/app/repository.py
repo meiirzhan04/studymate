@@ -155,6 +155,27 @@ class SQLiteRepository:
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY (user_id, kind)
                 );
+                CREATE TABLE IF NOT EXISTS support_tickets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT,
+                    name TEXT,
+                    email TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    page TEXT,
+                    status TEXT NOT NULL DEFAULT 'open',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS support_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ticket_id INTEGER NOT NULL REFERENCES support_tickets(id),
+                    author TEXT NOT NULL CHECK(author IN ('user','admin')),
+                    body TEXT NOT NULL,
+                    emailed INTEGER NOT NULL DEFAULT 0,
+                    email_error TEXT,
+                    created_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS deleted_accounts (
                     user_id TEXT PRIMARY KEY,
                     deleted_at TEXT NOT NULL
@@ -650,6 +671,89 @@ class SQLiteRepository:
             db.commit()
             return {"id": cur.lastrowid, "course": course, "preferred_time": preferred_time, "note": note, "status": "requested", "created_at": now}
 
+    # ─── Support tickets ───────────────────────────────────────────
+    def create_support_ticket(self, user_id: str | None, name: str | None, email: str, category: str,
+                              subject: str, message: str, page: str | None) -> dict:
+        now = datetime.now(timezone.utc).isoformat()
+        with self.connect() as db:
+            cur = db.execute(
+                """INSERT INTO support_tickets (user_id, name, email, category, subject, page, status, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)""",
+                (user_id, name, email, category, subject, page, now, now)
+            )
+            ticket_id = cur.lastrowid
+            db.execute(
+                "INSERT INTO support_messages (ticket_id, author, body, created_at) VALUES (?, 'user', ?, ?)",
+                (ticket_id, message, now)
+            )
+            db.commit()
+        return self.get_support_ticket(ticket_id)
+
+    def get_support_ticket(self, ticket_id: int) -> dict | None:
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM support_tickets WHERE id = ?", (ticket_id,)).fetchone()
+            if not row:
+                return None
+            messages = db.execute(
+                "SELECT id, author, body, emailed, email_error, created_at FROM support_messages WHERE ticket_id = ? ORDER BY id",
+                (ticket_id,)
+            ).fetchall()
+        return {**dict(row), "messages": [{**dict(m), "emailed": bool(m["emailed"])} for m in messages]}
+
+    def list_support_tickets(self, user_id: str | None = None, status: str | None = None) -> list[dict]:
+        sql = """SELECT t.*, (SELECT body FROM support_messages m WHERE m.ticket_id = t.id ORDER BY m.id DESC LIMIT 1) AS last_message,
+                        (SELECT COUNT(*) FROM support_messages m WHERE m.ticket_id = t.id) AS message_count
+                 FROM support_tickets t WHERE 1 = 1"""
+        params: list = []
+        if user_id is not None:
+            sql += " AND t.user_id = ?"
+            params.append(user_id)
+        if status:
+            sql += " AND t.status = ?"
+            params.append(status)
+        sql += " ORDER BY t.updated_at DESC LIMIT 300"
+        with self.connect() as db:
+            return [dict(r) for r in db.execute(sql, params).fetchall()]
+
+    def add_support_message(self, ticket_id: int, author: str, body: str, status: str | None = None) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        with self.connect() as db:
+            cur = db.execute(
+                "INSERT INTO support_messages (ticket_id, author, body, created_at) VALUES (?, ?, ?, ?)",
+                (ticket_id, author, body, now)
+            )
+            if status:
+                db.execute("UPDATE support_tickets SET status = ?, updated_at = ? WHERE id = ?", (status, now, ticket_id))
+            else:
+                db.execute("UPDATE support_tickets SET updated_at = ? WHERE id = ?", (now, ticket_id))
+            db.commit()
+            return cur.lastrowid
+
+    def set_support_message_email_result(self, message_id: int, emailed: bool, error: str | None) -> None:
+        with self.connect() as db:
+            db.execute("UPDATE support_messages SET emailed = ?, email_error = ? WHERE id = ?", (1 if emailed else 0, error, message_id))
+            db.commit()
+
+    def set_support_status(self, ticket_id: int, status: str) -> bool:
+        with self.connect() as db:
+            cur = db.execute(
+                "UPDATE support_tickets SET status = ?, updated_at = ? WHERE id = ?",
+                (status, datetime.now(timezone.utc).isoformat(), ticket_id)
+            )
+            db.commit()
+            return cur.rowcount > 0
+
+    def notify_support_reply(self, user_id: str, subject: str) -> None:
+        with self.connect() as db:
+            row = db.execute("SELECT student_id FROM users WHERE id = ?", (user_id,)).fetchone()
+            if not row or not row["student_id"]:
+                return
+            self._add_notification(
+                db, row["student_id"], "support_reply", "Support replied",
+                f"New reply to your request: {subject}", None, datetime.now(timezone.utc).isoformat()
+            )
+            db.commit()
+
     def get_tutoring_requests(self, student_id: str) -> list[dict]:
         with self.connect() as db:
             return [dict(r) for r in db.execute(
@@ -950,6 +1054,7 @@ class SQLiteRepository:
         with self.connect() as db:
             if not db.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone():
                 return False
+            db.execute("UPDATE support_tickets SET user_id = NULL WHERE user_id = ?", (user_id,))
             for table in ("sdu_connections", "sdu_snapshots", "password_reset_tokens", "sdu_oauth_attempts", "login_identifiers"):
                 db.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
             db.execute("DELETE FROM users WHERE id = ?", (user_id,))

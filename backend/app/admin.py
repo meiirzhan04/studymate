@@ -14,7 +14,7 @@ import os
 import time
 from collections import deque
 from pathlib import Path
-from typing import Annotated, Callable, Optional
+from typing import Annotated, Callable, Literal, Optional
 
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import HTMLResponse
@@ -63,7 +63,28 @@ class AdminLoginRequest(BaseModel):
 class AdminPasswordRequest(BaseModel):
     new_password: str = Field(min_length=6, max_length=200)
 
-def create_admin_router(repo: SQLiteRepository, sign: Callable[[str], str], sdu_origin: str, sdu_client_id: str) -> APIRouter:
+class AdminReplyRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=5000)
+    close: bool = False
+
+
+class AdminStatusRequest(BaseModel):
+    status: Literal["open", "answered", "closed"]
+
+
+def reply_email_text(ticket: dict, reply: str) -> str:
+    first = next((m["body"] for m in ticket["messages"] if m["author"] == "user"), "")
+    quoted = "\n".join("> " + line for line in first[:600].splitlines())
+    hello = f"Hello {ticket['name']}," if ticket.get("name") else "Hello,"
+    return (
+        f"{hello}\n\n{reply}\n\n— StudyMate Support\n\n"
+        f"Your request #{ticket['id']}: {ticket['subject']}\n{quoted}\n\n"
+        "You can also see this conversation in StudyMate under Help & support."
+    )
+
+
+def create_admin_router(repo: SQLiteRepository, sign: Callable[[str], str], sdu_origin: str, sdu_client_id: str,
+                        send_email: Callable[[str, str, str], tuple[bool, str]]) -> APIRouter:
     router = APIRouter(include_in_schema=False)
 
     def issue_admin_token() -> str:
@@ -110,6 +131,7 @@ def create_admin_router(repo: SQLiteRepository, sign: Callable[[str], str], sdu_
         return {
             "stats": repo.admin_stats(),
             "recent_sdu_errors": len(_SDU_ERRORS),
+            "open_support_tickets": len(repo.list_support_tickets(status="open")),
             "system": {
                 "database_path": db_path,
                 "database_ephemeral": db_path.startswith("/tmp"),
@@ -117,6 +139,7 @@ def create_admin_router(repo: SQLiteRepository, sign: Callable[[str], str], sdu_
                 "sdu_client_id": sdu_client_id,
                 "admin_password_from_env": bool(os.getenv("ADMIN_PASSWORD")),
                 "auth_secret_from_env": bool(os.getenv("AUTH_SECRET")),
+                "mailer_secret_from_env": bool(os.getenv("MAILER_SECRET_KEY")),
             },
         }
 
@@ -155,5 +178,40 @@ def create_admin_router(repo: SQLiteRepository, sign: Callable[[str], str], sdu_
     def admin_sdu_errors(authorization: Annotated[Optional[str], Header()] = None):
         require_admin(authorization)
         return {"items": list(_SDU_ERRORS)}
+
+    @router.get("/api/admin/support")
+    def admin_support_list(status: Optional[str] = None, authorization: Annotated[Optional[str], Header()] = None):
+        require_admin(authorization)
+        return {"items": repo.list_support_tickets(status=status or None)}
+
+    @router.get("/api/admin/support/{ticket_id}")
+    def admin_support_ticket(ticket_id: int, authorization: Annotated[Optional[str], Header()] = None):
+        require_admin(authorization)
+        ticket = repo.get_support_ticket(ticket_id)
+        if not ticket:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+        return ticket
+
+    @router.post("/api/admin/support/{ticket_id}/reply")
+    def admin_support_reply(ticket_id: int, req: AdminReplyRequest, authorization: Annotated[Optional[str], Header()] = None):
+        require_admin(authorization)
+        ticket = repo.get_support_ticket(ticket_id)
+        if not ticket:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+        body = req.message.strip()
+        message_id = repo.add_support_message(ticket_id, "admin", body, status="closed" if req.close else "answered")
+        # The reply is always visible in the app; email is a best-effort extra
+        sent, reason = send_email(ticket["email"], f"Re: {ticket['subject']} [StudyMate #{ticket_id}]", reply_email_text(ticket, body))
+        repo.set_support_message_email_result(message_id, sent, None if sent else reason)
+        if ticket.get("user_id"):
+            repo.notify_support_reply(ticket["user_id"], ticket["subject"])
+        return {"ok": True, "emailed": sent, "email_detail": reason, "ticket": repo.get_support_ticket(ticket_id)}
+
+    @router.post("/api/admin/support/{ticket_id}/status")
+    def admin_support_status(ticket_id: int, req: AdminStatusRequest, authorization: Annotated[Optional[str], Header()] = None):
+        require_admin(authorization)
+        if not repo.set_support_status(ticket_id, req.status):
+            raise HTTPException(status_code=404, detail="Ticket not found")
+        return {"ok": True}
 
     return router

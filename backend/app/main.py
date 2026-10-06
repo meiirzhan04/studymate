@@ -401,6 +401,117 @@ def send_gmail_code(to_email: str, code: str) -> tuple[bool, str]:
         return False, str(exc)
 
 
+def send_email(to_email: str, subject: str, text: str) -> tuple[bool, str]:
+    """Send a plain-text email (support replies). Returns (sent, reason).
+
+    1. Vercel HTTPS relay (Render blocks outbound SMTP). The relay's message mode
+       only works with MAILER_SECRET_KEY, so it can't be used as an open relay.
+    2. Direct SMTP fallback.
+    """
+    subject = " ".join(subject.split())[:150]
+    mailer_secret = os.getenv("MAILER_SECRET_KEY")
+    relay_error = "MAILER_SECRET_KEY not set"
+    if mailer_secret:
+        try:
+            relay_url = os.getenv("EMAIL_RELAY_URL", "https://studymate-mu-smoky.vercel.app/api/send-email")
+            payload = json.dumps({"type": "message", "to": to_email, "subject": subject, "text": text[:5000]}).encode("utf-8")
+            req = urllib.request.Request(relay_url, data=payload, headers={
+                "Content-Type": "application/json",
+                "User-Agent": "StudyMate-Backend/1.0",
+                "X-Mailer-Secret": mailer_secret,
+            })
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                if resp.status == 200:
+                    return True, "Sent via HTTPS mailer"
+                relay_error = f"Mailer returned {resp.status}"
+        except Exception as exc:
+            relay_error = f"Mailer unavailable: {exc}"[:200]
+
+    smtp_user = os.getenv("GMAIL_USER") or os.getenv("SMTP_USER")
+    smtp_pass = (os.getenv("GMAIL_APP_PASSWORD") or os.getenv("SMTP_PASSWORD") or "").replace(" ", "")
+    if not smtp_user or not smtp_pass:
+        return False, f"{relay_error}; SMTP credentials not configured"
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = f"StudyMate Support <{smtp_user}>"
+        msg["To"] = to_email
+        msg.attach(MIMEText(text, "plain", "utf-8"))
+        import ssl
+        with smtplib.SMTP_SSL(os.getenv("SMTP_HOST", "smtp.gmail.com"), 465, context=ssl.create_default_context(), timeout=8) as server:
+            server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
+        return True, "Sent via SMTP"
+    except Exception as exc:
+        return False, f"{relay_error}; SMTP failed: {exc}"[:300]
+
+
+# ─── SUPPORT TICKETS ─────────────────────────────────────────────────────────
+SupportCategory = Literal["bug", "question", "account", "other"]
+SUPPORT_LIMIT_PER_15_MIN = 5
+
+
+class SupportTicketRequest(BaseModel):
+    category: SupportCategory = "question"
+    subject: str = Field(min_length=3, max_length=120)
+    message: str = Field(min_length=10, max_length=3000)
+    email: Optional[str] = Field(default=None, max_length=160)
+    name: Optional[str] = Field(default=None, max_length=100)
+    page: Optional[str] = Field(default=None, max_length=200)
+
+
+class SupportMessageRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=3000)
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "")
+    return (forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "unknown"))
+
+
+def _valid_email(value: str) -> bool:
+    import re
+    return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value))
+
+
+@app.post("/api/support/tickets")
+def create_support_ticket(req: SupportTicketRequest, request: Request,
+                          user: Annotated[Optional[User], Depends(optional_current_user)] = None):
+    email = (req.email or "").strip()
+    if not email and user:
+        email = repo.get_email_for_user(user.id) or ""
+    if not email or not _valid_email(email):
+        raise HTTPException(status_code=422, detail="Please enter a valid email so we can reply.")
+
+    # Spam protection for a form that logged-out visitors can use
+    keys = [f"support:ip:{_client_ip(request)}", f"support:email:{email.lower()}"]
+    if any(repo.check_brute_force(k) for k in keys):
+        raise HTTPException(status_code=429, detail="Too many requests. Please try again in 15 minutes.")
+    for k in keys:
+        repo.record_attempt(k)
+
+    ticket = repo.create_support_ticket(
+        user.id if user else None,
+        (req.name or (user.name if user else "") or "").strip() or None,
+        email, req.category, req.subject.strip(), req.message.strip(), (req.page or "").strip() or None,
+    )
+    return {"ok": True, "ticket": ticket}
+
+
+@app.get("/api/support/tickets")
+def my_support_tickets(user: Annotated[User, Depends(current_user)]):
+    return {"items": [repo.get_support_ticket(t["id"]) for t in repo.list_support_tickets(user_id=user.id)]}
+
+
+@app.post("/api/support/tickets/{ticket_id}/messages")
+def reply_to_my_ticket(ticket_id: int, req: SupportMessageRequest, user: Annotated[User, Depends(current_user)]):
+    ticket = repo.get_support_ticket(ticket_id)
+    if not ticket or ticket["user_id"] != user.id:
+        raise HTTPException(status_code=404, detail="Request not found")
+    repo.add_support_message(ticket_id, "user", req.message.strip(), status="open")
+    return {"ok": True, "ticket": repo.get_support_ticket(ticket_id)}
+
+
 @app.post("/api/auth/register")
 def register(req: RegisterRequest):
     # Security: public registration cannot create teacher accounts
@@ -1296,7 +1407,8 @@ def attendance_performance(user: Annotated[User, Depends(require_role("teacher")
 
 
 # Admin panel (/admin page + /api/admin/*) must be registered before the SPA catch-all below.
-app.include_router(admin.create_admin_router(repo, sign, sdu_client.SDU_ORIGIN, sdu_client.SDU_CLIENT_ID))
+app.include_router(admin.create_admin_router(repo, sign, sdu_client.SDU_ORIGIN, sdu_client.SDU_CLIENT_ID,
+                                            lambda to, subject, text: send_email(to, subject, text)))
 
 
 # In production the frontend build is copied here by the container build.

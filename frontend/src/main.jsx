@@ -500,6 +500,7 @@ function notifTarget(type) {
   if (type === 'low_grade' || type === 'grade_posted') return { tab: 'transcript', label: 'View grades' }
   if (type === 'low_attendance') return { tab: 'attendance', label: 'View attendance' }
   if (type === 'teacher_intervention') return { tab: 'insights', label: 'Open study plan' }
+  if (type === 'support_reply') return { tab: 'support', label: 'Open conversation' }
   return null
 }
 
@@ -512,6 +513,7 @@ function notifMeta(type) {
     case 'success':        return { icon: <Icons.CheckCircle size={16} />, tone: 'success' }
     case 'grade_posted':   return { icon: <Icons.Award size={16} />, tone: 'success' }
     case 'teacher_intervention': return { icon: <Icons.Mail size={16} />, tone: 'accent' }
+    case 'support_reply':  return { icon: <Icons.Mail size={16} />, tone: 'accent' }
     default:               return { icon: <Icons.Bell size={16} />, tone: 'accent' }
   }
 }
@@ -828,6 +830,7 @@ function Login({ onLogin, theme, toggleTheme }) {
   const [forgotErr, setForgotErr]   = useState('')
   const [forgotBusy, setForgotBusy] = useState(false)
   const [sduBusy, setSduBusy]       = useState(false)
+  const [showSupport, setShowSupport] = useState(false)
 
   const handleConnectSdu = async () => {
     setSduBusy(true)
@@ -1223,6 +1226,11 @@ function Login({ onLogin, theme, toggleTheme }) {
               </button>
             </form>
           )}
+
+          <button type="button" className="login-help" onClick={() => setShowSupport(true)}>
+            Trouble signing in? Contact support
+          </button>
+          {showSupport && <SupportModal token={null} page="login" onClose={() => setShowSupport(false)} />}
 
           {/* 6-Digit Code Reset Modal */}
           {showForgot && (
@@ -2268,6 +2276,194 @@ function InsightsTab({ token, sduStatus, onConnect }) {
   )
 }
 
+/* ─── HELP & SUPPORT ─────────────────────────────────────────────── */
+const SUPPORT_CATEGORIES = [
+  { id: 'bug', label: 'Something is broken' },
+  { id: 'question', label: 'Question' },
+  { id: 'account', label: 'Account / sign-in' },
+  { id: 'other', label: 'Other' },
+]
+
+const SUPPORT_STATUS = {
+  open: { tone: 'warning', label: 'Waiting for reply' },
+  answered: { tone: 'success', label: 'Answered' },
+  closed: { tone: 'neutral', label: 'Closed' },
+}
+
+function SupportForm({ token, defaultEmail = '', page, onSent, requireEmail }) {
+  const [category, setCategory] = useState('bug')
+  const [subject, setSubject] = useState('')
+  const [message, setMessage] = useState('')
+  const [email, setEmail] = useState(defaultEmail)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  useEffect(() => { if (defaultEmail && !email) setEmail(defaultEmail) }, [defaultEmail])
+
+  const submit = async e => {
+    e.preventDefault()
+    setErr('')
+    if (subject.trim().length < 3) return setErr('Add a short subject (at least 3 characters).')
+    if (message.trim().length < 10) return setErr('Describe the problem in a few words (at least 10 characters).')
+    if ((requireEmail || email) && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) return setErr('Enter a valid email so we can reply.')
+    setBusy(true)
+    try {
+      await api('/api/support/tickets', token, {
+        method: 'POST',
+        body: JSON.stringify({ category, subject: subject.trim(), message: message.trim(), email: email.trim() || null, page }),
+      })
+      setSubject(''); setMessage('')
+      onSent && onSent(email.trim())
+    } catch (e2) {
+      setErr(e2.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form className="form-stack support-form" onSubmit={submit}>
+      <label>
+        Topic
+        <select className="select select-block" value={category} onChange={e => setCategory(e.target.value)}>
+          {SUPPORT_CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+        </select>
+      </label>
+      <label>
+        Subject
+        <input className="input" value={subject} onChange={e => setSubject(e.target.value)} maxLength={120} placeholder="e.g. Grades page shows an error" />
+      </label>
+      <label>
+        Message
+        <textarea className="input textarea" rows={5} value={message} onChange={e => setMessage(e.target.value)} maxLength={3000}
+          placeholder="What happened, and what did you expect? Steps to reproduce help a lot." />
+      </label>
+      <label>
+        Reply to email
+        <input className="input" type="email" value={email} onChange={e => setEmail(e.target.value)} maxLength={160} placeholder="you@example.com" />
+      </label>
+      {err && <div className="alert-box alert-danger">{err}</div>}
+      <button type="submit" className="btn-primary" disabled={busy} style={{ alignSelf: 'flex-start' }}>
+        <Icons.Send size={15} /> {busy ? 'Sending…' : 'Send to support'}
+      </button>
+    </form>
+  )
+}
+
+function SupportModal({ token, defaultEmail, page, onClose }) {
+  const [sentTo, setSentTo] = useState(null)
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <div className="modal-head">
+          <div>
+            <h2>Contact support</h2>
+            <p>We reply to your email, usually within a day</p>
+          </div>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close"><Icons.Close size={18} /></button>
+        </div>
+        <div className="modal-body">
+          {sentTo !== null ? (
+            <div className="alert-box alert-success"><Icons.CheckCircle size={16} /> Sent. We will reply to {sentTo || 'your email'}.</div>
+          ) : (
+            <SupportForm token={token} defaultEmail={defaultEmail} page={page} requireEmail={!token} onSent={setSentTo} />
+          )}
+        </div>
+        {sentTo !== null && (
+          <div className="modal-foot"><button type="button" className="btn-primary" onClick={onClose}>Done</button></div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function SupportThread({ token, ticket, onChanged }) {
+  const [reply, setReply] = useState('')
+  const [busy, setBusy] = useState(false)
+  const send = async e => {
+    e.preventDefault()
+    if (!reply.trim()) return
+    setBusy(true)
+    try {
+      await api(`/api/support/tickets/${ticket.id}/messages`, token, { method: 'POST', body: JSON.stringify({ message: reply.trim() }) })
+      setReply('')
+      onChanged()
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="thread">
+      {ticket.messages.map(m => (
+        <div key={m.id} className={`bubble ${m.author === 'admin' ? 'bubble-admin' : ''}`}>
+          <span className="bubble-meta">{m.author === 'admin' ? 'StudyMate support' : 'You'} · {timeAgo(m.created_at)}</span>
+          <p>{m.body}</p>
+        </div>
+      ))}
+      {ticket.status !== 'closed' && (
+        <form className="thread-reply" onSubmit={send}>
+          <input className="input" value={reply} onChange={e => setReply(e.target.value)} placeholder="Write a follow-up…" maxLength={3000} />
+          <button type="submit" className="btn-ghost" disabled={busy || !reply.trim()}>Send</button>
+        </form>
+      )}
+    </div>
+  )
+}
+
+function SupportTab({ token, defaultEmail, page }) {
+  const [tickets, setTickets] = useState(null)
+  const [openId, setOpenId] = useState(null)
+  const [sentTo, setSentTo] = useState(null)
+
+  const load = useCallback(() => {
+    api('/api/support/tickets', token).then(d => setTickets(d.items)).catch(() => setTickets([]))
+  }, [token])
+  useEffect(() => { load() }, [load])
+
+  return (
+    <div className="page page-fade">
+      <section className="split">
+        <article className="card">
+          <header className="card-head"><h2>New request</h2></header>
+          {sentTo !== null && (
+            <div className="alert-box alert-success" style={{ marginBottom: 14 }}>
+              <Icons.CheckCircle size={16} /> Sent. We will reply to {sentTo || 'your email'} and here.
+            </div>
+          )}
+          <SupportForm token={token} defaultEmail={defaultEmail} page={page} onSent={to => { setSentTo(to); load() }} />
+        </article>
+
+        <article className="card card-flush">
+          <header className="group-head"><h2>Your requests</h2><span>{tickets?.length || 0}</span></header>
+          {!tickets ? (
+            <PageLoader label="Loading…" />
+          ) : !tickets.length ? (
+            <EmptyState icon={<Icons.Mail size={20} />} title="No requests yet" text="Replies from support will show up here and in your email." />
+          ) : (
+            <ul className="course-list">
+              {tickets.map(t => {
+                const st = SUPPORT_STATUS[t.status] || SUPPORT_STATUS.open
+                return (
+                  <li key={t.id}>
+                    <button type="button" className="course-row request-row ticket-row" onClick={() => setOpenId(openId === t.id ? null : t.id)}>
+                      <span className="course-main">
+                        <b>{t.subject}</b>
+                        <span>#{t.id} · {timeAgo(t.updated_at)}</span>
+                      </span>
+                      <Status tone={st.tone}>{st.label}</Status>
+                    </button>
+                    {openId === t.id && <SupportThread token={token} ticket={t} onChanged={load} />}
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </article>
+      </section>
+    </div>
+  )
+}
+
 /* ─── PROFILE TAB ────────────────────────────────────────────────── */
 function SetPasswordModal({ token, studentId, onClose }) {
   const [pw, setPw]           = useState('')
@@ -2514,7 +2710,7 @@ function AlertsTab({ token, onUnreadChange, onSelectTab }) {
 }
 
 /* ─── AVATAR DROPDOWN ─────────────────────────────────────────────── */
-function AvatarMenu({ user, logout, token, onUpdateUser, onOpenProfile }) {
+function AvatarMenu({ user, logout, token, onUpdateUser, onOpenProfile, onOpenSupport }) {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(false)
   const [nameVal, setNameVal] = useState(user?.name || '')
@@ -2597,6 +2793,11 @@ function AvatarMenu({ user, logout, token, onUpdateUser, onOpenProfile }) {
               <button type="button" className="menu-item" onClick={() => { setEditing(true); setNameVal(user?.name || '') }}>
                 <Icons.Edit size={15} /> Edit name
               </button>
+              {onOpenSupport && (
+                <button type="button" className="menu-item" onClick={() => { setOpen(false); onOpenSupport() }}>
+                  <Icons.Mail size={15} /> Help & support
+                </button>
+              )}
             </>
           )}
 
@@ -2789,6 +2990,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
     transcript: ['Grades', connected && courseCount ? `${courseCount} courses on your transcript` : null],
     attendance: ['Attendance', connected ? 'How much of each course you have attended' : null],
     insights:   ['Insights', connected ? 'What to focus on this term' : null],
+    support:    ['Help & support', 'Tell us about a problem or ask a question'],
     profile:    ['Profile', null],
     alerts:     ['Notifications', null],
   }
@@ -2831,6 +3033,14 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
           >
             <Icons.User size={18} />
             <span>Profile</span>
+          </button>
+          <button
+            type="button"
+            className={`side-link ${tab === 'support' ? 'active' : ''}`}
+            onClick={() => setTab('support')}
+          >
+            <Icons.Mail size={18} />
+            <span>Help & support</span>
           </button>
         </div>
 
@@ -2891,6 +3101,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
               token={token}
               onUpdateUser={onUpdateUser}
               onOpenProfile={() => setTab('profile')}
+              onOpenSupport={() => setTab('support')}
             />
           </div>
         </header>
@@ -2899,6 +3110,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
           {tab === 'dashboard'  && <DashboardTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} setTab={setTab} token={token} />}
           {tab === 'schedule'   && <ScheduleTab  sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} />}
           {tab === 'transcript' && <TranscriptTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} />}
+          {tab === 'support'    && <SupportTab token={token} defaultEmail={sduData.profile?.email || ''} page="student" />}
           {tab === 'insights'   && <InsightsTab token={token} sduStatus={sduStatus} onConnect={handleSduConnect} />}
           {tab === 'attendance' && <AttendanceTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} />}
           {tab === 'profile'    && <SduProfileTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onDisconnect={handleSduDisconnect} onRefresh={loadSduLiveData} user={user} token={token} />}
@@ -3349,6 +3561,7 @@ function App() {
     try { return JSON.parse(localStorage.getItem('session')) } catch { return null }
   })
   const [theme, toggleTheme] = useTheme()
+  const [showSupport, setShowSupport] = useState(false)
   const login  = s => { localStorage.setItem('session', JSON.stringify(s)); setSession(s) }
   const logout = ()  => { localStorage.removeItem('session'); setSession(null) }
 
@@ -3387,12 +3600,13 @@ function App() {
             </div>
             <div className="topbar-actions">
               <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
-              <AvatarMenu user={session.user} logout={logout} token={session.access_token} onUpdateUser={updateUser} />
+              <AvatarMenu user={session.user} logout={logout} token={session.access_token} onUpdateUser={updateUser} onOpenSupport={() => setShowSupport(true)} />
             </div>
           </header>
           <main className="content">
             <Teacher token={session.access_token} user={session.user} logout={logout} />
           </main>
+          {showSupport && <SupportModal token={session.access_token} page="teacher" onClose={() => setShowSupport(false)} />}
         </div>
       </div>
     )

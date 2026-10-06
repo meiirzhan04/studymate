@@ -34,6 +34,15 @@ export default async function handler(req, res) {
     }
   }
 
+  // Support replies: plain text only, and only for callers that know MAILER_SECRET_KEY.
+  // Without a configured secret this mode is refused, so the relay can't be abused for spam.
+  if ((req.body || {}).type === 'message') {
+    if (!expectedSecret || req.headers['x-mailer-secret'] !== expectedSecret) {
+      return res.status(403).json({ ok: false, error: 'Message mode requires MAILER_SECRET_KEY' });
+    }
+    return sendPlainMessage(req.body, res);
+  }
+
   const { to, code } = req.body || {};
   if (!to || !code || !/^\d{6}$/.test(String(code).trim())) {
     return res.status(400).json({ ok: false, error: 'Missing or invalid recipient email (to) or 6-digit verification code' });
@@ -114,6 +123,43 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok: true, messageId: info.messageId });
   } catch (err) {
     console.error('Mail delivery failure:', err);
+    return res.status(500).json({ ok: false, error: 'Internal mail delivery failure' });
+  }
+}
+
+
+const escapeHtml = value => String(value)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+async function sendPlainMessage(body, res) {
+  const to = String(body.to || '').trim();
+  const subject = String(body.subject || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 150);
+  const text = String(body.text || '').slice(0, 5000);
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to) || !subject || !text) {
+    return res.status(400).json({ ok: false, error: 'Invalid to, subject or text' });
+  }
+
+  const gmailUser = process.env.GMAIL_USER || process.env.SMTP_USER;
+  const gmailPass = process.env.GMAIL_APP_PASSWORD || process.env.SMTP_PASSWORD;
+  if (!gmailUser || !gmailPass) {
+    return res.status(500).json({ ok: false, error: 'SMTP credentials are not configured on this server environment.' });
+  }
+
+  try {
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST || 'smtp.gmail.com',
+      port: Number(process.env.SMTP_PORT) || 465,
+      secure: true,
+      auth: { user: gmailUser, pass: gmailPass.replace(/\s+/g, '') },
+    });
+    const html = `<div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.6;color:#111827;max-width:560px">`
+      + escapeHtml(text).replace(/\n/g, '<br>')
+      + `</div>`;
+    const info = await transporter.sendMail({ from: `"StudyMate Support" <${gmailUser}>`, to, subject, text, html });
+    return res.status(200).json({ ok: true, messageId: info.messageId });
+  } catch (err) {
+    console.error('Support mail delivery failure:', err);
     return res.status(500).json({ ok: false, error: 'Internal mail delivery failure' });
   }
 }

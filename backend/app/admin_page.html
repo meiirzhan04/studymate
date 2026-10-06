@@ -83,6 +83,23 @@
   .toolbar .input { width: 260px; }
   .toast { position: fixed; right: 24px; bottom: 24px; padding: 10px 14px; border-radius: 10px; background: #111318; color: #fff; font-size: 13px; }
 
+  .nav-count { margin-left: 4px; padding: 0 6px; border-radius: 999px; background: var(--danger); color: #fff; font-size: 11px; }
+  .support-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 16px; align-items: start; }
+  .ticket { display: block; width: 100%; text-align: left; padding: 12px 18px; border-top: 1px solid var(--border); }
+  .ticket:hover, .ticket.active { background: var(--surface-2); }
+  .ticket b { display: block; font-weight: 500; }
+  .ticket small { color: var(--muted); font-size: 12px; }
+  .detail-body { padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { max-width: 90%; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); }
+  .msg.admin { align-self: flex-end; background: var(--accent-soft); }
+  .msg p { margin-top: 2px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg small { color: var(--muted); font-size: 11.5px; }
+  .msg .mail-fail { color: var(--danger); }
+  .reply { display: flex; flex-direction: column; gap: 8px; padding: 14px 18px; border-top: 1px solid var(--border); }
+  .reply textarea { min-height: 110px; padding: 10px 12px; resize: vertical; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+  .reply-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+  @media (max-width: 900px) { .support-layout { grid-template-columns: 1fr; } }
+
   @media (max-width: 760px) {
     header { padding: 12px 16px; flex-wrap: wrap; }
     main { padding: 20px 16px 48px; }
@@ -109,6 +126,7 @@
     <div class="brand"><div class="mark">S</div><h1>Admin</h1></div>
     <nav id="tabs">
       <button data-tab="overview" class="active">Overview</button>
+      <button data-tab="support">Support <span id="support-count" class="nav-count hidden"></span></button>
       <button data-tab="users">Users</button>
       <button data-tab="sdu">SDU connections</button>
       <button data-tab="errors">SDU errors</button>
@@ -123,6 +141,26 @@
         <div class="card-head"><h2>System</h2></div>
         <div id="system-warn"></div>
         <dl class="kv" id="system"></dl>
+      </div>
+    </section>
+
+    <section data-view="support" class="hidden">
+      <div class="support-layout">
+        <div class="card">
+          <div class="card-head">
+            <h2>Requests</h2>
+            <select class="input" id="support-filter" style="height:32px">
+              <option value="">All</option>
+              <option value="open" selected>Waiting for reply</option>
+              <option value="answered">Answered</option>
+              <option value="closed">Closed</option>
+            </select>
+          </div>
+          <div id="support-list"></div>
+        </div>
+        <div class="card" id="support-detail">
+          <div class="empty">Select a request</div>
+        </div>
       </div>
     </section>
 
@@ -224,7 +262,7 @@
   function switchTab(name) {
     document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === name))
     document.querySelectorAll('[data-view]').forEach(v => v.classList.toggle('hidden', v.dataset.view !== name))
-    ;({ overview: loadOverview, users: loadUsers, sdu: loadSdu, errors: loadErrors })[name]().catch(err => toast(err.message))
+    ;({ overview: loadOverview, support: loadSupport, users: loadUsers, sdu: loadSdu, errors: loadErrors })[name]().catch(err => toast(err.message))
   }
   document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)))
 
@@ -234,7 +272,9 @@
     $('stats').innerHTML = [
       ['Users', s.users], ['Students', s.students], ['Teachers', s.teachers],
       ['SDU connections', s.sdu_connections], ['Recent SDU errors', d.recent_sdu_errors],
+      ['Open support requests', d.open_support_tickets],
     ].map(([k, v]) => `<div class="card stat"><span>${k}</span><b>${esc(v)}</b></div>`).join('')
+    setSupportCount(d.open_support_tickets)
     const y = d.system
     $('system-warn').innerHTML = y.database_ephemeral
       ? '<div class="warn">The database is in /tmp. Users, passwords and SDU connections are lost on every restart or deploy. Attach a persistent disk (or PostgreSQL) and set SQLITE_PATH to it.</div>'
@@ -245,7 +285,80 @@
       ['SDU client ID', y.sdu_client_id],
       ['AUTH_SECRET set', y.auth_secret_from_env ? 'Yes' : 'No (development secret)'],
       ['ADMIN_PASSWORD set', y.admin_password_from_env ? 'Yes' : 'No'],
+      ['MAILER_SECRET_KEY set', y.mailer_secret_from_env ? 'Yes' : 'No — support replies are not emailed (set it on Render and Vercel)'],
     ].map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join('')
+  }
+
+  const STATUS_LABEL = { open: 'Waiting for reply', answered: 'Answered', closed: 'Closed' }
+  const STATUS_PILL = { open: 'demo', answered: 'live', closed: '' }
+  const CATEGORY_LABEL = { bug: 'Bug / error', question: 'Question', account: 'Account', other: 'Other' }
+  let currentTicket = null
+
+  function setSupportCount(n) {
+    const el = $('support-count')
+    el.textContent = n
+    el.classList.toggle('hidden', !n)
+  }
+
+  async function loadSupport() {
+    const status = $('support-filter').value
+    const d = await api(`/api/admin/support${status ? `?status=${status}` : ''}`)
+    $('support-list').innerHTML = d.items.length ? d.items.map(t => `
+      <button class="ticket ${currentTicket === t.id ? 'active' : ''}" data-ticket="${t.id}">
+        <b>${esc(t.subject)}</b>
+        <small>#${t.id} · ${esc(CATEGORY_LABEL[t.category] || t.category)} · ${esc(t.email)} · ${fmtTime(t.updated_at)}</small><br>
+        <span class="pill ${STATUS_PILL[t.status] || ''}">${esc(STATUS_LABEL[t.status] || t.status)}</span>
+      </button>`).join('') : '<div class="empty">No requests</div>'
+    if (!status || status === 'open') setSupportCount(d.items.filter(t => t.status === 'open').length)
+  }
+  $('support-filter').addEventListener('change', () => loadSupport().catch(err => toast(err.message)))
+  $('support-list').addEventListener('click', e => {
+    const btn = e.target.closest('[data-ticket]')
+    if (btn) openTicket(Number(btn.dataset.ticket)).catch(err => toast(err.message))
+  })
+
+  async function openTicket(id) {
+    currentTicket = id
+    const t = await api(`/api/admin/support/${id}`)
+    $('support-detail').innerHTML = `
+      <div class="card-head">
+        <div><h2>${esc(t.subject)}</h2>
+          <small class="muted">#${t.id} · ${esc(CATEGORY_LABEL[t.category] || t.category)} · ${esc(t.name || 'No name')} &lt;${esc(t.email)}&gt;${t.user_id ? '' : ' · not signed in'}${t.page ? ' · from ' + esc(t.page) : ''}</small>
+        </div>
+        <span class="pill ${STATUS_PILL[t.status] || ''}">${esc(STATUS_LABEL[t.status] || t.status)}</span>
+      </div>
+      <div class="detail-body">
+        ${t.messages.map(m => `
+          <div class="msg ${m.author === 'admin' ? 'admin' : ''}">
+            <small>${m.author === 'admin' ? 'You (support)' : 'User'} · ${fmtTime(m.created_at)}
+              ${m.author === 'admin' ? (m.emailed ? ' · emailed' : ` · <span class="mail-fail">not emailed: ${esc(m.email_error || 'unknown')}</span>`) : ''}</small>
+            <p>${esc(m.body)}</p>
+          </div>`).join('')}
+      </div>
+      <form class="reply" id="reply-form">
+        <textarea id="reply-text" placeholder="Write a reply. It is emailed to ${esc(t.email)} and shown in the app."></textarea>
+        <div class="reply-actions">
+          ${t.status !== 'closed' ? '<button type="button" class="btn btn-sm" id="close-ticket">Close without reply</button>' : '<button type="button" class="btn btn-sm" id="reopen-ticket">Reopen</button>'}
+          <button type="submit" class="btn" data-close="1">Reply & close</button>
+          <button type="submit" class="btn btn-primary">Send reply</button>
+        </div>
+      </form>`
+    $('reply-form').addEventListener('submit', async e => {
+      e.preventDefault()
+      const text = $('reply-text').value.trim()
+      if (!text) return
+      const close = e.submitter && e.submitter.dataset.close === '1'
+      const r = await api(`/api/admin/support/${id}/reply`, { method: 'POST', body: JSON.stringify({ message: text, close }) })
+      toast(r.emailed ? 'Reply sent by email' : `Saved, but not emailed: ${r.email_detail}`)
+      await openTicket(id); await loadSupport()
+    })
+    const setStatus = async status => {
+      await api(`/api/admin/support/${id}/status`, { method: 'POST', body: JSON.stringify({ status }) })
+      await openTicket(id); await loadSupport()
+    }
+    $('close-ticket')?.addEventListener('click', () => setStatus('closed').catch(err => toast(err.message)))
+    $('reopen-ticket')?.addEventListener('click', () => setStatus('open').catch(err => toast(err.message)))
+    await loadSupport()
   }
 
   async function loadUsers() {
