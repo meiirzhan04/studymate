@@ -10,6 +10,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import sdu_mock
+
 
 def hash_password(password: str, salt: str) -> str:
     return hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 120_000).hex()
@@ -354,7 +356,7 @@ class SQLiteRepository:
         for uid in ["u-240103118", "u-240103188", "u-240103120"]:
             db.execute(
                 "INSERT OR REPLACE INTO sdu_connections (user_id, access_token, expires_at, scope, updated_at) VALUES (?, ?, ?, ?, ?)",
-                (uid, "demo_access_token_offline", exp_time, "offline_access profile:read schedule:read transcript:read grades-attendance:read", now_iso)
+                (uid, sdu_mock.DEMO_ACCESS_TOKEN, exp_time, sdu_mock.DEMO_SCOPE, now_iso)
             )
 
     def _seed(self, db):
@@ -583,7 +585,7 @@ class SQLiteRepository:
         with self.connect() as db:
             existing = db.execute("SELECT user_id FROM login_identifiers WHERE identifier = ? COLLATE NOCASE", (clean_id,)).fetchone()
             if existing:
-                raise ValueError("An account with this email or Student ID already exists.")
+                raise ValueError("This Student ID already has an account. If you signed up with SDU, sign in with SDU and set a password in Profile.")
             if email and email.strip():
                 clean_email = email.strip()
                 existing_email = db.execute("SELECT user_id FROM login_identifiers WHERE identifier = ? COLLATE NOCASE", (clean_email,)).fetchone()
@@ -700,6 +702,18 @@ class SQLiteRepository:
             db.execute("UPDATE users SET name = ? WHERE id = ?", (clean_name, user_id))
             if user["student_id"]:
                 db.execute("UPDATE students SET name = ? WHERE id = ?", (clean_name, user["student_id"]))
+            db.commit()
+            return True
+
+    def set_password(self, user_id: str, new_password: str) -> bool:
+        with self.connect() as db:
+            if not db.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone():
+                return False
+            salt = secrets.token_hex(8)
+            db.execute(
+                "UPDATE users SET password_salt = ?, password_hash = ? WHERE id = ?",
+                (salt, hash_password(new_password, salt), user_id)
+            )
             db.commit()
             return True
 
@@ -823,6 +837,7 @@ class SQLiteRepository:
                 db.execute("INSERT OR IGNORE INTO students (id, name, cohort, attendance, missing_assignments) VALUES (?, ?, 'SDU Student', 95.0, 0)",
                            (clean_sid, clean_name))
                 db.execute("INSERT OR IGNORE INTO teacher_scope (teacher_id, student_id) VALUES ('t1', ?)", (clean_sid,))
+                db.execute("INSERT OR IGNORE INTO login_identifiers (identifier, user_id) VALUES (?, ?)", (clean_sid, u["id"]))
                 if clean_email:
                     db.execute("INSERT OR IGNORE INTO login_identifiers (identifier, user_id) VALUES (?, ?)", (clean_email, u["id"]))
                 db.commit()

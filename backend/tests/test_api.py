@@ -634,3 +634,23 @@ def test_sdu_demo_mode_flow():
 
 
 
+
+
+def test_sdu_created_account_can_set_password_and_sign_in():
+    session = client.post("/api/sdu/demo-connect", json={}).json()
+    student_id = session["user"]["student_id"]
+    new_password = f"pw-{secrets.token_hex(4)}"
+
+    # The random password generated for SDU accounts is never known to the student.
+    assert client.post("/api/auth/login", json={"identifier": student_id, "password": new_password}).status_code == 401
+
+    response = client.post("/api/me/password", json={"new_password": new_password}, headers=auth(session["access_token"]))
+    assert response.status_code == 200
+    assert token(student_id, new_password)
+
+
+def test_set_password_requires_auth_and_min_length():
+    assert client.post("/api/me/password", json={"new_password": "abcdef"}).status_code == 401
+    session = client.post("/api/sdu/demo-connect", json={}).json()
+    response = client.post("/api/me/password", json={"new_password": "123"}, headers=auth(session["access_token"]))
+    assert response.status_code == 422

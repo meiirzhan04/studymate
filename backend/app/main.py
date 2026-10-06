@@ -87,6 +87,10 @@ class UpdateProfileRequest(BaseModel):
     name: str = Field(min_length=2, max_length=100)
 
 
+class SetPasswordRequest(BaseModel):
+    new_password: str = Field(min_length=6, max_length=200)
+
+
 class InterventionRequest(BaseModel):
     action_type: str = Field(min_length=2, max_length=50)
     notes: str = Field(min_length=3, max_length=500)
@@ -717,6 +721,8 @@ async def sdu_sync(user: Annotated[User, Depends(current_user)]):
         raise HTTPException(status_code=401, detail="SDU token revoked or expired. Please reconnect.")
     if status_code == 403:
         raise HTTPException(status_code=403, detail="Missing required SDU scope or account restricted.")
+    if status_code == 409:
+        raise HTTPException(status_code=409, detail=profile_data)
 
     if status_code in (502, 504):
         # Graceful fallback when upstream SDU server is unreachable
@@ -729,9 +735,10 @@ async def sdu_sync(user: Annotated[User, Depends(current_user)]):
         )
         return {"ok": True, "connected": True, "synced": True, "demo_fallback": True, "updated_at": res.get("updated_at")}
 
+    active_term_params = {"year": 2026, "term": 1}
     _, sched_data = await sdu_client.fetch_sdu_data("schedule", access_token)
-    _, att_data = await sdu_client.fetch_sdu_data("attendance", access_token)
-    _, grades_data = await sdu_client.fetch_sdu_data("grades", access_token)
+    _, att_data = await sdu_client.fetch_sdu_data("attendance", access_token, params=active_term_params)
+    _, grades_data = await sdu_client.fetch_sdu_data("grades", access_token, params=active_term_params)
 
     res = repo.sync_sdu_student_data(
         user.id,
@@ -824,14 +831,18 @@ async def sdu_live_transcript(
 async def sdu_live_attendance(
     user: Annotated[User, Depends(current_user)],
     year: Optional[int] = None,
-    term: Optional[int] = None
+    term: Optional[int] = None,
+    all_terms: Optional[bool] = Query(False)
 ):
     conn = repo.get_sdu_connection(user.id)
     if not conn or conn["expires_at"] < time.time() or sdu_mock.is_demo_connection(conn):
         return sdu_mock.attendance()
 
     params = {}
-    if year is not None and term is not None:
+    if not all_terms and year is None and term is None:
+        params["year"] = 2026
+        params["term"] = 1
+    elif year is not None and term is not None:
         params["year"] = year
         params["term"] = term
     elif year is not None or term is not None:
@@ -846,14 +857,18 @@ async def sdu_live_attendance(
 async def sdu_live_grades(
     user: Annotated[User, Depends(current_user)],
     year: Optional[int] = None,
-    term: Optional[int] = None
+    term: Optional[int] = None,
+    all_terms: Optional[bool] = Query(False)
 ):
     conn = repo.get_sdu_connection(user.id)
     if not conn or conn["expires_at"] < time.time() or sdu_mock.is_demo_connection(conn):
         return sdu_mock.grades()
 
     params = {}
-    if year is not None and term is not None:
+    if not all_terms and year is None and term is None:
+        params["year"] = 2026
+        params["term"] = 1
+    elif year is not None and term is not None:
         params["year"] = year
         params["term"] = term
     elif year is not None or term is not None:
@@ -881,6 +896,15 @@ def update_profile(req: UpdateProfileRequest, user: Annotated[User, Depends(curr
     if not success:
         raise HTTPException(status_code=400, detail="Failed to update profile name")
     return {"ok": True, "name": req.name.strip()}
+
+
+@app.post("/api/me/password")
+def set_password(req: SetPasswordRequest, user: Annotated[User, Depends(current_user)]):
+    # The bearer token already proves account ownership (password or SDU OAuth sign-in),
+    # so SDU-created accounts can set a first password and then sign in with their Student ID.
+    if not repo.set_password(user.id, req.new_password):
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"ok": True, "message": "Password saved. You can now sign in with your Student ID and this password."}
 
 
 @app.get("/api/me")

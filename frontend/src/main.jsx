@@ -1623,8 +1623,8 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token
         />
         <Metric
           label="Attendance"
-          value={`${attendance}%`}
-          foot={<Status tone={attStanding.tone}>{attStanding.label}</Status>}
+          value={attendanceList.length ? `${attendance}%` : '—'}
+          foot={<Status tone={attendanceList.length ? attStanding.tone : 'neutral'}>{attendanceList.length ? attStanding.label : 'No data'}</Status>}
         />
         <Metric
           label="Credits earned"
@@ -1915,11 +1915,15 @@ function AttendanceTab({ sduData, sduLoading, sduStatus, onConnect }) {
             {list.map((a, idx) => {
               const abs = absenceOf(a)
               const tone = absenceTone(abs)
+              const code = a.lesson || a.course_code || ''
+              const schedMatch = sduData?.schedule?.find(s => s.course_code === code || s.course_name?.includes(code))
+              const transMatch = sduData?.transcript?.find(t => t.course_code === code)
+              const fullName = schedMatch?.course_name || transMatch?.course_name || attendanceTitle(a)
               return (
                 <li key={idx} className="att-row">
                   <div className="course-main">
-                    <b>{attendanceTitle(a)}</b>
-                    <span>Term {a.term ?? '1'} · {a.year ?? '2026'}</span>
+                    <b>{fullName}</b>
+                    <span>{code && code !== fullName ? `${code} · ` : ''}Term {a.term ?? '1'} · {a.year ?? '2026'}</span>
                   </div>
                   <div className="meter" aria-hidden="true">
                     <div className={`meter-fill fill-${tone}`} style={{ width: `${Math.min(100, (abs / meterMax) * 100)}%` }} />
@@ -1930,6 +1934,17 @@ function AttendanceTab({ sduData, sduLoading, sduStatus, onConnect }) {
               )
             })}
           </ul>
+        ) : sduData?.error ? (
+          <div style={{ padding: '32px 16px', textAlign: 'center' }}>
+            <div className="onboard-icon tint-warning" style={{ margin: '0 auto 12px auto' }}>
+              <Icons.AlertTriangle size={24} />
+            </div>
+            <h3 style={{ margin: '0 0 6px 0', fontSize: '1rem' }}>SDU Connection Issue</h3>
+            <p className="muted" style={{ margin: '0 0 16px 0', fontSize: '0.85rem' }}>{sduData.error}</p>
+            <button type="button" className="btn-primary" onClick={onConnect}>
+              Reconnect SDU Platform
+            </button>
+          </div>
         ) : (
           <EmptyState icon={<Icons.Calendar size={20} />} title="No attendance records yet" text="SDU has not published absences for this term." />
         )}
@@ -1943,7 +1958,103 @@ function AttendanceTab({ sduData, sduLoading, sduStatus, onConnect }) {
 }
 
 /* ─── PROFILE TAB ────────────────────────────────────────────────── */
-function SduProfileTab({ sduData, sduLoading, sduStatus, onConnect, onDisconnect, onRefresh, user }) {
+function SetPasswordModal({ token, studentId, onClose }) {
+  const [pw, setPw]           = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [show, setShow]       = useState(false)
+  const [busy, setBusy]       = useState(false)
+  const [err, setErr]         = useState('')
+  const [done, setDone]       = useState(false)
+
+  const submit = async e => {
+    e.preventDefault()
+    if (pw.length < 6) return setErr('Password must be at least 6 characters')
+    if (pw !== confirm) return setErr('Passwords do not match')
+    setBusy(true); setErr('')
+    try {
+      await api('/api/me/password', token, { method: 'POST', body: JSON.stringify({ new_password: pw }) })
+      setDone(true)
+    } catch (e2) {
+      setErr(e2.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <form className="modal" onSubmit={submit}>
+        <div className="modal-head">
+          <div>
+            <h2>Sign-in password</h2>
+            <p>Use it with your Student ID on the sign-in page</p>
+          </div>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close"><Icons.Close size={18} /></button>
+        </div>
+        <div className="modal-body">
+          {done ? (
+            <div className="alert-box alert-success">
+              <Icons.CheckCircle size={16} /> Saved. Sign in with {studentId || 'your Student ID'} and this password.
+            </div>
+          ) : (
+            <>
+              <label>
+                New password
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type={show ? 'text' : 'password'}
+                    value={pw}
+                    onChange={e => setPw(e.target.value)}
+                    placeholder="At least 6 characters"
+                    autoComplete="new-password"
+                    style={{ paddingRight: 44 }}
+                    autoFocus
+                  />
+                  <button
+                    type="button"
+                    className="input-btn-right"
+                    onClick={() => setShow(v => !v)}
+                    tabIndex={-1}
+                    aria-label={show ? 'Hide password' : 'Show password'}
+                  >
+                    {show ? <Icons.EyeOff size={16} /> : <Icons.Eye size={16} />}
+                  </button>
+                </div>
+              </label>
+              <label>
+                Confirm password
+                <input
+                  type={show ? 'text' : 'password'}
+                  value={confirm}
+                  onChange={e => setConfirm(e.target.value)}
+                  placeholder="Repeat password"
+                  autoComplete="new-password"
+                />
+              </label>
+              {err && <div className="alert-box alert-danger">{err}</div>}
+            </>
+          )}
+        </div>
+        <div className="modal-foot">
+          {done ? (
+            <button type="button" className="btn-primary" onClick={onClose}>Done</button>
+          ) : (
+            <>
+              <button type="button" className="btn-ghost" onClick={onClose}>Cancel</button>
+              <button type="submit" className="btn-primary" disabled={busy || !pw || !confirm}>
+                {busy ? 'Saving…' : 'Save password'}
+              </button>
+            </>
+          )}
+        </div>
+      </form>
+    </div>
+  )
+}
+
+function SduProfileTab({ sduData, sduLoading, sduStatus, onConnect, onDisconnect, onRefresh, user, token }) {
+  const [showPassword, setShowPassword] = useState(false)
+
   if (!sduStatus?.connected) return <SduOnboardCard onConnect={onConnect} />
 
   const p = sduData.profile || {}
@@ -1973,6 +2084,14 @@ function SduProfileTab({ sduData, sduLoading, sduStatus, onConnect, onDisconnect
             <dt>Last sync</dt>
             <dd>{sduData.lastFetched ? new Date(sduData.lastFetched).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '—'}</dd>
           </div>
+          <div>
+            <dt>Password sign-in</dt>
+            <dd>
+              <button type="button" className="link-btn" onClick={() => setShowPassword(true)}>
+                Set password
+              </button>
+            </dd>
+          </div>
         </dl>
 
         <footer className="card-foot">
@@ -1985,6 +2104,14 @@ function SduProfileTab({ sduData, sduLoading, sduStatus, onConnect, onDisconnect
           </button>
         </footer>
       </article>
+
+      {showPassword && (
+        <SetPasswordModal
+          token={token}
+          studentId={p.student_id || user.student_id}
+          onClose={() => setShowPassword(false)}
+        />
+      )}
     </div>
   )
 }
@@ -2225,7 +2352,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
         api('/api/sdu/profile', token),
         api('/api/sdu/schedule', token),
         api('/api/sdu/transcript', token),
-        api('/api/sdu/attendance', token),
+        api('/api/sdu/attendance?year=2026&term=1', token),
       ])
 
       const prof = profRes.status === 'fulfilled' ? profRes.value : null
@@ -2236,15 +2363,18 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
 
       // Check for reconnect requirement
       const anyErr = [profRes, schedRes, transRes, attRes].find(r => r.status === 'rejected')
-      if (anyErr && anyErr.reason && (anyErr.reason.message?.includes('expired') || anyErr.reason.message?.includes('reconnect'))) {
-        setSduStatus({ connected: false })
+      if (anyErr && anyErr.reason) {
+        const errMsg = String(anyErr.reason.message || '').toLowerCase()
+        if (errMsg.includes('expired') || errMsg.includes('reconnect') || errMsg.includes('2fa')) {
+          setSduStatus({ connected: false })
+        }
       }
 
       setSduData(prev => ({
         profile: prof || prev.profile,
         schedule: sched.length ? sched : prev.schedule,
         transcript: trans.length ? trans : prev.transcript,
-        attendance: att.length ? att : prev.attendance,
+        attendance: attRes.status === 'fulfilled' ? att : prev.attendance,
         lastFetched: lastF,
         error: anyErr?.reason?.message || null,
       }))
@@ -2431,7 +2561,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
           {tab === 'schedule'   && <ScheduleTab  sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} />}
           {tab === 'transcript' && <TranscriptTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} />}
           {tab === 'attendance' && <AttendanceTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} />}
-          {tab === 'profile'    && <SduProfileTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onDisconnect={handleSduDisconnect} onRefresh={loadSduLiveData} user={user} />}
+          {tab === 'profile'    && <SduProfileTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onDisconnect={handleSduDisconnect} onRefresh={loadSduLiveData} user={user} token={token} />}
           {tab === 'alerts'     && <AlertsTab    token={token} onUnreadChange={setUnread} onSelectTab={setTab} />}
         </main>
       </div>

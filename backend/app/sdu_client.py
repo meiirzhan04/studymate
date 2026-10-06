@@ -163,7 +163,7 @@ async def fetch_sdu_data(endpoint: str, access_token: str, params: Optional[dict
         if client:
             resp = await client.get(url, headers=headers, params=params)
         else:
-            async with httpx.AsyncClient(timeout=12.0) as default_client:
+            async with httpx.AsyncClient(timeout=30.0) as default_client:
                 resp = await default_client.get(url, headers=headers, params=params)
         status = resp.status_code
         try:
@@ -172,7 +172,7 @@ async def fetch_sdu_data(endpoint: str, access_token: str, params: Optional[dict
             data = {"detail": "invalid_upstream_response", "raw": resp.text}
         return status, data
     except httpx.TimeoutException:
-        return 504, {"detail": "upstream_timeout", "message": "SDU portal read timed out after 12 seconds."}
+        return 504, {"detail": "upstream_timeout", "message": "SDU portal read timed out after 30 seconds."}
     except Exception as exc:
         return 502, {"detail": "upstream_unavailable", "message": f"SDU portal unavailable: {str(exc)}"}
 

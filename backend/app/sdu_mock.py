@@ -98,7 +98,16 @@ def _now() -> str:
 
 
 def is_demo_connection(conn: dict | None) -> bool:
-    return bool(conn) and (conn.get("scope") == DEMO_SCOPE or conn.get("access_token") == DEMO_ACCESS_TOKEN)
+    if not conn:
+        return False
+    tok = str(conn.get("access_token", ""))
+    scope = str(conn.get("scope", ""))
+    return (
+        tok == DEMO_ACCESS_TOKEN
+        or "demo" in tok.lower()
+        or scope == DEMO_SCOPE
+        or "demo" in scope.lower()
+    )
 
 
 def profile() -> dict:
