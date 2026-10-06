@@ -320,7 +320,7 @@ def send_gmail_code(to_email: str, code: str) -> tuple[bool, str]:
 
     # 2. Direct SMTP fallback (SSL on 465 or STARTTLS on 587)
     smtp_user = os.getenv("GMAIL_USER") or os.getenv("SMTP_USER") or "amirzhanmeirzhan5@gmail.com"
-    raw_pass = os.getenv("GMAIL_APP_PASSWORD") or os.getenv("SMTP_PASSWORD") or "ewsa dvkt cjdw cjlt"
+    raw_pass = os.getenv("GMAIL_APP_PASSWORD") or os.getenv("SMTP_PASSWORD")
     if not smtp_user or not raw_pass:
         return False, "SMTP credentials not configured"
 

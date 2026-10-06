@@ -41,7 +41,7 @@ export default async function handler(req, res) {
 
   const cleanCode = String(code).trim();
   const gmailUser = process.env.GMAIL_USER || process.env.SMTP_USER || 'amirzhanmeirzhan5@gmail.com';
-  const gmailPass = process.env.GMAIL_APP_PASSWORD || process.env.SMTP_PASSWORD || 'ewsa dvkt cjdw cjlt';
+  const gmailPass = process.env.GMAIL_APP_PASSWORD || process.env.SMTP_PASSWORD;
 
   if (!gmailUser || !gmailPass) {
     return res.status(500).json({
