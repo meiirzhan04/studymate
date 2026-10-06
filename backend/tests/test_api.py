@@ -838,3 +838,17 @@ def test_study_tasks_persist_and_tutoring_reaches_teacher():
     teacher = token("teacher@univ.edu", "teacher123")
     detail = client.get(f"/api/teacher/students/{u['student_id']}", headers=auth(teacher)).json()
     assert detail["tutoring_requests"][0]["course"] == "Physics"
+
+
+def test_admin_deleted_accounts_stay_deleted_after_restart(tmp_path):
+    from app.repository import SQLiteRepository
+
+    path = str(tmp_path / "restart.db")
+    repo1 = SQLiteRepository(path)
+    assert repo1.admin_delete_user("u-240103120")
+    assert "u-240103120" not in {u["id"] for u in SQLiteRepository(path).admin_list_users()}
+
+    # Deleting every user must not crash the next start or bring the seed accounts back
+    for u in repo1.admin_list_users():
+        repo1.admin_delete_user(u["id"])
+    assert SQLiteRepository(path).admin_list_users() == []

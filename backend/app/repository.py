@@ -155,6 +155,10 @@ class SQLiteRepository:
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY (user_id, kind)
                 );
+                CREATE TABLE IF NOT EXISTS deleted_accounts (
+                    user_id TEXT PRIMARY KEY,
+                    deleted_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS sdu_connections (
                     user_id TEXT PRIMARY KEY REFERENCES users(id),
                     access_token TEXT NOT NULL,
@@ -166,9 +170,13 @@ class SQLiteRepository:
             )
             # Fresh database (e.g. a new Render deploy): seed demo accounts + curriculum
             has_users = db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-            if has_users == 0:
+            has_students = db.execute("SELECT COUNT(*) FROM students").fetchone()[0]
+            if has_users == 0 and has_students == 0:
                 self._seed(db)
                 return
+
+            # Built-in accounts that an admin deleted must not be re-created on restart
+            deleted = {r[0] for r in db.execute("SELECT user_id FROM deleted_accounts")}
 
             # Check if the real SDU Information Systems curriculum is loaded
             has_is = db.execute("SELECT COUNT(*) FROM grades WHERE code = 'CSS 105'").fetchone()[0]
@@ -177,7 +185,7 @@ class SQLiteRepository:
             else:
                 # Ensure main student account 240103118 exists
                 user_240 = db.execute("SELECT id FROM users WHERE student_id = '240103118'").fetchone()
-                if not user_240:
+                if not user_240 and "u-240103118" not in deleted:
                     salt_240 = "student1-salt"
                     h_240 = hash_password("studymate2026", salt_240)
                     db.execute(
@@ -187,12 +195,12 @@ class SQLiteRepository:
                     db.execute("INSERT OR IGNORE INTO students VALUES (?, ?, ?, ?, ?)",
                                ("240103118", "Meirzhan", "Information Systems (IS-2024)", 96.0, 0))
                     db.execute("INSERT OR IGNORE INTO teacher_scope VALUES (?, ?)", ("t1", "240103118"))
-                for ident in ("240103118", "240103118@sdu.edu.kz", "amirzhanmeirzhan5@gmail.com", "student@univ.edu", "STU-001"):
+                for ident in ("240103118", "240103118@sdu.edu.kz", "amirzhanmeirzhan5@gmail.com", "student@univ.edu", "STU-001") if "u-240103118" not in deleted else ():
                     db.execute("INSERT OR IGNORE INTO login_identifiers (identifier, user_id) VALUES (?, ?)", (ident, "u-240103118"))
 
                 # Ensure student 240103188 has a dedicated student account
                 has_188 = db.execute("SELECT COUNT(*) FROM users WHERE student_id = '240103188'").fetchone()[0]
-                if has_188 == 0:
+                if has_188 == 0 and "u-240103188" not in deleted:
                     salt_188 = "student188-salt"
                     h_188 = hash_password("studymate2026", salt_188)
                     db.execute("INSERT OR IGNORE INTO users VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -200,12 +208,12 @@ class SQLiteRepository:
                     db.execute("INSERT OR IGNORE INTO students VALUES (?, ?, ?, ?, ?)",
                                ("240103188", "Student 240103188", "Information Systems (IS-2024)", 94.0, 0))
                     db.execute("INSERT OR IGNORE INTO teacher_scope VALUES (?, ?)", ("t1", "240103188"))
-                for ident in ("240103188", "240103188@sdu.edu.kz"):
+                for ident in ("240103188", "240103188@sdu.edu.kz") if "u-240103188" not in deleted else ():
                     db.execute("INSERT OR IGNORE INTO login_identifiers (identifier, user_id) VALUES (?, ?)", (ident, "u-240103188"))
 
                 # Ensure student 240103120 exists
                 has_120 = db.execute("SELECT COUNT(*) FROM users WHERE student_id = '240103120'").fetchone()[0]
-                if has_120 == 0:
+                if has_120 == 0 and "u-240103120" not in deleted:
                     salt_120 = "student2-salt"
                     h_120 = hash_password("student123", salt_120)
                     db.execute("INSERT OR IGNORE INTO users VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -213,12 +221,12 @@ class SQLiteRepository:
                     db.execute("INSERT OR IGNORE INTO students VALUES (?, ?, ?, ?, ?)",
                                ("240103120", "Dias Omar", "Information Systems (IS-2024)", 88.0, 1))
                     db.execute("INSERT OR IGNORE INTO teacher_scope VALUES (?, ?)", ("t1", "240103120"))
-                for ident in ("240103120", "240103120@sdu.edu.kz", "STU-002"):
+                for ident in ("240103120", "240103120@sdu.edu.kz", "STU-002") if "u-240103120" not in deleted else ():
                     db.execute("INSERT OR IGNORE INTO login_identifiers (identifier, user_id) VALUES (?, ?)", (ident, "u-240103120"))
 
                 # Ensure teacher account exists
                 has_t = db.execute("SELECT COUNT(*) FROM users WHERE role = 'teacher'").fetchone()[0]
-                if has_t == 0:
+                if has_t == 0 and "u-teacher" not in deleted:
                     salt_t = "teacher-salt"
                     h_t = hash_password("teacher123", salt_t)
                     db.execute("INSERT OR IGNORE INTO users VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -945,6 +953,10 @@ class SQLiteRepository:
             for table in ("sdu_connections", "sdu_snapshots", "password_reset_tokens", "sdu_oauth_attempts", "login_identifiers"):
                 db.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
             db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            db.execute(
+                "INSERT OR REPLACE INTO deleted_accounts (user_id, deleted_at) VALUES (?, ?)",
+                (user_id, datetime.now(timezone.utc).isoformat())
+            )
             db.commit()
             return True
 
