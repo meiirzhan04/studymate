@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .repository import SQLiteRepository
+from .repository import LOW_GRADE_THRESHOLD, MIN_ATTENDANCE, SQLiteRepository
 from . import admin, sdu_client, sdu_mock
 
 
@@ -208,10 +208,10 @@ def student_courses(student_id: str, semester: str) -> list[dict]:
 def risks(student_id: str) -> list[dict]:
     factors = []
     current = student_courses(student_id, "spring-2026")
-    low = [c for c in current if c["score"] is not None and c["score"] < 60]
-    if low: factors.append({"type": "low_grade", "detail": f"{len(low)} course below the configured demo threshold", "courses": [c["course"] for c in low]})
+    low = [c for c in current if c["score"] is not None and c["score"] < LOW_GRADE_THRESHOLD]
+    if low: factors.append({"type": "low_grade", "detail": f"{len(low)} course(s) below {LOW_GRADE_THRESHOLD}%", "courses": [c["course"] for c in low]})
     attendance = repo.attendance.get(student_id)
-    if attendance is not None and attendance < 75: factors.append({"type": "low_attendance", "detail": f"Attendance is {attendance}%"})
+    if attendance is not None and attendance < MIN_ATTENDANCE: factors.append({"type": "low_attendance", "detail": f"Attendance is {attendance}%"})
     missed = repo.missing_assignments.get(student_id, 0)
     if missed >= 2: factors.append({"type": "missed_assignments", "detail": f"{missed} assignments are overdue"})
     return factors
@@ -968,6 +968,80 @@ def me(user: Annotated[User, Depends(current_user)]): return user
 def semesters(user: Annotated[User, Depends(current_user)]): return {"items": repo.semesters}
 
 
+def study_task_texts(course: dict) -> list[str]:
+    """Three concrete actions built only from real course data (US-07)."""
+    gap = course.get("topic_gap")
+    focus = f"the {gap['name']} material" if gap else "the lecture material"
+    return [
+        f"Review {focus} for {course['course']} and write down what is unclear",
+        f"Redo the practice problems for {course['course']} and check them against the answers",
+        f"Bring your questions on {course['course']} to the instructor's office hours",
+    ]
+
+
+def student_insights(student_id: str, semester: str = "spring-2026") -> dict:
+    """Weak-subject detection (US-06): current-term courses ranked from weakest to strongest."""
+    graded = [c for c in student_courses(student_id, semester) if c["score"] is not None]
+    ranked = []
+    for rank, c in enumerate(sorted(graded, key=lambda c: c["score"]), start=1):
+        components = [p for p in c.get("components", []) if p.get("score") is not None]
+        # A topic gap is only meaningful when the course has a real breakdown
+        gap = min(components, key=lambda p: p["score"]) if len(components) >= 2 else None
+        ranked.append({
+            "rank": rank,
+            "course": c["course"],
+            "code": c["code"],
+            "score": c["score"],
+            "weak": c["score"] < LOW_GRADE_THRESHOLD,
+            "topic_gap": {"name": gap["name"], "score": gap["score"]} if gap else None,
+            "breakdown_available": len(components) >= 2,
+        })
+    weak = [r for r in ranked if r["weak"]]
+    for r in weak:
+        r["tasks"] = study_task_texts(r)
+    return {"semester": semester, "threshold": LOW_GRADE_THRESHOLD, "ranked": ranked, "weak_subjects": weak}
+
+
+@app.get("/api/student/insights")
+def get_student_insights(user: Annotated[User, Depends(require_role("student"))], semester: str = Query("spring-2026")):
+    data = student_insights(user.student_id, semester)
+    for w in data["weak_subjects"]:
+        repo.ensure_study_tasks(user.student_id, w["course"], w["tasks"])
+    tasks = repo.get_study_tasks(user.student_id, [w["course"] for w in data["weak_subjects"]])
+    done = sum(1 for t in tasks if t["done"])
+    data["study_plan"] = {
+        "tasks": tasks,
+        "done": done,
+        "total": len(tasks),
+        "completion_rate": round(done / len(tasks) * 100) if tasks else None,
+    }
+    data["tutoring_requests"] = repo.get_tutoring_requests(user.student_id)
+    return data
+
+
+class StudyTaskUpdate(BaseModel):
+    done: bool
+
+
+@app.post("/api/student/study-tasks/{task_id}")
+def update_study_task(task_id: int, req: StudyTaskUpdate, user: Annotated[User, Depends(require_role("student"))]):
+    if not repo.set_study_task_done(user.student_id, task_id, req.done):
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {"ok": True}
+
+
+class TutoringRequest(BaseModel):
+    course: str = Field(min_length=2, max_length=120)
+    preferred_time: str = Field(min_length=4, max_length=60)
+    note: Optional[str] = Field(default=None, max_length=300)
+
+
+@app.post("/api/student/tutoring")
+def request_tutoring(req: TutoringRequest, user: Annotated[User, Depends(require_role("student"))]):
+    item = repo.add_tutoring_request(user.student_id, req.course.strip(), req.preferred_time.strip(), (req.note or "").strip() or None)
+    return {"ok": True, "request": item}
+
+
 @app.get("/api/student/dashboard")
 def student_dashboard(user: Annotated[User, Depends(require_role("student"))], semester: str = Query("spring-2026")):
     courses = student_courses(user.student_id, semester)
@@ -975,15 +1049,11 @@ def student_dashboard(user: Annotated[User, Depends(require_role("student"))], s
     credits = sum(c["credits"] for c in valid)
     gpa = round(sum(grade_point(c["score"]) * c["credits"] for c in valid) / credits, 2) if credits else None
     alerts = risks(user.student_id)
-    weak = sorted(valid, key=lambda c: c["score"])[:2]
-    recommendations = [{"course": c["course"], "reason": f"Current weighted score is {c['score']}%", "action": f"Review the lowest-scoring assessment components in {c['course']}"} for c in weak if c["score"] < 75]
-    if not recommendations and weak:
-        for c in weak:
-            recommendations.append({
-                "course": c["course"],
-                "reason": f"Current score is {c['score']}% (lowest in current semester)",
-                "action": f"Focus on upcoming milestone assessments in {c['course']} to boost towards 90%+ (A)."
-            })
+    # Same source as the Insights page, so the two views never disagree
+    recommendations = [
+        {"course": w["course"], "reason": f"Current score is {w['score']}%", "action": w["tasks"][0]}
+        for w in student_insights(user.student_id, semester)["weak_subjects"][:2]
+    ]
     
     # Calculate attendance per course for progress %
     all_sessions = repo.get_attendance_sessions(user.student_id)
@@ -1190,7 +1260,7 @@ def teacher_students(user: Annotated[User, Depends(require_role("teacher"))]):
 def teacher_student(student_id: str, user: Annotated[User, Depends(require_role("teacher"))]):
     if student_id not in repo.teacher_scope.get(user.teacher_id, set()):
         raise HTTPException(status_code=404, detail="Student not found in teacher scope")
-    return {"student": repo.students[student_id], "attendance": repo.attendance.get(student_id), "courses": student_courses(student_id, "spring-2026"), "risk_factors": risks(student_id)}
+    return {"student": repo.students[student_id], "attendance": repo.attendance.get(student_id), "courses": student_courses(student_id, "spring-2026"), "risk_factors": risks(student_id), "tutoring_requests": repo.get_tutoring_requests(student_id)}
 
 
 @app.post("/api/teacher/students/{student_id}/interventions")

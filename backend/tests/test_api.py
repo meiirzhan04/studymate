@@ -728,14 +728,15 @@ def test_sdu_sync_notifies_only_about_real_changes():
     repo.sync_sdu_student_data(u["id"], profile, None, grades, attendance)
     assert len(_notifications_for(sid)) == baseline
 
-    # One grade changes, one course crosses the 20% absence limit, one new grade appears
-    grades2 = [{"lesson": "Databases", "grade": 85}, {"lesson": "Networks", "grade": 70}, {"lesson": "Security", "grade": 40}]
+    # One grade changes, one course crosses the 20% absence limit, two new grades appear (one below 60%)
+    grades2 = [{"lesson": "Databases", "grade": 85}, {"lesson": "Networks", "grade": 70},
+               {"lesson": "Algorithms", "grade": 75}, {"lesson": "Security", "grade": 52}]
     attendance2 = [{"lesson": "Databases", "absence_percent": 5}, {"lesson": "Networks", "absence_percent": 21}]
     res = repo.sync_sdu_student_data(u["id"], profile, None, grades2, attendance2)
-    assert res["new_notifications"] == 3
-    new = _notifications_for(sid)[:3]
+    assert res["new_notifications"] == 4
+    new = _notifications_for(sid)[:4]
     titles = {n["title"] for n in new}
-    assert titles == {"Grade updated", "New grade posted", "Absence limit exceeded"}
+    assert titles == {"Grade updated", "New grade posted", "Low Grade Warning", "Absence limit exceeded"}
     assert any(n["type"] == "low_grade" and n["course"] == "Security" for n in new)
 
     # Identical sync creates nothing
@@ -760,3 +761,80 @@ def test_auto_sync_is_throttled():
     headers = auth(session["access_token"])
     assert client.post("/api/sdu/sync", headers=headers).json()["synced"] is True
     assert client.post("/api/sdu/sync", params={"auto": "true"}, headers=headers).json()["skipped"] is True
+
+
+def test_overall_attendance_alert_fires_once_below_75():
+    from app.main import repo
+
+    u = repo.create_user("Attendance Student", f"8{secrets.randbelow(10**8):08d}", "password123")
+    sid = u["student_id"]
+    ok = [{"lesson": "A", "absence_percent": 10}, {"lesson": "B", "absence_percent": 12}]
+    low = [{"lesson": "A", "absence_percent": 26}, {"lesson": "B", "absence_percent": 26}]
+    repo.sync_sdu_student_data(u["id"], {"student_id": sid}, None, None, ok)
+    repo.sync_sdu_student_data(u["id"], {"student_id": sid}, None, None, low)
+    alerts = [n for n in _notifications_for(sid) if n["title"] == "Attendance Alert"]
+    assert len(alerts) == 1
+    assert "fallen below the 75% requirement" in alerts[0]["detail"]
+
+    repo.sync_sdu_student_data(u["id"], {"student_id": sid}, None, None, low)
+    assert len([n for n in _notifications_for(sid) if n["title"] == "Attendance Alert"]) == 1
+
+
+def _insights_student(scores):
+    """Student with current-term courses built inside the test (no seeded fake data)."""
+    import json as _json
+    from app.main import repo
+
+    u = repo.create_user("Insights Student", f"7{secrets.randbelow(10**8):08d}", "password123")
+    sid = u["student_id"]
+    with repo.connect() as db:
+        db.execute("DELETE FROM assessment_items WHERE grade_id IN (SELECT id FROM grades WHERE student_id = ?)", (sid,))
+        db.execute("DELETE FROM grades WHERE student_id = ?", (sid,))
+        for course, comps in scores.items():
+            db.execute(
+                "INSERT INTO grades (student_id, semester, course, code, credits, components_json) VALUES (?, 'spring-2026', ?, ?, 5, ?)",
+                (sid, course, course[:3].upper() + " 101", _json.dumps(comps)),
+            )
+        db.commit()
+    return u, token(sid, "password123")
+
+
+def test_insights_rank_weak_subjects_and_recalibrate():
+    from app.main import repo
+
+    u, tok = _insights_student({
+        "Computer Science": [{"name": "Final", "score": 90, "weight": 1.0}],
+        "Databases": [{"name": "Final", "score": 85, "weight": 1.0}],
+        "Physics": [{"name": "Final", "score": 72, "weight": 1.0}],
+        "Calculus": [{"name": "Midterm", "score": 70, "weight": 0.4}, {"name": "Integration quiz", "score": 45, "weight": 0.6}],
+    })
+    data = client.get("/api/student/insights", headers=auth(tok)).json()
+    assert [r["course"] for r in data["ranked"]][0] == "Calculus"
+    assert [w["course"] for w in data["weak_subjects"]] == ["Calculus"]
+    assert data["weak_subjects"][0]["topic_gap"]["name"] == "Integration quiz"
+    assert data["study_plan"]["total"] == 3
+
+    # Retake improves the score to 82% → Calculus leaves the weak list
+    import json as _json
+    with repo.connect() as db:
+        db.execute("UPDATE grades SET components_json = ? WHERE student_id = ? AND course = 'Calculus'",
+                   (_json.dumps([{"name": "Final", "score": 82, "weight": 1.0}]), u["student_id"]))
+        db.commit()
+    data = client.get("/api/student/insights", headers=auth(tok)).json()
+    assert data["weak_subjects"] == []
+
+
+def test_study_tasks_persist_and_tutoring_reaches_teacher():
+    from app.main import repo
+
+    u, tok = _insights_student({"Physics": [{"name": "Final", "score": 50, "weight": 1.0}]})
+    tasks = client.get("/api/student/insights", headers=auth(tok)).json()["study_plan"]["tasks"]
+    assert client.post(f"/api/student/study-tasks/{tasks[0]['id']}", json={"done": True}, headers=auth(tok)).status_code == 200
+    plan = client.get("/api/student/insights", headers=auth(tok)).json()["study_plan"]
+    assert plan["done"] == 1 and plan["completion_rate"] == 33
+
+    res = client.post("/api/student/tutoring", json={"course": "Physics", "preferred_time": "Thu 15:00", "note": "mechanics"}, headers=auth(tok))
+    assert res.status_code == 200
+    teacher = token("teacher@univ.edu", "teacher123")
+    detail = client.get(f"/api/teacher/students/{u['student_id']}", headers=auth(teacher)).json()
+    assert detail["tutoring_requests"][0]["course"] == "Physics"

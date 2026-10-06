@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
-  Bar, BarChart, CartesianGrid, ResponsiveContainer,
+  CartesianGrid, Line, LineChart, ResponsiveContainer,
   Tooltip, XAxis, YAxis, Scatter, ScatterChart
 } from 'recharts'
 import './styles.css'
@@ -462,10 +462,16 @@ function getPasswordStrength(pw) {
 /* ─── ACADEMIC STATUS HELPERS ────────────────────────────────────── */
 const ABSENCE_WARN = 15
 const ABSENCE_LIMIT = 20
+const LOW_GRADE_THRESHOLD = 60
 
 const absenceOf = a => Number(a.absence_percent ?? a.absence ?? 0) || 0
 const attendanceTitle = a => a.lesson || a.course_name || a.course_title || a.course || a.subject || a.name || 'Course'
 const absenceTone = abs => (abs >= ABSENCE_LIMIT ? 'danger' : abs >= ABSENCE_WARN ? 'warning' : 'success')
+
+function latestSemester(transcript = []) {
+  const sems = transcript.map(c => Number(c.semester)).filter(n => !Number.isNaN(n) && n > 0)
+  return sems.length ? Math.max(...sems) : null
+}
 
 function gpaStanding(gpa) {
   if (gpa == null) return { tone: 'neutral', label: 'No grades yet' }
@@ -487,6 +493,14 @@ function gradeTone(letter) {
   if (l.startsWith('C') || l.startsWith('D')) return 'warning'
   if (l.startsWith('F')) return 'danger'
   return 'neutral'
+}
+
+// Where a notification's action should take the student (US-05 action links)
+function notifTarget(type) {
+  if (type === 'low_grade' || type === 'grade_posted') return { tab: 'transcript', label: 'View grades' }
+  if (type === 'low_attendance') return { tab: 'attendance', label: 'View attendance' }
+  if (type === 'teacher_intervention') return { tab: 'insights', label: 'Open study plan' }
+  return null
 }
 
 function notifMeta(type) {
@@ -763,7 +777,9 @@ function NotificationsDropdown({ token, unread, onUnreadChange, onSelectTab }) {
                     n={n}
                     onOpen={() => {
                       if (!n.read) markRead(n.id)
-                      openAll()
+                      const target = notifTarget(n.type)
+                      setIsOpen(false)
+                      if (onSelectTab) onSelectTab(target ? target.tab : 'alerts')
                     }}
                   />
                 ))}
@@ -1594,6 +1610,7 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token
   const creditsPct = Math.min(100, Math.round((credits / DEGREE_CREDITS) * 100))
   const standing = gpaStanding(gpa)
   const attStanding = attendanceStanding(attendance)
+  const currentSemester = latestSemester(transcript)
 
   const attention = [
     ...attendanceList
@@ -1608,8 +1625,15 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token
         tab: 'attendance',
       })),
     ...transcript
-      .filter(c => c.passed === false)
-      .map(c => ({ tone: 'danger', title: c.course_name, text: `Not passed · grade ${c.letter_grade || '—'}`, tab: 'transcript' })),
+      .filter(c => c.passed === false || (c.semester != null && c.semester === currentSemester && Number(c.grade_percent ?? c.grade) < LOW_GRADE_THRESHOLD))
+      .map(c => ({
+        tone: 'danger',
+        title: c.course_name,
+        text: c.passed === false
+          ? `Not passed · grade ${c.letter_grade || '—'}`
+          : `Low grade · ${c.grade_percent ?? c.grade}% (below ${LOW_GRADE_THRESHOLD}%)`,
+        tab: 'transcript',
+      })),
     ...recommendations
       .slice(0, 1)
       .map(r => ({ tone: 'accent', title: r.course, text: r.action, tab: 'transcript' })),
@@ -1719,6 +1743,98 @@ function ScheduleTab({ sduData, sduLoading, sduStatus, onConnect }) {
 }
 
 /* ─── GRADES TAB ─────────────────────────────────────────────────── */
+// Credit categories derived only from the course-code prefix (SDU does not label major/minor)
+const CREDIT_CATEGORIES = [
+  { id: 'major', label: 'Major (CSS, INF)', prefixes: ['CSS', 'INF'] },
+  { id: 'math', label: 'Math & science (MAT, PHY, STA)', prefixes: ['MAT', 'PHY', 'STA'] },
+  { id: 'general', label: 'General education', prefixes: ['HIS', 'ENG', 'MDE', 'KAZ', 'RUS', 'TUR', 'PHL', 'SOC', 'POL', 'PE'] },
+]
+
+function creditBreakdown(transcript = []) {
+  const totals = { major: 0, math: 0, general: 0, other: 0 }
+  transcript.filter(c => c.passed === true).forEach(c => {
+    const prefix = String(c.course_code || '').trim().split(/\s+/)[0].toUpperCase()
+    const cat = CREDIT_CATEGORIES.find(k => k.prefixes.includes(prefix))
+    totals[cat ? cat.id : 'other'] += Number(c.credits || c.ects || 0)
+  })
+  return totals
+}
+
+function GpaTrendCard({ groups }) {
+  const [scale, setScale] = useState('semesters')
+  const bySemester = groups.filter(g => g.key !== '—' && g.gpa != null)
+  // Year GPA is credit-weighted over all of that year's courses, not the mean of semester GPAs
+  const byYear = Object.values(
+    groups.filter(g => g.key !== '—').reduce((acc, g) => {
+      const year = Math.ceil(Number(g.key) / 2)
+      acc[year] = acc[year] || { year, courses: [] }
+      acc[year].courses.push(...g.courses)
+      return acc
+    }, {})
+  )
+    .map(y => ({ name: `Year ${y.year}`, gpa: calcGPA(y.courses) }))
+    .filter(y => y.gpa != null)
+    .map(y => ({ ...y, gpa: Math.round(y.gpa * 100) / 100 }))
+  const data = scale === 'years' ? byYear : bySemester
+
+  return (
+    <article className="card">
+      <header className="card-head">
+        <h2>GPA trend</h2>
+        <Segmented
+          label="Trend scale"
+          options={[{ id: 'semesters', label: 'Semesters' }, { id: 'years', label: 'Years' }]}
+          value={scale}
+          onChange={setScale}
+        />
+      </header>
+      {data.length ? (
+        <div style={{ width: '100%', height: 260 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={data} margin={{ top: 12, right: 16, left: -24, bottom: 0 }}>
+              <CartesianGrid vertical={false} stroke="var(--border)" />
+              <XAxis dataKey="name" stroke="var(--text-muted)" fontSize={12} tickLine={false} axisLine={false} />
+              <YAxis domain={[0, 4]} ticks={[0, 1, 2, 3, 4]} stroke="var(--text-muted)" fontSize={12} tickLine={false} axisLine={false} />
+              <Tooltip content={<CustomChartTooltip />} />
+              <Line type="monotone" dataKey="gpa" stroke="var(--accent)" strokeWidth={2.5} dot={{ r: 4, fill: 'var(--accent)' }} activeDot={{ r: 6 }} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      ) : (
+        <EmptyState title="No graded semesters yet" />
+      )}
+    </article>
+  )
+}
+
+function DegreeProgressCard({ transcript }) {
+  const earned = calcCompletedCredits(transcript)
+  const pct = Math.min(100, Math.round((earned / DEGREE_CREDITS) * 1000) / 10)
+  const totals = creditBreakdown(transcript)
+  const rows = [...CREDIT_CATEGORIES.map(c => ({ label: c.label, value: totals[c.id] })), { label: 'Other', value: totals.other }]
+    .filter(r => r.value > 0)
+
+  return (
+    <article className="card">
+      <header className="card-head">
+        <h2>Graduation progress</h2>
+        <span className="muted">{earned} / {DEGREE_CREDITS} ECTS</span>
+      </header>
+      <div className="metric-value">{pct}%</div>
+      <div style={{ marginTop: 12 }}><ProgressBar pct={pct} /></div>
+      <dl className="kv" style={{ marginTop: 18 }}>
+        {rows.map(r => (
+          <div key={r.label}>
+            <dt>{r.label}</dt>
+            <dd>{r.value} ECTS</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="footnote">Grouped by course code. SDU does not mark courses as major or minor.</p>
+    </article>
+  )
+}
+
 function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect }) {
   const [semester, setSemester] = useState(null)
   const [view, setView] = useState('list')
@@ -1755,7 +1871,6 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect }) {
   const latest = [...groups].reverse().find(g => g.key !== '—')
   const selected = semester ?? latest?.key ?? 'all'
   const visible = selected === 'all' ? groups : groups.filter(g => g.key === selected)
-  const trend = groups.filter(g => g.key !== '—' && g.gpa != null)
 
   const exportCSV = () => {
     if (!transcript.length) return
@@ -1799,7 +1914,7 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect }) {
       <div className="toolbar">
         <Segmented
           label="View"
-          options={[{ id: 'list', label: 'Courses' }, { id: 'trend', label: 'GPA trend' }]}
+          options={[{ id: 'list', label: 'Courses' }, { id: 'trend', label: 'Progress' }]}
           value={view}
           onChange={setView}
         />
@@ -1817,27 +1932,10 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect }) {
       </div>
 
       {view === 'trend' ? (
-        <article className="card">
-          <header className="card-head">
-            <h2>GPA by semester</h2>
-            <span className="muted">4.0 scale</span>
-          </header>
-          {trend.length ? (
-            <div style={{ width: '100%', height: 260 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={trend} margin={{ top: 8, right: 8, left: -24, bottom: 0 }}>
-                  <CartesianGrid vertical={false} stroke="var(--border)" />
-                  <XAxis dataKey="name" stroke="var(--text-muted)" fontSize={12} tickLine={false} axisLine={false} />
-                  <YAxis domain={[0, 4]} ticks={[0, 1, 2, 3, 4]} stroke="var(--text-muted)" fontSize={12} tickLine={false} axisLine={false} />
-                  <Tooltip content={<CustomChartTooltip />} cursor={{ fill: 'var(--surface-2)' }} />
-                  <Bar dataKey="gpa" fill="var(--accent)" radius={[6, 6, 0, 0]} maxBarSize={44} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          ) : (
-            <EmptyState title="No graded semesters yet" />
-          )}
-        </article>
+        <>
+          <GpaTrendCard groups={groups} />
+          <DegreeProgressCard transcript={transcript} />
+        </>
       ) : !visible.length ? (
         <article className="card">
           <EmptyState icon={<Icons.Book size={20} />} title="No courses yet" text="Your transcript will appear after the first sync." />
@@ -1956,6 +2054,216 @@ function AttendanceTab({ sduData, sduLoading, sduStatus, onConnect }) {
       <p className="footnote">
         Attendance is 100% minus absence. Missing more than {ABSENCE_LIMIT}% of a course puts it at risk of an FX grade.
       </p>
+    </div>
+  )
+}
+
+/* ─── INSIGHTS TAB (US-06 weak subjects · US-07 study plan) ──────── */
+function nextWeekdaySlots(count = 5, times = ['10:00', '13:00', '15:00']) {
+  const out = []
+  const d = new Date()
+  while (out.length < count * times.length) {
+    d.setDate(d.getDate() + 1)
+    const day = d.getDay()
+    if (day === 0 || day === 6) continue
+    const label = d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })
+    times.forEach(t => out.push(`${label}, ${t}`))
+  }
+  return out
+}
+
+function TutoringModal({ token, courses, defaultCourse, onClose, onCreated }) {
+  const slots = useMemo(() => nextWeekdaySlots(), [])
+  const [course, setCourse] = useState(defaultCourse || courses[0] || '')
+  const [time, setTime] = useState(slots[0])
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  const submit = async e => {
+    e.preventDefault()
+    setBusy(true); setErr('')
+    try {
+      await api('/api/student/tutoring', token, { method: 'POST', body: JSON.stringify({ course, preferred_time: time, note: note || null }) })
+      onCreated()
+      onClose()
+    } catch (e2) {
+      setErr(e2.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <form className="modal" onSubmit={submit}>
+        <div className="modal-head">
+          <div>
+            <h2>Request tutoring</h2>
+            <p>Your teacher sees the request and confirms a time</p>
+          </div>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close"><Icons.Close size={18} /></button>
+        </div>
+        <div className="modal-body">
+          <label>
+            Course
+            <select value={course} onChange={e => setCourse(e.target.value)}>
+              {courses.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </label>
+          <label>
+            Preferred time
+            <select value={time} onChange={e => setTime(e.target.value)}>
+              {slots.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </label>
+          <label>
+            What do you need help with? (optional)
+            <textarea rows={3} value={note} onChange={e => setNote(e.target.value)} maxLength={300} />
+          </label>
+          {err && <div className="alert-box alert-danger">{err}</div>}
+        </div>
+        <div className="modal-foot">
+          <button type="button" className="btn-ghost" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn-primary" disabled={busy || !course}>{busy ? 'Sending…' : 'Send request'}</button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+function InsightsTab({ token, sduStatus, onConnect }) {
+  const [data, setData] = useState(null)
+  const [err, setErr] = useState('')
+  const [tutoringFor, setTutoringFor] = useState(null)
+
+  const load = useCallback(() => {
+    api('/api/student/insights', token)
+      .then(setData)
+      .catch(e => setErr(e.message))
+  }, [token])
+
+  useEffect(() => { load() }, [load])
+
+  if (!sduStatus?.connected) return <SduOnboardCard onConnect={onConnect} />
+  if (err) return <div className="page page-narrow"><div className="alert-box alert-danger">{err}</div></div>
+  if (!data) return <PageLoader label="Analysing your grades…" />
+
+  const toggle = async task => {
+    setData(prev => ({
+      ...prev,
+      study_plan: (() => {
+        const tasks = prev.study_plan.tasks.map(t => (t.id === task.id ? { ...t, done: !t.done } : t))
+        const done = tasks.filter(t => t.done).length
+        return { ...prev.study_plan, tasks, done, completion_rate: tasks.length ? Math.round((done / tasks.length) * 100) : null }
+      })(),
+    }))
+    try {
+      await api(`/api/student/study-tasks/${task.id}`, token, { method: 'POST', body: JSON.stringify({ done: !task.done }) })
+    } catch {
+      load()
+    }
+  }
+
+  const weak = data.weak_subjects
+  const plan = data.study_plan
+  const courseNames = data.ranked.map(r => r.course)
+
+  return (
+    <div className="page page-fade">
+      <section className="split">
+        <article className="card card-flush">
+          <header className="group-head">
+            <h2>Subjects, weakest first</h2>
+            <span>Weak below {data.threshold}%</span>
+          </header>
+          {data.ranked.length ? (
+            <ul className="course-list">
+              {data.ranked.map(r => (
+                <li key={r.code + r.course} className="course-row">
+                  <div className="course-main">
+                    <b>
+                      {r.course}
+                      {r.weak && weak[0]?.course === r.course && <span className="tag tag-danger" style={{ marginLeft: 8 }}>#1 priority</span>}
+                    </b>
+                    <span>
+                      {r.topic_gap
+                        ? <>Weakest part: {r.topic_gap.name} · {r.topic_gap.score}%</>
+                        : 'No assessment breakdown from SDU'}
+                    </span>
+                  </div>
+                  <span className={`course-score ${r.weak ? 'tone-danger' : ''}`}>{r.score}%</span>
+                  <span className={`dot dot-${r.weak ? 'danger' : r.score < 75 ? 'warning' : 'success'}`} style={{ justifySelf: 'end' }} />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyState icon={<Icons.Book size={20} />} title="No grades this term yet" text="Subjects appear once grades are published." />
+          )}
+        </article>
+
+        <article className="card">
+          <header className="card-head">
+            <h2>Study plan</h2>
+            {plan.total > 0 && <span className="muted">{plan.done} / {plan.total} done</span>}
+          </header>
+          {weak.length ? (
+            <>
+              <ProgressBar pct={plan.completion_rate || 0} tone="success" />
+              {weak.map(w => (
+                <div key={w.course} className="plan-group">
+                  <div className="plan-head">
+                    <b>{w.course}</b>
+                    <button type="button" className="link-btn" onClick={() => setTutoringFor(w.course)}>Request tutoring</button>
+                  </div>
+                  <ul className="task-list">
+                    {plan.tasks.filter(t => t.course === w.course).map(t => (
+                      <li key={t.id}>
+                        <label className={`task ${t.done ? 'done' : ''}`}>
+                          <input type="checkbox" checked={t.done} onChange={() => toggle(t)} />
+                          <span>{t.text}</span>
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </>
+          ) : (
+            <EmptyState icon={<Icons.CheckCircle size={20} />} title="No weak subjects" text={`Every graded course is at ${data.threshold}% or above.`} />
+          )}
+        </article>
+      </section>
+
+      {data.tutoring_requests.length > 0 && (
+        <article className="card card-flush">
+          <header className="group-head">
+            <h2>Tutoring requests</h2>
+            <button type="button" className="link-btn" onClick={() => setTutoringFor(courseNames[0] || '')}>New request</button>
+          </header>
+          <ul className="course-list">
+            {data.tutoring_requests.map(r => (
+              <li key={r.id} className="course-row request-row">
+                <div className="course-main">
+                  <b>{r.course}</b>
+                  <span>{r.preferred_time}{r.note ? ` · ${r.note}` : ''}</span>
+                </div>
+                <Status tone="warning">Requested</Status>
+              </li>
+            ))}
+          </ul>
+        </article>
+      )}
+
+      {tutoringFor !== null && (
+        <TutoringModal
+          token={token}
+          courses={courseNames.length ? courseNames : [tutoringFor]}
+          defaultCourse={tutoringFor}
+          onClose={() => setTutoringFor(null)}
+          onCreated={load}
+        />
+      )}
     </div>
   )
 }
@@ -2175,14 +2483,25 @@ function AlertsTab({ token, onUnreadChange, onSelectTab }) {
           <ul className="notif-list">
             {notifs.map(n => (
               <NotifRow key={n.id} n={n} onOpen={() => !n.read && markRead(n.id)}>
-                {n.course && (
+                {(notifTarget(n.type) || n.course) && (
                   <div className="notif-actions" onClick={e => e.stopPropagation()}>
-                    <button type="button" className="link-btn" onClick={() => onSelectTab && onSelectTab('transcript')}>
-                      View grades
-                    </button>
-                    <a className="link-btn" href={`mailto:advisor@sdu.edu.kz?subject=Regarding ${encodeURIComponent(n.course)}`}>
-                      Contact advisor
-                    </a>
+                    {notifTarget(n.type) && (
+                      <button
+                        type="button"
+                        className="link-btn"
+                        onClick={() => {
+                          if (!n.read) markRead(n.id)
+                          if (onSelectTab) onSelectTab(notifTarget(n.type).tab)
+                        }}
+                      >
+                        {notifTarget(n.type).label}
+                      </button>
+                    )}
+                    {n.course && (
+                      <a className="link-btn" href={`mailto:advisor@sdu.edu.kz?subject=Regarding ${encodeURIComponent(n.course)}`}>
+                        Contact advisor
+                      </a>
+                    )}
                   </div>
                 )}
               </NotifRow>
@@ -2297,6 +2616,7 @@ const STUDENT_NAV = [
   { id: 'schedule',   label: 'Schedule',   icon: Icons.Calendar },
   { id: 'transcript', label: 'Grades',     icon: Icons.Book },
   { id: 'attendance', label: 'Attendance', icon: Icons.CheckCircle },
+  { id: 'insights',   label: 'Insights',   icon: Icons.Target },
 ]
 
 function Brand({ subtitle }) {
@@ -2468,6 +2788,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
     schedule:   ['Schedule', connected && classCount ? `${classCount} classes a week` : null],
     transcript: ['Grades', connected && courseCount ? `${courseCount} courses on your transcript` : null],
     attendance: ['Attendance', connected ? 'How much of each course you have attended' : null],
+    insights:   ['Insights', connected ? 'What to focus on this term' : null],
     profile:    ['Profile', null],
     alerts:     ['Notifications', null],
   }
@@ -2578,6 +2899,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
           {tab === 'dashboard'  && <DashboardTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} setTab={setTab} token={token} />}
           {tab === 'schedule'   && <ScheduleTab  sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} />}
           {tab === 'transcript' && <TranscriptTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} />}
+          {tab === 'insights'   && <InsightsTab token={token} sduStatus={sduStatus} onConnect={handleSduConnect} />}
           {tab === 'attendance' && <AttendanceTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} />}
           {tab === 'profile'    && <SduProfileTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onDisconnect={handleSduDisconnect} onRefresh={loadSduLiveData} user={user} token={token} />}
           {tab === 'alerts'     && <AlertsTab    token={token} onUnreadChange={setUnread} onSelectTab={setTab} />}
@@ -2695,6 +3017,20 @@ function TeacherStudentModal({ studentId, token, onClose }) {
                     </li>
                   ))}
                 </ul>
+              )}
+
+              {data.tutoring_requests?.length > 0 && (
+                <>
+                  <h3 className="section-title">Tutoring requests</h3>
+                  <ul className="plain-list">
+                    {data.tutoring_requests.map(r => (
+                      <li key={r.id}>
+                        <span><b>{r.course}</b> <span className="muted">{r.preferred_time}{r.note ? ` · ${r.note}` : ''}</span></span>
+                        <Status tone="warning">Requested</Status>
+                      </li>
+                    ))}
+                  </ul>
+                </>
               )}
 
               <h3 className="section-title">Courses this term</h3>

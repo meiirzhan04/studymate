@@ -12,6 +12,10 @@ from pathlib import Path
 
 from . import sdu_mock
 
+# Alert thresholds (US-05)
+LOW_GRADE_THRESHOLD = 60
+MIN_ATTENDANCE = 75.0
+
 
 def hash_password(password: str, salt: str) -> str:
     return hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 120_000).hex()
@@ -124,6 +128,25 @@ class SQLiteRepository:
                     redirect_uri TEXT NOT NULL,
                     expires_at REAL NOT NULL,
                     used INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS study_tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    student_id TEXT NOT NULL,
+                    course TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    done INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    done_at TEXT,
+                    UNIQUE (student_id, course, text)
+                );
+                CREATE TABLE IF NOT EXISTS tutoring_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    student_id TEXT NOT NULL,
+                    course TEXT NOT NULL,
+                    preferred_time TEXT NOT NULL,
+                    note TEXT,
+                    status TEXT NOT NULL DEFAULT 'requested',
+                    created_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS sdu_snapshots (
                     user_id TEXT NOT NULL,
@@ -578,6 +601,53 @@ class SQLiteRepository:
     def get_interventions(self, student_id: str):
         with self.connect() as db:
             return [dict(r) for r in db.execute("SELECT * FROM interventions WHERE student_id = ? ORDER BY id DESC", (student_id,)).fetchall()]
+
+    # ─── Study plan (US-07) ────────────────────────────────────────
+    def ensure_study_tasks(self, student_id: str, course: str, texts: list[str]) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self.connect() as db:
+            db.executemany(
+                "INSERT OR IGNORE INTO study_tasks (student_id, course, text, done, created_at) VALUES (?, ?, ?, 0, ?)",
+                [(student_id, course, t, now) for t in texts]
+            )
+            db.commit()
+
+    def get_study_tasks(self, student_id: str, courses: list[str]) -> list[dict]:
+        if not courses:
+            return []
+        marks = ",".join("?" for _ in courses)
+        with self.connect() as db:
+            rows = db.execute(
+                f"SELECT id, course, text, done, done_at FROM study_tasks WHERE student_id = ? AND course IN ({marks}) ORDER BY id",
+                (student_id, *courses)
+            ).fetchall()
+        return [{**dict(r), "done": bool(r["done"])} for r in rows]
+
+    def set_study_task_done(self, student_id: str, task_id: int, done: bool) -> bool:
+        with self.connect() as db:
+            cur = db.execute(
+                "UPDATE study_tasks SET done = ?, done_at = ? WHERE id = ? AND student_id = ?",
+                (1 if done else 0, datetime.now(timezone.utc).isoformat() if done else None, task_id, student_id)
+            )
+            db.commit()
+            return cur.rowcount > 0
+
+    def add_tutoring_request(self, student_id: str, course: str, preferred_time: str, note: str | None) -> dict:
+        now = datetime.now(timezone.utc).isoformat()
+        with self.connect() as db:
+            cur = db.execute(
+                "INSERT INTO tutoring_requests (student_id, course, preferred_time, note, status, created_at) VALUES (?, ?, ?, ?, 'requested', ?)",
+                (student_id, course, preferred_time, note, now)
+            )
+            db.commit()
+            return {"id": cur.lastrowid, "course": course, "preferred_time": preferred_time, "note": note, "status": "requested", "created_at": now}
+
+    def get_tutoring_requests(self, student_id: str) -> list[dict]:
+        with self.connect() as db:
+            return [dict(r) for r in db.execute(
+                "SELECT id, course, preferred_time, note, status, created_at FROM tutoring_requests WHERE student_id = ? ORDER BY id DESC",
+                (student_id,)
+            ).fetchall()]
 
     def create_user(self, name: str, identifier: str, password: str, role: str = "student", cohort: str = "CS-2026", email: str | None = None):
         clean_id = identifier.strip()
@@ -1041,11 +1111,16 @@ class SQLiteRepository:
         for lesson, grade in current.items():
             letter = f" ({letters[lesson]})" if letters.get(lesson) else ""
             old = previous.get(lesson)
-            ntype = "low_grade" if grade < 50 else "grade_posted"
-            if old is None:
-                created += self._add_notification(db, sid, ntype, "New grade posted", f"{lesson}: {grade}%{letter}", lesson, now)
-            elif abs(old - grade) >= 0.1:
-                created += self._add_notification(db, sid, ntype, "Grade updated", f"{lesson}: {old}% → {grade}%{letter}", lesson, now)
+            if old is not None and abs(old - grade) < 0.1:
+                continue
+            change = f"{lesson}: {grade}%{letter}" if old is None else f"{lesson}: {old}% → {grade}%{letter}"
+            if grade < LOW_GRADE_THRESHOLD:
+                created += self._add_notification(
+                    db, sid, "low_grade", "Low Grade Warning",
+                    f"{change}. This is below {LOW_GRADE_THRESHOLD}% — review the course material.", lesson, now)
+            else:
+                title = "New grade posted" if old is None else "Grade updated"
+                created += self._add_notification(db, sid, "grade_posted", title, change, lesson, now)
         return created
 
     def _notify_absence_changes(self, db, user_id: str, sid: str, attendance: list | None, now: str) -> int:
@@ -1071,5 +1146,14 @@ class SQLiteRepository:
                         title, detail = "Absence warning", f"{lesson}: {absence}% absent, close to the 20% limit."
                     created += self._add_notification(db, sid, "low_attendance", title, detail, lesson, now)
                     break
+
+        # Overall attendance requirement (100% minus average absence)
+        if current:
+            overall = round(100.0 - sum(current.values()) / len(current), 1)
+            prev_overall = (self._swap_snapshot(db, user_id, "attendance_overall", {"value": overall}, now) or {}).get("value")
+            if overall < MIN_ATTENDANCE and (prev_overall is None or prev_overall >= MIN_ATTENDANCE):
+                created += self._add_notification(
+                    db, sid, "low_attendance", "Attendance Alert",
+                    f"Your attendance has fallen below the {int(MIN_ATTENDANCE)}% requirement ({overall}%).", None, now)
         return created
 
