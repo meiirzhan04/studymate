@@ -654,3 +654,55 @@ def test_set_password_requires_auth_and_min_length():
     session = client.post("/api/sdu/demo-connect", json={}).json()
     response = client.post("/api/me/password", json={"new_password": "123"}, headers=auth(session["access_token"]))
     assert response.status_code == 422
+
+
+def admin_token(monkeypatch):
+    password = f"admin-{secrets.token_hex(6)}"
+    monkeypatch.setenv("ADMIN_PASSWORD", password)
+    response = client.post("/api/admin/login", json={"username": "admin", "password": password})
+    assert response.status_code == 200
+    return response.json()["access_token"]
+
+
+def test_admin_page_is_served():
+    response = client.get("/admin")
+    assert response.status_code == 200
+    assert "StudyMate Admin" in response.text
+
+
+def test_admin_login_disabled_without_env(monkeypatch):
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    response = client.post("/api/admin/login", json={"username": "admin", "password": "anything"})
+    assert response.status_code == 503
+
+
+def test_admin_login_rejects_wrong_password(monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", f"admin-{secrets.token_hex(6)}")
+    response = client.post("/api/admin/login", json={"username": "admin", "password": "wrong-password"})
+    assert response.status_code == 401
+
+
+def test_admin_can_list_users_and_set_password(monkeypatch):
+    admin = admin_token(monkeypatch)
+    overview = client.get("/api/admin/overview", headers=auth(admin))
+    assert overview.status_code == 200
+    assert overview.json()["stats"]["users"] > 0
+
+    student_id = client.post("/api/sdu/demo-connect", json={}).json()["user"]["student_id"]
+    users = client.get("/api/admin/users", params={"q": student_id}, headers=auth(admin)).json()["items"]
+    target = next(u for u in users if u["student_id"] == student_id)
+    assert target["sdu"] == "demo"
+    assert "sdu_token" not in target and "access_token" not in target
+
+    new_password = f"pw-{secrets.token_hex(4)}"
+    response = client.post(f"/api/admin/users/{target['id']}/password", json={"new_password": new_password}, headers=auth(admin))
+    assert response.status_code == 200
+    assert token(student_id, new_password)
+
+
+def test_admin_and_user_tokens_are_not_interchangeable(monkeypatch):
+    admin = admin_token(monkeypatch)
+    student = token("240103118", "studymate2026")
+    assert client.get("/api/admin/users", headers=auth(student)).status_code == 403
+    assert client.get("/api/admin/users").status_code == 401
+    assert client.get("/api/me", headers=auth(admin)).status_code == 401

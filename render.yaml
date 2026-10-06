@@ -8,5 +8,7 @@ services:
     envVars:
       - key: AUTH_SECRET
         generateValue: true
+      - key: ADMIN_PASSWORD
+        sync: false
       - key: SQLITE_PATH
         value: /opt/render/project/src/data/student_monitoring.db

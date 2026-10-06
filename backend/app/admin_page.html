@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex" />
+<title>StudyMate Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #F6F7F9; --surface: #fff; --surface-2: #F1F2F5; --border: #E4E6EB;
+    --text: #0F1219; --text-2: #4E5566; --muted: #8B91A0;
+    --accent: #4F46E5; --accent-soft: rgba(79,70,229,.08);
+    --success: #16A34A; --warning: #D97706; --danger: #DC2626;
+    --success-soft: rgba(22,163,74,.1); --warning-soft: rgba(217,119,6,.11); --danger-soft: rgba(220,38,38,.09);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0B0C0F; --surface: #131519; --surface-2: #1A1D23; --border: #23262D;
+      --text: #ECEEF2; --text-2: #A3A9B6; --muted: #6C7280;
+      --accent: #818CF8; --accent-soft: rgba(129,140,248,.13);
+      --success: #4ADE80; --warning: #FBBF24; --danger: #F87171;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font: 14px/1.5 Inter, system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  button, input { font: inherit; color: inherit; }
+  button { cursor: pointer; border: none; background: none; }
+  h1 { font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
+  h2 { font-size: 15px; font-weight: 600; }
+  .muted { color: var(--muted); }
+  .hidden { display: none !important; }
+
+  .login { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+  .login form { width: 100%; max-width: 340px; display: flex; flex-direction: column; gap: 14px; }
+  .login label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 500; color: var(--text-2); }
+
+  .input { height: 38px; padding: 0 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+  .input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .btn { white-space: nowrap; height: 36px; padding: 0 14px; border-radius: 10px; font-size: 13.5px; font-weight: 500; background: var(--surface); border: 1px solid var(--border); }
+  .btn:hover { background: var(--surface-2); }
+  .btn-primary { background: var(--accent); color: #fff; border-color: transparent; }
+  .btn-primary:hover { filter: brightness(1.08); background: var(--accent); }
+  .btn-sm { height: 28px; padding: 0 10px; font-size: 12.5px; border-radius: 8px; }
+  .btn-danger { color: var(--danger); }
+  .btn-danger:hover { background: var(--danger-soft); }
+  .error { padding: 10px 12px; border-radius: 10px; background: var(--danger-soft); color: var(--danger); font-size: 13px; }
+
+  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 32px; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .mark { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; background: var(--accent); color: #fff; font-weight: 700; }
+  nav { display: flex; gap: 4px; padding: 3px; border-radius: 10px; background: var(--surface-2); }
+  nav button { height: 30px; padding: 0 12px; border-radius: 7px; font-size: 13px; font-weight: 500; color: var(--text-2); }
+  nav button.active { background: var(--surface); color: var(--text); box-shadow: 0 0 0 1px var(--border); }
+
+  main { max-width: 1100px; padding: 28px 32px 56px; display: flex; flex-direction: column; gap: 18px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; }
+  .stat { padding: 16px 18px; }
+  .stat span { font-size: 12.5px; color: var(--text-2); }
+  .stat b { display: block; margin-top: 4px; font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+  .kv div { display: grid; grid-template-columns: 220px 1fr; gap: 12px; padding: 10px 18px; border-top: 1px solid var(--border); font-size: 13.5px; }
+  .kv div:first-child { border-top: none; }
+  .kv dt { color: var(--muted); }
+  .kv dd { overflow-wrap: anywhere; }
+  .warn { margin: 0 18px 14px; padding: 10px 12px; border-radius: 10px; background: var(--warning-soft); color: var(--warning); font-size: 13px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th { text-align: left; font-weight: 500; font-size: 12.5px; color: var(--muted); padding: 10px 18px; border-bottom: 1px solid var(--border); }
+  td { padding: 10px 18px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  td small { display: block; color: var(--muted); font-size: 12px; }
+  .actions { display: flex; gap: 6px; justify-content: flex-end; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 500; color: var(--text-2); }
+  .pill::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+  .pill.live::before { background: var(--success); }
+  .pill.demo::before { background: var(--warning); }
+  .pill.expired::before, .pill.bad::before { background: var(--danger); }
+  .empty { padding: 32px 18px; text-align: center; color: var(--muted); }
+  .toolbar { display: flex; gap: 8px; }
+  .toolbar .input { width: 260px; }
+  .toast { position: fixed; right: 24px; bottom: 24px; padding: 10px 14px; border-radius: 10px; background: #111318; color: #fff; font-size: 13px; }
+
+  @media (max-width: 760px) {
+    header { padding: 12px 16px; flex-wrap: wrap; }
+    main { padding: 20px 16px 48px; }
+    .kv div { grid-template-columns: 1fr; gap: 2px; }
+    .table-wrap { overflow-x: auto; }
+    .toolbar .input { width: 100%; }
+  }
+</style>
+</head>
+<body>
+
+<section id="login" class="login">
+  <form id="login-form">
+    <div class="brand"><div class="mark">S</div><h1>StudyMate Admin</h1></div>
+    <label>Username <input class="input" id="username" autocomplete="username" value="admin" required /></label>
+    <label>Password <input class="input" id="password" type="password" autocomplete="current-password" required /></label>
+    <div id="login-error" class="error hidden"></div>
+    <button class="btn btn-primary" type="submit">Sign in</button>
+  </form>
+</section>
+
+<div id="app" class="hidden">
+  <header>
+    <div class="brand"><div class="mark">S</div><h1>Admin</h1></div>
+    <nav id="tabs">
+      <button data-tab="overview" class="active">Overview</button>
+      <button data-tab="users">Users</button>
+      <button data-tab="sdu">SDU connections</button>
+      <button data-tab="errors">SDU errors</button>
+    </nav>
+    <button class="btn btn-sm" id="logout">Sign out</button>
+  </header>
+
+  <main>
+    <section data-view="overview">
+      <div class="grid" id="stats"></div>
+      <div class="card" style="margin-top:18px">
+        <div class="card-head"><h2>System</h2></div>
+        <div id="system-warn"></div>
+        <dl class="kv" id="system"></dl>
+      </div>
+    </section>
+
+    <section data-view="users" class="hidden">
+      <div class="card">
+        <div class="card-head">
+          <h2>Users</h2>
+          <form class="toolbar" id="user-search">
+            <input class="input" id="user-q" placeholder="Search name, ID or email" />
+            <button class="btn" type="submit">Search</button>
+          </form>
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>User</th><th>Role</th><th>Sign-in identifiers</th><th>SDU</th><th></th></tr></thead>
+          <tbody id="users"></tbody>
+        </table></div>
+      </div>
+    </section>
+
+    <section data-view="sdu" class="hidden">
+      <div class="card">
+        <div class="card-head"><h2>SDU connections</h2></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>User</th><th>Status</th><th>Updated</th><th>Expires</th><th></th></tr></thead>
+          <tbody id="sdu"></tbody>
+        </table></div>
+      </div>
+    </section>
+
+    <section data-view="errors" class="hidden">
+      <div class="card">
+        <div class="card-head"><h2>Recent SDU errors</h2><span class="muted">Kept in memory, cleared on server restart</span></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Time (UTC)</th><th>Stage</th><th>Status</th><th>Message</th></tr></thead>
+          <tbody id="errors"></tbody>
+        </table></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script>
+  const $ = id => document.getElementById(id)
+  const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+  const fmtTime = v => {
+    if (!v) return '—'
+    const d = typeof v === 'number' ? new Date(v * 1000) : new Date(v)
+    return isNaN(d) ? esc(v) : d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
+  }
+  let token = null
+  try { token = sessionStorage.getItem('admin_token') } catch {}
+
+  function toast(text) {
+    const t = $('toast'); t.textContent = text; t.classList.remove('hidden')
+    setTimeout(() => t.classList.add('hidden'), 2500)
+  }
+
+  async function api(path, options = {}) {
+    const res = await fetch(path, {
+      ...options,
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    const body = await res.json().catch(() => ({}))
+    if (res.status === 401 && token) { logout(); throw new Error('Session expired') }
+    if (!res.ok) throw new Error(typeof body.detail === 'string' ? body.detail : `Request failed (${res.status})`)
+    return body
+  }
+
+  function showApp(signedIn) {
+    $('login').classList.toggle('hidden', signedIn)
+    $('app').classList.toggle('hidden', !signedIn)
+    if (signedIn) switchTab('overview')
+  }
+
+  function logout() {
+    token = null
+    try { sessionStorage.removeItem('admin_token') } catch {}
+    showApp(false)
+  }
+
+  $('login-form').addEventListener('submit', async e => {
+    e.preventDefault()
+    $('login-error').classList.add('hidden')
+    try {
+      const r = await api('/api/admin/login', { method: 'POST', body: JSON.stringify({ username: $('username').value, password: $('password').value }) })
+      token = r.access_token
+      try { sessionStorage.setItem('admin_token', token) } catch {}
+      $('password').value = ''
+      showApp(true)
+    } catch (err) {
+      $('login-error').textContent = err.message
+      $('login-error').classList.remove('hidden')
+    }
+  })
+  $('logout').addEventListener('click', logout)
+
+  function switchTab(name) {
+    document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === name))
+    document.querySelectorAll('[data-view]').forEach(v => v.classList.toggle('hidden', v.dataset.view !== name))
+    ;({ overview: loadOverview, users: loadUsers, sdu: loadSdu, errors: loadErrors })[name]().catch(err => toast(err.message))
+  }
+  document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)))
+
+  async function loadOverview() {
+    const d = await api('/api/admin/overview')
+    const s = d.stats
+    $('stats').innerHTML = [
+      ['Users', s.users], ['Students', s.students], ['Teachers', s.teachers],
+      ['SDU connections', s.sdu_connections], ['Recent SDU errors', d.recent_sdu_errors],
+    ].map(([k, v]) => `<div class="card stat"><span>${k}</span><b>${esc(v)}</b></div>`).join('')
+    const y = d.system
+    $('system-warn').innerHTML = y.database_ephemeral
+      ? '<div class="warn">The database is in /tmp. Users, passwords and SDU connections are lost on every restart or deploy. Attach a persistent disk (or PostgreSQL) and set SQLITE_PATH to it.</div>'
+      : ''
+    $('system').innerHTML = [
+      ['Database path', y.database_path],
+      ['SDU origin', y.sdu_origin],
+      ['SDU client ID', y.sdu_client_id],
+      ['AUTH_SECRET set', y.auth_secret_from_env ? 'Yes' : 'No (development secret)'],
+      ['ADMIN_PASSWORD set', y.admin_password_from_env ? 'Yes' : 'No'],
+    ].map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join('')
+  }
+
+  async function loadUsers() {
+    const q = $('user-q').value.trim()
+    const d = await api(`/api/admin/users?q=${encodeURIComponent(q)}`)
+    $('users').innerHTML = d.items.length ? d.items.map(u => `
+      <tr>
+        <td>${esc(u.name)}<small>${esc(u.id)}${u.student_id ? ' · ' + esc(u.student_id) : ''}</small></td>
+        <td>${esc(u.role)}</td>
+        <td><small style="color:inherit">${esc(u.identifiers || '—')}</small></td>
+        <td><span class="pill ${esc(u.sdu)}">${esc(u.sdu)}</span></td>
+        <td><div class="actions">
+          <button class="btn btn-sm" data-pw="${esc(u.id)}">Set password</button>
+          <button class="btn btn-sm btn-danger" data-del="${esc(u.id)}" data-name="${esc(u.name)}">Delete</button>
+        </div></td>
+      </tr>`).join('') : '<tr><td colspan="5" class="empty">No users found</td></tr>'
+  }
+  $('user-search').addEventListener('submit', e => { e.preventDefault(); loadUsers().catch(err => toast(err.message)) })
+  $('users').addEventListener('click', async e => {
+    const pw = e.target.dataset.pw, del = e.target.dataset.del
+    try {
+      if (pw) {
+        const value = prompt('New password for this user (at least 6 characters):')
+        if (!value) return
+        await api(`/api/admin/users/${encodeURIComponent(pw)}/password`, { method: 'POST', body: JSON.stringify({ new_password: value }) })
+        toast('Password updated')
+      } else if (del) {
+        if (!confirm(`Delete user "${e.target.dataset.name}"? This cannot be undone.`)) return
+        await api(`/api/admin/users/${encodeURIComponent(del)}`, { method: 'DELETE' })
+        toast('User deleted'); await loadUsers()
+      }
+    } catch (err) { toast(err.message) }
+  })
+
+  async function loadSdu() {
+    const d = await api('/api/admin/sdu-connections')
+    $('sdu').innerHTML = d.items.length ? d.items.map(c => {
+      const status = c.expired ? 'expired' : c.demo ? 'demo' : 'live'
+      return `<tr>
+        <td>${esc(c.name || c.user_id)}<small>${esc(c.student_id || c.user_id)}</small></td>
+        <td><span class="pill ${status}">${status}</span></td>
+        <td>${fmtTime(c.updated_at)}</td>
+        <td>${fmtTime(c.expires_at)}</td>
+        <td><div class="actions"><button class="btn btn-sm btn-danger" data-disc="${esc(c.user_id)}">Disconnect</button></div></td>
+      </tr>`
+    }).join('') : '<tr><td colspan="5" class="empty">No SDU connections</td></tr>'
+  }
+  $('sdu').addEventListener('click', async e => {
+    const id = e.target.dataset.disc
+    if (!id || !confirm('Disconnect SDU for this user?')) return
+    try {
+      await api(`/api/admin/sdu-connections/${encodeURIComponent(id)}`, { method: 'DELETE' })
+      toast('Disconnected'); await loadSdu()
+    } catch (err) { toast(err.message) }
+  })
+
+  async function loadErrors() {
+    const d = await api('/api/admin/sdu-errors')
+    $('errors').innerHTML = d.items.length ? d.items.map(x => `
+      <tr>
+        <td>${esc(x.at)}</td>
+        <td>${esc(x.stage)}</td>
+        <td><span class="pill bad">${esc(x.status ?? '—')}</span></td>
+        <td>${esc(x.message || '—')}${x.student_id ? `<small>${esc(x.student_id)}</small>` : ''}</td>
+      </tr>`).join('') : '<tr><td colspan="4" class="empty">No SDU errors since the last restart</td></tr>'
+  }
+
+  showApp(!!token)
+</script>
+</body>
+</html>

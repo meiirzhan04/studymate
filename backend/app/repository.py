@@ -811,6 +811,73 @@ class SQLiteRepository:
             db.commit()
             return cur.rowcount > 0
 
+    # ─── Admin panel queries (never return SDU access tokens) ──────
+    _DEMO_SQL = "(c.access_token = ? OR c.scope = ? OR lower(c.access_token) LIKE '%demo%' OR lower(c.scope) LIKE '%demo%')"
+
+    def admin_stats(self) -> dict:
+        with self.connect() as db:
+            def count(sql):
+                return db.execute(sql).fetchone()[0]
+            return {
+                "users": count("SELECT COUNT(*) FROM users"),
+                "students": count("SELECT COUNT(*) FROM users WHERE role = 'student'"),
+                "teachers": count("SELECT COUNT(*) FROM users WHERE role = 'teacher'"),
+                "sdu_connections": count("SELECT COUNT(*) FROM sdu_connections"),
+                "notifications": count("SELECT COUNT(*) FROM notifications"),
+            }
+
+    def admin_list_users(self, query: str = "", limit: int = 200) -> list[dict]:
+        like = f"%{query}%"
+        with self.connect() as db:
+            rows = db.execute(
+                f"""SELECT u.id, u.name, u.role, u.student_id, u.teacher_id,
+                           c.expires_at AS sdu_expires_at, {self._DEMO_SQL} AS sdu_demo,
+                           (SELECT GROUP_CONCAT(identifier, ', ') FROM login_identifiers i WHERE i.user_id = u.id) AS identifiers
+                    FROM users u LEFT JOIN sdu_connections c ON c.user_id = u.id
+                    WHERE ? = '' OR u.name LIKE ? OR u.id LIKE ? OR IFNULL(u.student_id, '') LIKE ?
+                       OR u.id IN (SELECT user_id FROM login_identifiers WHERE identifier LIKE ?)
+                    ORDER BY u.role DESC, u.name LIMIT ?""",
+                (sdu_mock.DEMO_ACCESS_TOKEN, sdu_mock.DEMO_SCOPE, query, like, like, like, like, limit)
+            ).fetchall()
+        items = []
+        for r in rows:
+            item = {k: r[k] for k in ("id", "name", "role", "student_id", "teacher_id", "identifiers")}
+            if r["sdu_expires_at"] is None:
+                item["sdu"] = "none"
+            elif r["sdu_demo"]:
+                item["sdu"] = "demo"
+            elif r["sdu_expires_at"] < time.time():
+                item["sdu"] = "expired"
+            else:
+                item["sdu"] = "live"
+            items.append(item)
+        return items
+
+    def admin_list_sdu_connections(self) -> list[dict]:
+        with self.connect() as db:
+            rows = db.execute(
+                f"""SELECT c.user_id, c.expires_at, c.scope, c.updated_at, {self._DEMO_SQL} AS demo, u.name, u.student_id
+                    FROM sdu_connections c LEFT JOIN users u ON u.id = c.user_id
+                    ORDER BY c.updated_at DESC""",
+                (sdu_mock.DEMO_ACCESS_TOKEN, sdu_mock.DEMO_SCOPE)
+            ).fetchall()
+        now = time.time()
+        return [{
+            "user_id": r["user_id"], "name": r["name"], "student_id": r["student_id"],
+            "scope": r["scope"], "updated_at": r["updated_at"], "expires_at": r["expires_at"],
+            "demo": bool(r["demo"]), "expired": r["expires_at"] < now,
+        } for r in rows]
+
+    def admin_delete_user(self, user_id: str) -> bool:
+        with self.connect() as db:
+            if not db.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone():
+                return False
+            for table in ("sdu_connections", "password_reset_tokens", "sdu_oauth_attempts", "login_identifiers"):
+                db.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
+            db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            db.commit()
+            return True
+
     def find_or_create_sdu_user(self, student_id: str, fullname: str, email: str | None) -> dict:
         clean_sid = student_id.strip()
         clean_name = fullname.strip() or f"Student {clean_sid}"

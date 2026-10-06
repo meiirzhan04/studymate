@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .repository import SQLiteRepository
-from . import sdu_client, sdu_mock
+from . import admin, sdu_client, sdu_mock
 
 
 class SduAuthorizeRequest(BaseModel):
@@ -149,7 +149,7 @@ def current_user(authorization: Annotated[Optional[str], Header()] = None) -> Us
         if not hmac.compare_digest(signature, sign(body)):
             raise ValueError
         payload = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
-        if payload["exp"] < time.time():
+        if payload["exp"] < time.time() or admin.is_admin_payload(payload):
             raise ValueError
         return User(id=payload["sub"], name=payload["name"], role=payload["role"], student_id=payload.get("student_id"), teacher_id=payload.get("teacher_id"))
     except (ValueError, KeyError, json.JSONDecodeError):
@@ -165,7 +165,7 @@ def optional_current_user(authorization: Annotated[Optional[str], Header()] = No
         if not hmac.compare_digest(signature, sign(body)):
             return None
         payload = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
-        if payload["exp"] < time.time():
+        if payload["exp"] < time.time() or admin.is_admin_payload(payload):
             return None
         return User(id=payload["sub"], name=payload["name"], role=payload["role"], student_id=payload.get("student_id"), teacher_id=payload.get("teacher_id"))
     except Exception:
@@ -588,6 +588,25 @@ def sdu_demo_connect(user: Annotated[Optional[User], Depends(optional_current_us
     }
 
 
+SDU_ERROR_HINTS = {
+    401: "SDU rejected the access token. Please try connecting again.",
+    403: "The SDU app is missing a required permission (scope).",
+    409: "SDU needs an action on your account (for example 2FA or signing in again on the SDU portal). Complete it there, then try again.",
+    502: "The SDU portal is unavailable right now. Try again in a minute.",
+    504: "The SDU portal is too slow right now. Try again in a minute.",
+}
+
+
+def sdu_short_message(data) -> str:
+    """Short human-readable reason from an SDU error body (only a plain string field, never the raw body)."""
+    if isinstance(data, dict):
+        for key in ("message", "error_description", "detail", "error"):
+            value = data.get(key)
+            if isinstance(value, str) and value:
+                return value[:160]
+    return ""
+
+
 @app.post("/api/sdu/callback")
 async def sdu_callback(req: SduCallbackRequest):
     if not req.state:
@@ -618,18 +637,30 @@ async def sdu_callback(req: SduCallbackRequest):
             redirect_uri=redirect_uri
         )
     except Exception as exc:
+        admin.record_sdu_error("callback/token", None, str(exc)[:160])
         raise HTTPException(status_code=400, detail=f"Failed to exchange code with SDU: {str(exc)}")
 
     access_token = token_data.get("access_token")
     if not access_token:
         raise HTTPException(status_code=400, detail="SDU token endpoint did not return an access_token.")
 
-    # Fetch student profile
+    # Fetch student profile (one retry when SDU is slow or unreachable)
     status_code, profile_data = await sdu_client.fetch_sdu_data("profile", access_token)
+    if status_code in (502, 504):
+        status_code, profile_data = await sdu_client.fetch_sdu_data("profile", access_token)
     if status_code != 200 or not isinstance(profile_data, dict):
-        raise HTTPException(status_code=400, detail="Failed to fetch student profile from SDU Platform.")
+        reason = sdu_short_message(profile_data)
+        admin.record_sdu_error("callback/profile", status_code, reason)
+        hint = SDU_ERROR_HINTS.get(status_code, "")
+        raise HTTPException(
+            status_code=400,
+            detail=f"SDU profile request failed ({status_code}). {reason} {hint}".strip(),
+        )
 
-    student_id = str(profile_data.get("student_id", "")).strip()
+    student_id = str(profile_data.get("student_id") or "").strip()
+    if not student_id:
+        admin.record_sdu_error("callback/profile", status_code, "Profile response has no student_id")
+        raise HTTPException(status_code=400, detail="SDU returned a profile without a student ID. Please try again later.")
     fullname = profile_data.get("fullname", "")
     email = profile_data.get("email")
 
@@ -722,7 +753,8 @@ async def sdu_sync(user: Annotated[User, Depends(current_user)]):
     if status_code == 403:
         raise HTTPException(status_code=403, detail="Missing required SDU scope or account restricted.")
     if status_code == 409:
-        raise HTTPException(status_code=409, detail=profile_data)
+        admin.record_sdu_error("sync/profile", status_code, sdu_short_message(profile_data), user.student_id)
+        raise HTTPException(status_code=409, detail=f"{sdu_short_message(profile_data)} {SDU_ERROR_HINTS[409]}".strip())
 
     if status_code in (502, 504):
         # Graceful fallback when upstream SDU server is unreachable
@@ -1170,6 +1202,10 @@ def attendance_performance(user: Annotated[User, Depends(require_role("teacher")
     denominator = math.sqrt(sum((x - mx) ** 2 for x in xs) * sum((y - my) ** 2 for y in ys))
     correlation = round(numerator / denominator, 3) if denominator else None
     return {"data_status": "available" if correlation is not None else "insufficient_data", "points": points, "correlation": correlation, "note": "Correlation describes association and does not prove causation."}
+
+
+# Admin panel (/admin page + /api/admin/*) must be registered before the SPA catch-all below.
+app.include_router(admin.create_admin_router(repo, sign, sdu_client.SDU_ORIGIN, sdu_client.SDU_CLIENT_ID))
 
 
 # In production the frontend build is copied here by the container build.
