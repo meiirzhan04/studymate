@@ -763,14 +763,23 @@ SDU_ERROR_HINTS = {
 }
 
 
-def sdu_short_message(data) -> str:
-    """Short human-readable reason from an SDU error body (only a plain string field, never the raw body)."""
-    if isinstance(data, dict):
-        for key in ("message", "error_description", "detail", "error"):
-            value = data.get(key)
-            if isinstance(value, str) and value:
-                return value[:160]
-    return ""
+def sdu_short_message(data, _depth: int = 0) -> str:
+    """Short human-readable reason from an SDU error body (only plain string fields, never the raw body).
+
+    Handles nested errors such as {"detail": {"code": "...", "message": "..."}}.
+    """
+    if not isinstance(data, dict) or _depth > 2:
+        return ""
+    code = data.get("code") if isinstance(data.get("code"), str) else ""
+    for key in ("message", "error_description", "detail", "error"):
+        value = data.get(key)
+        if isinstance(value, str) and value:
+            return (f"{value} [{code}]" if code else value)[:200]
+        if isinstance(value, dict):
+            inner = sdu_short_message(value, _depth + 1)
+            if inner:
+                return inner
+    return f"[{code}]" if code else ""
 
 
 @app.post("/api/sdu/callback")
@@ -982,6 +991,8 @@ async def fetch_deadlines(conn: dict, student_id: Optional[str]) -> tuple[list, 
     if status_code != 200:
         reason = sdu_short_message(data)
         admin.record_sdu_error("moodle/deadlines", status_code, reason or "request failed", student_id)
+        if status_code == 409:
+            return [], False, f"SDU needs an action before Moodle deadlines can load: {reason or 'link your Moodle account or sign in again on the SDU portal'}."
         return [], False, f"Moodle deadlines are unavailable right now ({status_code})."
     items, problem = deadlines_mod.normalize(data)
     if problem:

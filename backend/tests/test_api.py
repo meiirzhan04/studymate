@@ -1034,3 +1034,10 @@ def test_breakdown_lookup_by_course_name():
     assert res.status_code == 200
     assert {c["name"] for c in res.json()["components"]} >= {"Midterm", "Final"}
     assert client.get("/api/student/grades/breakdown", params={"course": "No Such Course"}, headers=auth(tok)).status_code == 404
+
+
+def test_sdu_short_message_reads_nested_errors():
+    from app.main import sdu_short_message
+    assert sdu_short_message({"detail": {"code": "moodle_not_linked", "message": "Link Moodle first"}}) == "Link Moodle first [moodle_not_linked]"
+    assert sdu_short_message({"detail": "plain"}) == "plain"
+    assert sdu_short_message({"detail": {"code": "x"}}) == "[x]"
