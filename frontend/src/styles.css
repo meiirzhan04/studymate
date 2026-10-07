@@ -1063,3 +1063,30 @@ button.avatar:hover { box-shadow: 0 0 0 3px var(--accent-ring); }
   .shell:not(.shell-single) .topbar { padding: 14px 16px; }
   .shell:not(.shell-single) .content { padding: 4px 16px 96px; }
 }
+
+/* ─── Semester picker ───────────────────────────────────────── */
+.picker-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 34px; padding: 0 12px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 13.5px; font-weight: 500; color: var(--text-primary);
+  transition: border-color .15s, background-color .15s;
+}
+.picker-btn svg { color: var(--text-muted); }
+.picker-btn:hover { border-color: var(--border-strong); background: var(--surface-2); }
+.picker-btn[aria-expanded="true"] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+.picker-menu { width: 220px; max-height: 320px; overflow-y: auto; padding: 6px; }
+.picker-left { left: 0; right: auto; }
+.picker-right { right: 0; }
+.menu-item small { margin-left: auto; font-size: 11.5px; color: var(--text-muted); }
+.menu-item svg:last-child { margin-left: auto; color: var(--accent); }
+.menu-item small + svg { margin-left: 8px; }
+.menu-item-active { color: var(--text-primary); font-weight: 500; background: var(--accent-soft); }
+
+/* ─── Small fixes ───────────────────────────────────────────── */
+.course-row:has(.grade-wide) { grid-template-columns: minmax(0, 1fr) auto; }
+.grade-wide { min-width: 0; padding: 0 10px; font-weight: 500; white-space: nowrap; }
+.strip-note { font-style: normal; font-size: 12.5px; color: var(--text-muted); }
+.today-dot { display: inline-block; width: 6px; height: 6px; margin-left: 6px; vertical-align: middle; border-radius: 50%; background: var(--accent); }
+.card-fill > .empty { flex: 1; justify-content: center; }

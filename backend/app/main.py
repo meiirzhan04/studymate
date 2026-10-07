@@ -714,6 +714,8 @@ async def sdu_availability():
 
 @app.post("/api/sdu/demo-connect")
 def sdu_demo_connect(user: Annotated[Optional[User], Depends(optional_current_user)] = None):
+    if not sdu_mock.demo_enabled():
+        raise HTTPException(status_code=404, detail="Demo mode is disabled. Connect your SDU account.")
     # If unauthenticated, create or use the demo SDU student account
     if not user:
         student_id = sdu_mock.DEMO_PROFILE["student_id"]
@@ -752,6 +754,19 @@ def sdu_demo_connect(user: Annotated[Optional[User], Depends(optional_current_us
         "demo_mode": True,
         "student_profile": sdu_mock.DEMO_PROFILE
     }
+
+
+ACTIVE_TERM = {"year": 2026, "term": 1}
+
+
+def extract_transcript(data) -> Optional[list]:
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ("courses", "transcript", "items"):
+            if isinstance(data.get(key), list):
+                return data[key]
+    return None
 
 
 SDU_ERROR_HINTS = {
@@ -858,14 +873,18 @@ async def sdu_callback(req: SduCallbackRequest):
     # Initial snapshot sync
     try:
         _, sched_data = await sdu_client.fetch_sdu_data("schedule", access_token)
-        _, att_data = await sdu_client.fetch_sdu_data("attendance", access_token)
-        _, grades_data = await sdu_client.fetch_sdu_data("grades", access_token)
+        _, att_data = await sdu_client.fetch_sdu_data("attendance", access_token, params=dict(ACTIVE_TERM))
+        _, grades_data = await sdu_client.fetch_sdu_data("grades", access_token, params=dict(ACTIVE_TERM))
+        _, trans_data = await sdu_client.fetch_sdu_data("transcript", access_token)
         repo.sync_sdu_student_data(
             user["id"],
             profile=profile_data,
             schedule=sched_data.get("schedule") if isinstance(sched_data, dict) else None,
             grades=grades_data.get("grades") if isinstance(grades_data, dict) else None,
             attendance=att_data.get("attendance") if isinstance(att_data, dict) else None,
+            transcript=extract_transcript(trans_data),
+            active_term=ACTIVE_TERM,
+            replace_local_grades=True,
         )
     except Exception:
         pass
@@ -886,7 +905,7 @@ async def sdu_callback(req: SduCallbackRequest):
 
 @app.get("/api/sdu/status")
 def sdu_status(user: Annotated[User, Depends(current_user)]):
-    conn = repo.get_sdu_connection(user.id)
+    conn = live_connection(user.id)
     if not conn:
         return {"connected": False, "demo_mode": False}
     is_demo = sdu_mock.is_demo_connection(conn)
@@ -903,7 +922,7 @@ def sdu_status(user: Annotated[User, Depends(current_user)]):
 
 @app.post("/api/sdu/sync")
 async def sdu_sync(user: Annotated[User, Depends(current_user)], auto: bool = Query(False)):
-    conn = repo.get_sdu_connection(user.id)
+    conn = live_connection(user.id)
     if not conn:
         raise HTTPException(status_code=400, detail="No SDU account connected.")
     if conn["expires_at"] < time.time():
@@ -945,7 +964,8 @@ async def sdu_sync(user: Annotated[User, Depends(current_user)], auto: bool = Qu
         admin.record_sdu_error("sync/profile", status_code, sdu_short_message(profile_data), user.student_id)
         raise HTTPException(status_code=502, detail=f"SDU profile request failed ({status_code}).")
 
-    active_term_params = {"year": 2026, "term": 1}
+    active_term_params = dict(ACTIVE_TERM)
+    _, trans_data = await sdu_client.fetch_sdu_data("transcript", access_token)
     _, sched_data = await sdu_client.fetch_sdu_data("schedule", access_token)
     _, att_data = await sdu_client.fetch_sdu_data("attendance", access_token, params=active_term_params)
     _, grades_data = await sdu_client.fetch_sdu_data("grades", access_token, params=active_term_params)
@@ -958,6 +978,9 @@ async def sdu_sync(user: Annotated[User, Depends(current_user)], auto: bool = Qu
         grades=grades_data.get("grades") if isinstance(grades_data, dict) else None,
         attendance=att_data.get("attendance") if isinstance(att_data, dict) else None,
         deadlines=deadline_items if deadlines_ok else None,
+        transcript=extract_transcript(trans_data),
+        active_term=ACTIVE_TERM,
+        replace_local_grades=True,
     )
     return {"ok": True, "connected": True, "synced": True, "updated_at": res.get("updated_at"), "new_notifications": res.get("new_notifications", 0)}
 
@@ -1016,9 +1039,18 @@ async def sdu_deadlines(user: Annotated[User, Depends(current_user)], days: int 
     }
 
 
+def live_connection(user_id: str) -> Optional[dict]:
+    """The user's SDU connection; demo connections are dropped unless demo mode is enabled."""
+    conn = repo.get_sdu_connection(user_id)
+    if conn and sdu_mock.is_demo_connection(conn) and not sdu_mock.demo_enabled():
+        repo.delete_sdu_connection(user_id)
+        return None
+    return conn
+
+
 def require_sdu_connection(user_id: str) -> dict:
     """The user's SDU connection. Demo data is served only for an explicit demo connection."""
-    conn = repo.get_sdu_connection(user_id)
+    conn = live_connection(user_id)
     if not conn:
         raise HTTPException(status_code=404, detail="SDU account is not connected.")
     if conn["expires_at"] < time.time() and not sdu_mock.is_demo_connection(conn):
@@ -1203,8 +1235,40 @@ def study_task_texts(course: dict) -> list[str]:
     ]
 
 
-def student_insights(student_id: str, semester: str = "spring-2026") -> dict:
-    """Weak-subject detection (US-06): current-term courses ranked from weakest to strongest."""
+def _transcript_insights(courses: list) -> Optional[dict]:
+    """Rank the latest semester that has grades (the current term is usually still in progress)."""
+    def score(c):
+        for k in ("grade_percent", "grade"):
+            try:
+                return float(c.get(k))
+            except (TypeError, ValueError):
+                continue
+        return None
+    graded = [c for c in courses if score(c) is not None and c.get("semester") is not None]
+    if not graded:
+        return None
+    term = max(int(c["semester"]) for c in graded)
+    ranked = []
+    for rank, c in enumerate(sorted((c for c in graded if int(c["semester"]) == term), key=score), start=1):
+        ranked.append({
+            "rank": rank, "course": c.get("course_name") or c.get("course_code"), "code": c.get("course_code"),
+            "score": score(c), "weak": score(c) < LOW_GRADE_THRESHOLD,
+            "topic_gap": None, "breakdown_available": False,
+        })
+    weak = [r for r in ranked if r["weak"]]
+    for r in weak:
+        r["tasks"] = study_task_texts(r)
+    return {"semester": f"sem-{term}", "term_label": f"Semester {term}", "threshold": LOW_GRADE_THRESHOLD,
+            "ranked": ranked, "weak_subjects": weak}
+
+
+def student_insights(student_id: str, semester: str = "spring-2026", user_id: Optional[str] = None) -> dict:
+    """Weak-subject detection (US-06): courses ranked from weakest to strongest."""
+    snap = repo.get_snapshot(user_id, "transcript") if user_id else None
+    if snap and snap.get("courses"):
+        from_transcript = _transcript_insights(snap["courses"])
+        if from_transcript:
+            return from_transcript
     graded = [c for c in student_courses(student_id, semester) if c["score"] is not None]
     ranked = []
     for rank, c in enumerate(sorted(graded, key=lambda c: c["score"]), start=1):
@@ -1223,12 +1287,12 @@ def student_insights(student_id: str, semester: str = "spring-2026") -> dict:
     weak = [r for r in ranked if r["weak"]]
     for r in weak:
         r["tasks"] = study_task_texts(r)
-    return {"semester": semester, "threshold": LOW_GRADE_THRESHOLD, "ranked": ranked, "weak_subjects": weak}
+    return {"semester": semester, "term_label": "This term", "threshold": LOW_GRADE_THRESHOLD, "ranked": ranked, "weak_subjects": weak}
 
 
 @app.get("/api/student/insights")
 def get_student_insights(user: Annotated[User, Depends(require_role("student"))], semester: str = Query("spring-2026")):
-    data = student_insights(user.student_id, semester)
+    data = student_insights(user.student_id, semester, user.id)
     for w in data["weak_subjects"]:
         repo.ensure_study_tasks(user.student_id, w["course"], w["tasks"])
     tasks = repo.get_study_tasks(user.student_id, [w["course"] for w in data["weak_subjects"]])
@@ -1276,7 +1340,7 @@ def student_dashboard(user: Annotated[User, Depends(require_role("student"))], s
     # Same source as the Insights page, so the two views never disagree
     recommendations = [
         {"course": w["course"], "reason": f"Current score is {w['score']}%", "action": w["tasks"][0]}
-        for w in student_insights(user.student_id, semester)["weak_subjects"][:2]
+        for w in student_insights(user.student_id, semester, user.id)["weak_subjects"][:2]
     ]
     
     # Calculate attendance per course for progress %

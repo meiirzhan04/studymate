@@ -1,3 +1,8 @@
+import os
+
+# Demo SDU data is opt-in; the test-suite relies on it
+os.environ.setdefault("ENABLE_DEMO_MODE", "1")
+
 import pytest
 
 

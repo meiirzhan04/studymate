@@ -405,7 +405,7 @@ class SQLiteRepository:
         # Seed initial SDU connection for demo student accounts so attendance & schedule are active
         now_iso = datetime.now(timezone.utc).isoformat()
         exp_time = time.time() + 31536000  # 1 year
-        for uid in ["u-240103118", "u-240103188", "u-240103120"]:
+        for uid in (["u-240103118", "u-240103188", "u-240103120"] if sdu_mock.demo_enabled() else []):
             db.execute(
                 "INSERT OR REPLACE INTO sdu_connections (user_id, access_token, expires_at, scope, updated_at) VALUES (?, ?, ?, ?, ?)",
                 (uid, sdu_mock.DEMO_ACCESS_TOKEN, exp_time, sdu_mock.DEMO_SCOPE, now_iso)
@@ -742,6 +742,11 @@ class SQLiteRepository:
             )
             db.commit()
             return cur.rowcount > 0
+
+    def get_snapshot(self, user_id: str, kind: str) -> dict | None:
+        with self.connect() as db:
+            row = db.execute("SELECT data_json FROM sdu_snapshots WHERE user_id = ? AND kind = ?", (user_id, kind)).fetchone()
+            return json.loads(row["data_json"]) if row else None
 
     def notify_support_reply(self, user_id: str, subject: str) -> None:
         with self.connect() as db:
@@ -1134,7 +1139,8 @@ class SQLiteRepository:
             return {"id": new_uid, "name": clean_name, "role": "student", "student_id": clean_sid, "teacher_id": None}
 
     def sync_sdu_student_data(self, user_id: str, profile: dict, schedule: list | None, grades: list | None, attendance: list | None,
-                              deadlines: list | None = None) -> dict:
+                              deadlines: list | None = None, transcript: list | None = None,
+                              active_term: dict | None = None, replace_local_grades: bool = False) -> dict:
         student_id = profile.get("student_id")
         fullname = profile.get("fullname")
         email = profile.get("email")
@@ -1163,18 +1169,42 @@ class SQLiteRepository:
                     overall_att = round(max(0.0, min(100.0, 100.0 - avg_absence)), 1)
                     db.execute("UPDATE students SET attendance = ? WHERE id = ?", (overall_att, sid))
 
+            # Keep the real transcript (names, semesters, grades) for Insights
+            if isinstance(transcript, list) and transcript:
+                compact = [
+                    {k: c.get(k) for k in ("semester", "course_code", "course_name", "grade_percent", "grade", "letter_grade", "credits", "ects", "passed")}
+                    for c in transcript if isinstance(c, dict)
+                ]
+                self._swap_snapshot(db, user_id, "transcript", {"courses": compact}, datetime.now(timezone.utc).isoformat())
+            names = {str(c.get("course_code") or "").strip().upper(): c.get("course_name")
+                     for c in (transcript or []) if isinstance(c, dict) and c.get("course_code")}
+
+            # A real SDU sync replaces any local (seeded) grades: SDU is the source of truth
+            if replace_local_grades and sid and isinstance(grades, list):
+                db.execute("DELETE FROM assessment_items WHERE grade_id IN (SELECT id FROM grades WHERE student_id = ?)", (sid,))
+                db.execute("DELETE FROM grades WHERE student_id = ?", (sid,))
+
             # Sync SDU grades
             if grades and isinstance(grades, list) and sid:
                 for g in grades:
                     if not isinstance(g, dict):
                         continue
-                    course_name = g.get("lesson")
-                    if not course_name:
+                    lesson = g.get("lesson")
+                    if not lesson:
                         continue
+                    if active_term and g.get("year") is not None and g.get("term") is not None and \
+                            (int(g["year"]), int(g["term"])) != (int(active_term["year"]), int(active_term["term"])):
+                        continue  # other terms belong to the transcript, not to "this term"
                     grade_val = g.get("grade")
+                    try:
+                        grade_val = float(grade_val) if grade_val is not None else None
+                    except (TypeError, ValueError):
+                        grade_val = None  # "IP" etc.: not graded yet
+                    course_name = names.get(str(lesson).strip().upper()) or lesson
                     credits_val = g.get("credits") or g.get("ects") or 3
                     # Stable across restarts (built-in hash() is randomized per process)
-                    code_val = f"SDU-{int(hashlib.sha1(course_name.encode()).hexdigest(), 16) % 900 + 100}"
+                    code_val = lesson if names.get(str(lesson).strip().upper()) else \
+                        f"SDU-{int(hashlib.sha1(str(lesson).encode()).hexdigest(), 16) % 900 + 100}"
 
                     existing_grade = db.execute(
                         "SELECT id, components_json FROM grades WHERE student_id = ? AND course = ?",
@@ -1188,8 +1218,8 @@ class SQLiteRepository:
                                 "UPDATE grades SET components_json = ? WHERE id = ?",
                                 (json.dumps(comps), existing_grade["id"])
                             )
-                    else:
-                        comps = [{"name": "Coursework", "score": float(grade_val) if grade_val is not None else 85.0, "weight": 1.0}]
+                    elif grade_val is not None:  # never invent a score for ungraded courses
+                        comps = [{"name": "Final Grade", "score": grade_val, "weight": 1.0}]
                         db.execute(
                             "INSERT INTO grades (student_id, semester, course, code, credits, components_json) VALUES (?, 'spring-2026', ?, ?, ?, ?)",
                             (sid, course_name, code_val, credits_val, json.dumps(comps))

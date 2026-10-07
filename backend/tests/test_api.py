@@ -1053,3 +1053,39 @@ def test_new_sdu_connection_resets_baseline():
     real = [{"lesson": f"MDE {i}", "grade": 70 + i} for i in range(5)]
     res = repo.sync_sdu_student_data(u["id"], {"student_id": sid}, None, real, None)
     assert res["new_notifications"] == 0
+
+
+def test_demo_mode_can_be_disabled(monkeypatch):
+    from app.main import repo
+    monkeypatch.setenv("ENABLE_DEMO_MODE", "0")
+    assert client.post("/api/sdu/demo-connect", json={}).status_code == 404
+
+    u = repo.create_user("Leftover Demo", f"stu_ld_{secrets.token_hex(4)}", "password123")
+    tok = token(u["student_id"], "password123")
+    from app import sdu_mock
+    repo.save_sdu_connection(u["id"], sdu_mock.DEMO_ACCESS_TOKEN, time.time() + 3600, sdu_mock.DEMO_SCOPE)
+    assert client.get("/api/sdu/status", headers=auth(tok)).json()["connected"] is False
+    assert repo.get_sdu_connection(u["id"]) is None
+
+
+def test_real_sync_uses_transcript_and_only_the_active_term():
+    from app.main import repo, ACTIVE_TERM, student_insights, student_courses
+    u = repo.create_user("Real Sync", f"4{secrets.randbelow(10**8):08d}", "password123")
+    sid = u["student_id"]
+    transcript = [
+        {"semester": 1, "course_code": "MAT 101", "course_name": "Calculus", "grade_percent": 55, "letter_grade": "D+", "credits": 5, "passed": True},
+        {"semester": 1, "course_code": "CSS 105", "course_name": "Programming", "grade_percent": 91, "letter_grade": "A-", "credits": 5, "passed": True},
+        {"semester": 2, "course_code": "INF 451", "course_name": "Project Management", "grade_percent": None, "letter_grade": "IP", "credits": 5, "passed": False},
+    ]
+    grades = [
+        {"lesson": "INF 451", "year": 2026, "term": 1, "grade": None},      # current term, not graded yet
+        {"lesson": "MAT 101", "year": 2025, "term": 1, "grade": 55},        # older term: must not land in "this term"
+    ]
+    repo.sync_sdu_student_data(u["id"], {"student_id": sid}, None, grades, None,
+                               transcript=transcript, active_term=ACTIVE_TERM, replace_local_grades=True)
+
+    assert student_courses(sid, "spring-2026") == []        # nothing invented, older term skipped
+    data = student_insights(sid, "spring-2026", u["id"])
+    assert data["term_label"] == "Semester 1"
+    assert [r["course"] for r in data["ranked"]] == ["Calculus", "Programming"]
+    assert [w["course"] for w in data["weak_subjects"]] == ["Calculus"]

@@ -651,7 +651,7 @@ function timeAgo(isoDate) {
     const days = Math.floor(hours / 24)
     if (days === 1) return 'yesterday'
     if (days < 7) return `${days} days ago`
-    return new Date(isoDate).toLocaleDateString([], { month: 'short', day: 'numeric' })
+    return new Date(isoDate).toLocaleDateString('en-GB', { month: 'short', day: 'numeric' })
   } catch {
     return ''
   }
@@ -1582,6 +1582,52 @@ function SduOnboardCard({ onConnect }) {
   )
 }
 
+/* ─── SEMESTER PICKER ────────────────────────────────────────────── */
+function SemesterPicker({ value, options, onChange, align = 'left' }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  useEffect(() => {
+    if (!open) return
+    const close = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    const esc = e => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', close)
+    document.addEventListener('keydown', esc)
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', esc) }
+  }, [open])
+  const current = options.find(o => String(o.value) === String(value)) || options[0]
+  return (
+    <div className="popover-wrap" ref={ref}>
+      <button type="button" className="picker-btn" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(v => !v)}>
+        <Icons.Calendar size={15} />
+        <span>{current?.label}</span>
+        <Icons.ChevronDown size={14} />
+      </button>
+      {open && (
+        <ul className={`popover picker-menu picker-${align}`} role="listbox">
+          {options.map(o => {
+            const active = String(o.value) === String(value)
+            return (
+              <li key={o.value}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={active}
+                  className={`menu-item ${active ? 'menu-item-active' : ''}`}
+                  onClick={() => { onChange(o.value); setOpen(false) }}
+                >
+                  <span>{o.label}</span>
+                  {o.hint && <small>{o.hint}</small>}
+                  {active && <Icons.Check size={14} />}
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 /* ─── NAME CLEANUP (raw SDU / Moodle strings) ────────────────────── */
 // "INF 451 Project management information system (1+2+0) [3cr / 5ECTS]" → "INF 451 Project management information system"
 function cleanCourseName(name = '') {
@@ -1593,6 +1639,12 @@ function cleanCourseName(name = '') {
 }
 // Moodle adds the teacher: "INF 451 Project management information system (Aliya Zhunis)"
 const stripTeacher = (name = '') => cleanCourseName(name).replace(/\s*\([^()]*\)\s*$/, '')
+// "INF 451 Project management…" with code "INF 451" → "Project management…"
+function courseTitle(name, code) {
+  const clean = cleanCourseName(name || '')
+  const c = String(code || '').trim()
+  return c && clean.toUpperCase().startsWith(c.toUpperCase() + ' ') ? clean.slice(c.length).trim() : clean
+}
 const LESSON_TYPES = { N: 'Lecture', P: 'Practice', L: 'Lab' }
 const lessonType = t => LESSON_TYPES[String(t || '').trim().toUpperCase()] || t || 'Lecture'
 const teacherName = t => String(t || '').split(',')[0].trim()
@@ -1605,7 +1657,7 @@ function dueLabel(iso) {
   const days = Math.round((startOfDay(due) - startOfDay(now)) / 86400000)
   if (days <= 0) return 'Today'
   if (days === 1) return 'Tomorrow'
-  return due.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })
+  return due.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
 }
 
 function useDeadlines(token, connected) {
@@ -1641,8 +1693,8 @@ function ComingUpCard({ nextInfo, deadlines, onOpenSchedule }) {
             <b>{classTimes(c)[0] || '—'}</b>
           </div>
           <div className="course-main">
-            <b>{cleanCourseName(c.course_name)}</b>
-            <span>{[classLocation(c), lessonType(c.lesson_type), teacherName(c.teacher)].filter(Boolean).join(' · ')}</span>
+            <b>{courseTitle(c.course_name, c.course_code)}</b>
+            <span>{[c.course_code, classLocation(c), lessonType(c.lesson_type)].filter(Boolean).join(' · ')}</span>
           </div>
         </div>
       ) : (
@@ -1783,11 +1835,11 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token
       <section className="overview-stats">
         {semesters.length > 1 && (
           <div className="stats-head">
-            <select className="select select-quiet" value={selected ?? ''} onChange={e => setSemester(Number(e.target.value))} aria-label="Semester">
-              {semesters.map(n => (
-                <option key={n} value={n}>Semester {n}{n === currentSemester ? ' · current' : ''}</option>
-              ))}
-            </select>
+            <SemesterPicker
+              value={selected}
+              onChange={v => setSemester(Number(v))}
+              options={[...semesters].reverse().map(n => ({ value: n, label: `Semester ${n}`, hint: n === currentSemester ? 'current' : null }))}
+            />
             <button type="button" className="link-btn" onClick={() => onOpenCourses(selected)}>
               {semCourses.length} courses <Icons.ArrowRight size={14} />
             </button>
@@ -1830,6 +1882,25 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token
 }
 
 /* ─── SCHEDULE TAB ───────────────────────────────────────────────── */
+// Merge back-to-back periods of the same class (e.g. 14:30–15:20 and 15:30–16:20 in the same room)
+function mergeBlocks(items) {
+  const out = []
+  for (const s of items) {
+    const prev = out[out.length - 1]
+    const [start, end] = classTimes(s)
+    if (prev && prev.course_code === s.course_code && prev.lesson_type === s.lesson_type && classLocation(prev) === classLocation(s)) {
+      const gap = getStartTimeMinutes({ start_time: start }) - getStartTimeMinutes({ start_time: prev._end })
+      if (gap >= 0 && gap <= 15) {
+        prev._end = end || prev._end
+        prev._parts.push(s)
+        continue
+      }
+    }
+    out.push({ ...s, _start: start, _end: end, _parts: [s] })
+  }
+  return out
+}
+
 function ScheduleTab({ sduData, sduLoading, sduStatus, onConnect }) {
   const [selectedDay, setSelectedDay] = useState(null)
 
@@ -1842,11 +1913,12 @@ function ScheduleTab({ sduData, sduLoading, sduStatus, onConnect }) {
   const nextInfo = findNextClass(schedule)
   const today = new Date().getDay() || 7
   const counts = {}
-  sorted.forEach(s => { counts[getDayOrder(s)] = (counts[getDayOrder(s)] || 0) + 1 })
+  mergeBlocks(sorted).forEach(s => { counts[getDayOrder(s)] = (counts[getDayOrder(s)] || 0) + 1 })
 
   const defaultDay = counts[today] ? today : (nextInfo?.course ? getDayOrder(nextInfo.course) : 1)
   const day = selectedDay ?? defaultDay
-  const classes = sorted.filter(s => getDayOrder(s) === day)
+  const blocks = mergeBlocks(sorted.filter(s => getDayOrder(s) === day))
+  const countLabel = n => (n ? `${n} class${n > 1 ? 'es' : ''}` : 'Free')
 
   return (
     <div className="page page-fade">
@@ -1860,32 +1932,31 @@ function ScheduleTab({ sduData, sduLoading, sduStatus, onConnect }) {
             className={`day-tab ${day === d ? 'active' : ''}`}
             onClick={() => setSelectedDay(d)}
           >
-            <span>{DAY_SHORT[d]}</span>
-            <small>{d === today ? 'Today' : counts[d] ? `${counts[d]} class${counts[d] > 1 ? 'es' : ''}` : 'Free'}</small>
+            <span>{DAY_SHORT[d]}{d === today && <i className="today-dot" title="Today" />}</span>
+            <small>{d === today ? `Today · ${countLabel(counts[d]).toLowerCase()}` : countLabel(counts[d])}</small>
           </button>
         ))}
       </div>
 
       <article className="card card-flush">
-        {classes.length ? (
+        {blocks.length ? (
           <ol className="timeline">
-            {classes.map((s, idx) => {
-              const [start, end] = classTimes(s)
-              const isNext = nextInfo?.course === s
+            {blocks.map((s, idx) => {
+              const isNext = s._parts.includes(nextInfo?.course)
               return (
                 <li key={idx} className={`timeline-row ${isNext ? 'is-next' : ''}`}>
                   <div className="timeline-time">
-                    <b>{start || 'TBD'}</b>
-                    {end && <span>{end}</span>}
+                    <b>{s._start || 'TBD'}</b>
+                    {s._end && <span>{s._end}</span>}
                   </div>
                   <div className="timeline-body">
                     <h3>
-                      {cleanCourseName(s.course_name)}
+                      {courseTitle(s.course_name, s.course_code)}
                       {isNext && <span className="tag tag-accent">Next</span>}
                       {s.is_online && <span className="tag">Online</span>}
                     </h3>
                     <p>
-                      {classLocation(s)} · {lessonType(s.lesson_type)}
+                      {classLocation(s)} · {lessonType(s.lesson_type)}{s._parts.length > 1 ? ` · ${s._parts.length} periods` : ''}
                       {s.teacher ? ` · ${teacherName(s.teacher)}` : ''}
                     </p>
                   </div>
@@ -2029,6 +2100,8 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, token, initi
   const gpa = calcGPA(transcript)
   const credits = calcCompletedCredits(transcript)
   const passedCount = transcript.filter(c => c.passed === true).length
+  const inProgressCount = transcript.filter(isInProgress).length
+  const failedCount = transcript.filter(isFailed).length
   const latest = [...groups].reverse().find(g => g.key !== '—')
   const selected = semester ?? latest?.key ?? 'all'
   const visible = selected === 'all' ? groups : groups.filter(g => g.key === selected)
@@ -2068,7 +2141,8 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, token, initi
         </div>
         <div>
           <span>Passed</span>
-          <b>{passedCount}<small>/ {transcript.length}</small></b>
+          <b>{passedCount}<small>{failedCount ? `/ ${passedCount + failedCount}` : 'courses'}</small></b>
+          {inProgressCount > 0 && <em className="strip-note">{inProgressCount} in progress</em>}
         </div>
       </section>
 
@@ -2081,10 +2155,12 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, token, initi
         />
         <div className="toolbar-end">
           {view === 'list' && groups.length > 1 && (
-            <select className="select" value={selected} onChange={e => setSemester(e.target.value)} aria-label="Semester">
-              <option value="all">All semesters</option>
-              {groups.map(g => <option key={g.key} value={g.key}>{g.name.replace('Sem', 'Semester')}</option>)}
-            </select>
+            <SemesterPicker
+              align="right"
+              value={selected}
+              onChange={setSemester}
+              options={[{ value: 'all', label: 'All semesters' }, ...[...groups].reverse().map(g => ({ value: g.key, label: g.name.replace('Sem', 'Semester') }))]}
+            />
           )}
           <button type="button" className="icon-btn" onClick={exportCSV} title="Export CSV" aria-label="Export CSV">
             <Icons.Download size={16} />
@@ -2122,17 +2198,20 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, token, initi
                     title="Show grade breakdown"
                   >
                     <div className="course-main">
-                      <b>{c.course_name}</b>
+                      <b>{courseTitle(c.course_name, c.course_code)}</b>
                       <span>
                         {c.course_code} · {c.credits ?? c.ects ?? '—'} ECTS
                         {isFailed(c) && <span className="tone-danger"> · Not passed</span>}
-                        {isInProgress(c) && <span> · In progress</span>}
                       </span>
                     </div>
-                    <span className="course-score">
-                      {formatScore(score)}
-                    </span>
-                    <span className={`grade tint-${gradeTone(c.letter_grade)}`}>{c.letter_grade || '—'}</span>
+                    {isInProgress(c) ? (
+                      <span className="grade grade-wide tint-neutral">In progress</span>
+                    ) : (
+                      <>
+                        <span className="course-score">{formatScore(score)}</span>
+                        <span className={`grade tint-${gradeTone(c.letter_grade)}`}>{c.letter_grade || '—'}</span>
+                      </>
+                    )}
                   </li>
                 )
               })}
@@ -2272,8 +2351,8 @@ function AttendanceTab({ sduData, sduLoading, sduStatus, onConnect }) {
               return (
                 <li key={idx} className="att-row">
                   <div className="course-main">
-                    <b>{fullName}</b>
-                    <span>{code && code !== fullName ? `${code} · ` : ''}Term {a.term ?? '1'} · {a.year ?? '2026'}</span>
+                    <b>{courseTitle(fullName, code)}</b>
+                    <span>{code && courseTitle(fullName, code) !== code ? `${code} · ` : ''}Term {a.term ?? '1'} · {a.year ?? '2026'}</span>
                   </div>
                   <div className="meter" aria-hidden="true">
                     <div className={`meter-fill fill-${tone}`} style={{ width: `${Math.min(100, (abs / meterMax) * 100)}%` }} />
@@ -2315,7 +2394,7 @@ function nextWeekdaySlots(count = 5, times = ['10:00', '13:00', '15:00']) {
     d.setDate(d.getDate() + 1)
     const day = d.getDay()
     if (day === 0 || day === 6) continue
-    const label = d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })
+    const label = d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
     times.forEach(t => out.push(`${label}, ${t}`))
   }
   return out
@@ -2423,7 +2502,7 @@ function InsightsTab({ token, sduStatus, onConnect }) {
       <section className="split">
         <article className="card card-flush">
           <header className="group-head">
-            <h2>Subjects, weakest first</h2>
+            <h2>{data.term_label || 'This term'} · weakest first</h2>
             <span>Weak below {data.threshold}%</span>
           </header>
           {data.ranked.length ? (
@@ -2830,7 +2909,7 @@ function SduProfileTab({ sduData, sduLoading, sduStatus, onConnect, onDisconnect
           </div>
           <div>
             <dt>Last sync</dt>
-            <dd>{sduData.lastFetched ? new Date(sduData.lastFetched).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '—'}</dd>
+            <dd>{sduData.lastFetched ? new Date(sduData.lastFetched).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }) : '—'}</dd>
           </div>
           <div>
             <dt>Password sign-in</dt>
@@ -3239,7 +3318,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
   const [title, subtitle] = pageTitles[tab] || pageTitles.dashboard
 
   const syncedAt = sduData.lastFetched
-    ? new Date(sduData.lastFetched).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    ? new Date(sduData.lastFetched).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
     : null
 
   return (
@@ -3532,7 +3611,7 @@ function TeacherStudentModal({ studentId, token, onClose }) {
                     <div className="intervention-item" key={i}>
                       <div className="intervention-head">
                         <span>{inv.action_type}</span>
-                        <span>{new Date(inv.created_at).toLocaleDateString()}</span>
+                        <span>{new Date(inv.created_at).toLocaleDateString('en-GB')}</span>
                       </div>
                       <p className="intervention-notes">{inv.notes}</p>
                     </div>

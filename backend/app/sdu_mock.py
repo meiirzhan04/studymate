@@ -11,7 +11,13 @@ with real university data.
 """
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
+
+
+def demo_enabled() -> bool:
+    """Demo SDU data is off in production; tests and local demos opt in with ENABLE_DEMO_MODE=1."""
+    return os.getenv("ENABLE_DEMO_MODE") == "1"
 
 DEMO_ACCESS_TOKEN = "studymate-demo-mode"
 DEMO_SCOPE = "demo"
