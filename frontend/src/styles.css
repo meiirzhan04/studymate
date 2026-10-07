@@ -365,6 +365,9 @@ h1, h2, h3 { font-weight: 600; letter-spacing: -0.015em; color: var(--text-prima
 .shell-single .topbar-title { padding-left: 28px; border-left: 1px solid var(--border); }
 
 .content { padding: 8px 40px 56px; }
+/* Center the page column on wide screens; header lines up with the content */
+.shell:not(.shell-single) .content,
+.shell:not(.shell-single) .topbar { padding-left: max(40px, calc((100% - 1080px) / 2)); padding-right: max(40px, calc((100% - 1080px) / 2)); }
 .shell-single .content { padding-top: 28px; }
 
 .mobile-only { display: none; }
@@ -1003,14 +1006,31 @@ button.avatar:hover { box-shadow: 0 0 0 3px var(--accent-ring); }
 .resend:disabled { color: var(--text-muted); text-decoration: none; cursor: default; opacity: 1; }
 
 /* ─── Sprint 3: deadlines, grade breakdown ──────────────────── */
-.deadline-list { display: flex; flex-direction: column; }
-.deadline { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 10px 0; }
+/* Overview: Coming up (next class + deadlines) */
+.card-fill { display: flex; flex-direction: column; }
+.split-even { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: stretch; }
+.up-next { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 14px; align-items: center; }
+.up-next-time { display: flex; flex-direction: column; align-items: center; padding: 8px 0; border-radius: 12px; background: var(--accent-soft); color: var(--accent-text); line-height: 1.2; }
+.up-next-time span { font-size: 11.5px; font-weight: 500; }
+.up-next-time b { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.up-section { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+.up-label { font-size: 12px; font-weight: 500; color: var(--text-muted); }
+.up-empty { margin-top: 6px; font-size: 13px; }
+.up-more { margin-top: 4px; }
+.up-overdue { margin-top: 10px; }
+.deadline-list { display: flex; flex-direction: column; margin-top: 4px; }
+.deadline { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 9px 0; }
 .deadline + .deadline { border-top: 1px solid var(--border); }
-.deadline-date { display: flex; flex-direction: column; align-items: center; padding: 4px 0; border-radius: 10px; background: var(--accent-soft); color: var(--accent-text); line-height: 1.15; }
-.deadline-date span { font-size: 11px; font-weight: 500; text-transform: uppercase; }
-.deadline-date b { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.deadline-when { font-size: 12.5px; color: var(--text-muted); white-space: nowrap; }
-.deadline-overdue { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.deadline-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.deadline-when { font-size: 12.5px; font-weight: 500; color: var(--text-secondary); white-space: nowrap; }
+.course-main > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Overview: stats header */
+.overview-stats { display: flex; flex-direction: column; gap: 10px; }
+.stats-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.select-quiet { height: 30px; padding-left: 4px; border-color: transparent; background-color: transparent; font-weight: 500; color: var(--text-secondary); }
+.select-quiet:hover { color: var(--text-primary); }
+.metric-note { display: block; margin-top: 8px; font-size: 12.5px; }
 
 .course-row-clickable { cursor: pointer; transition: background-color .15s; }
 .course-row-clickable:hover { background: var(--surface-2); }
@@ -1034,3 +1054,12 @@ button.avatar:hover { box-shadow: 0 0 0 3px var(--accent-ring); }
 .breakdown-table th { text-align: left; font-weight: 500; font-size: 12.5px; color: var(--text-muted); padding: 8px 0; border-bottom: 1px solid var(--border); }
 .breakdown-table td { padding: 9px 0; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
 .breakdown-table td:first-child { color: var(--text-primary); font-weight: 500; }
+
+/* Responsive overrides for the centered column and the even split */
+@media (max-width: 1100px) {
+  .split-even { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 900px) {
+  .shell:not(.shell-single) .topbar { padding: 14px 16px; }
+  .shell:not(.shell-single) .content { padding: 4px 16px 96px; }
+}

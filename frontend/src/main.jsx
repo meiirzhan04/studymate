@@ -1582,40 +1582,111 @@ function SduOnboardCard({ onConnect }) {
   )
 }
 
+/* ─── NAME CLEANUP (raw SDU / Moodle strings) ────────────────────── */
+// "INF 451 Project management information system (1+2+0) [3cr / 5ECTS]" → "INF 451 Project management information system"
+function cleanCourseName(name = '') {
+  return String(name)
+    .replace(/\s*\(\d+\+\d+\+\d+\)/g, '')
+    .replace(/\s*\[[^\]]*\]/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+// Moodle adds the teacher: "INF 451 Project management information system (Aliya Zhunis)"
+const stripTeacher = (name = '') => cleanCourseName(name).replace(/\s*\([^()]*\)\s*$/, '')
+const LESSON_TYPES = { N: 'Lecture', P: 'Practice', L: 'Lab' }
+const lessonType = t => LESSON_TYPES[String(t || '').trim().toUpperCase()] || t || 'Lecture'
+const teacherName = t => String(t || '').split(',')[0].trim()
+
 /* ─── OVERVIEW TAB ───────────────────────────────────────────────── */
-function NextClassCard({ nextInfo, onOpenSchedule }) {
+function dueLabel(iso) {
+  const due = new Date(iso)
+  const now = new Date()
+  const startOfDay = d => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  const days = Math.round((startOfDay(due) - startOfDay(now)) / 86400000)
+  if (days <= 0) return 'Today'
+  if (days === 1) return 'Tomorrow'
+  return due.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })
+}
+
+function useDeadlines(token, connected) {
+  const [data, setData] = useState(null)
+  const [err, setErr] = useState('')
+  useEffect(() => {
+    if (!connected) return
+    api('/api/sdu/deadlines?days=7', token).then(setData).catch(e => setErr(e.message))
+  }, [token, connected])
+  return { data, err }
+}
+
+function ComingUpCard({ nextInfo, deadlines, onOpenSchedule }) {
+  const [showAll, setShowAll] = useState(false)
   const c = nextInfo?.course
+  const { data, err } = deadlines
+  const upcoming = data?.upcoming || []
+  const visible = showAll ? upcoming : upcoming.slice(0, 3)
+
   return (
-    <article className="card">
+    <article className="card card-fill">
       <header className="card-head">
-        <h2>Next class</h2>
+        <h2>Coming up</h2>
         <button type="button" className="link-btn" onClick={onOpenSchedule}>
           Schedule <Icons.ArrowRight size={14} />
         </button>
       </header>
+
       {c ? (
-        <div className="next-class">
-          <div className="next-class-when">
-            <span>{nextInfo.isToday ? 'Today' : DAY_NAMES[getDayOrder(c)] || 'Upcoming'}</span>
-            <b>{formatClassTime(c)}</b>
+        <div className="up-next">
+          <div className="up-next-time">
+            <span>{nextInfo.isToday ? 'Today' : DAY_SHORT[getDayOrder(c)] || 'Next'}</span>
+            <b>{classTimes(c)[0] || '—'}</b>
           </div>
-          <h3>{c.course_name}</h3>
-          <ul className="meta-list">
-            <li><Icons.MapPin size={14} />{classLocation(c)}</li>
-            <li><Icons.Book size={14} />{c.lesson_type || 'Lecture'}</li>
-            {c.teacher && <li><Icons.User size={14} />{c.teacher}</li>}
-          </ul>
+          <div className="course-main">
+            <b>{cleanCourseName(c.course_name)}</b>
+            <span>{[classLocation(c), lessonType(c.lesson_type), teacherName(c.teacher)].filter(Boolean).join(' · ')}</span>
+          </div>
         </div>
       ) : (
-        <EmptyState icon={<Icons.Calendar size={20} />} title="No upcoming classes" text="Your timetable is empty for now." />
+        <p className="muted up-empty">No classes scheduled.</p>
       )}
+
+      <div className="up-section">
+        <span className="up-label">Deadlines this week</span>
+        {err || (data && !data.available) ? (
+          <p className="muted up-empty">{err || data.reason}</p>
+        ) : !data ? (
+          <div className="skeleton" style={{ height: 40, marginTop: 8 }} />
+        ) : !upcoming.length ? (
+          <p className="muted up-empty">Nothing due in the next 7 days.</p>
+        ) : (
+          <ul className="deadline-list">
+            {visible.map(d => (
+              <li key={d.id} className="deadline">
+                <span className="deadline-dot" />
+                <div className="course-main">
+                  <b>{d.title}</b>
+                  <span>{d.course ? stripTeacher(d.course) : d.type}</span>
+                </div>
+                <span className="deadline-when">{dueLabel(d.due_at)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {upcoming.length > 3 && (
+          <button type="button" className="link-btn up-more" onClick={() => setShowAll(v => !v)}>
+            {showAll ? 'Show less' : `Show all ${upcoming.length}`}
+          </button>
+        )}
+        {data?.overdue?.length > 0 && (
+          <p className="up-overdue"><Status tone="danger">{data.overdue.length} overdue, not submitted</Status></p>
+        )}
+      </div>
     </article>
   )
 }
 
 function AttentionCard({ items, onSelect }) {
   return (
-    <article className="card">
+    <article className="card card-fill">
       <header className="card-head">
         <h2>Needs attention</h2>
         {items.length > 0 && <span className="count-pill">{items.length}</span>}
@@ -1636,115 +1707,17 @@ function AttentionCard({ items, onSelect }) {
           ))}
         </ul>
       ) : (
-        <EmptyState icon={<Icons.CheckCircle size={20} />} title="All clear" text="No absence or grade warnings right now." />
+        <EmptyState icon={<Icons.CheckCircle size={20} />} title="All clear" text="No absence, grade or deadline warnings right now." />
       )}
     </article>
   )
 }
 
-/* ─── UPCOMING DEADLINES (US-12) ─────────────────────────────────── */
-function dueLabel(iso) {
-  const due = new Date(iso)
-  const now = new Date()
-  const startOfDay = d => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
-  const days = Math.round((startOfDay(due) - startOfDay(now)) / 86400000)
-  const time = due.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-  if (days === 0) return `Today, ${time}`
-  if (days === 1) return `Tomorrow, ${time}`
-  return `In ${days} days · ${due.toLocaleDateString([], { weekday: 'short' })}, ${time}`
-}
-
-function DeadlinesCard({ token, connected }) {
-  const [data, setData] = useState(null)
-  const [err, setErr] = useState('')
-
-  useEffect(() => {
-    if (!connected) return
-    api('/api/sdu/deadlines?days=7', token).then(setData).catch(e => setErr(e.message))
-  }, [token, connected])
-
-  return (
-    <article className="card">
-      <header className="card-head">
-        <h2>Due in the next 7 days</h2>
-        {data?.upcoming?.length > 0 && <span className="count-pill">{data.upcoming.length}</span>}
-      </header>
-      {err ? (
-        <EmptyState icon={<Icons.Clock size={20} />} title="Deadlines unavailable" text={err} />
-      ) : !data ? (
-        <PageLoader label="Loading deadlines…" />
-      ) : !data.available ? (
-        <EmptyState icon={<Icons.Clock size={20} />} title="Deadlines unavailable" text={data.reason} />
-      ) : (
-        <>
-          {data.upcoming.length ? (
-            <ul className="deadline-list">
-              {data.upcoming.map(d => {
-                const due = new Date(d.due_at)
-                return (
-                  <li key={d.id} className="deadline">
-                    <div className="deadline-date">
-                      <span>{due.toLocaleDateString([], { month: 'short' })}</span>
-                      <b>{due.getDate()}</b>
-                    </div>
-                    <div className="course-main">
-                      <b>{d.title}</b>
-                      <span>{[d.course, d.type].filter(Boolean).join(' · ')}</span>
-                    </div>
-                    <span className="deadline-when">{dueLabel(d.due_at)}</span>
-                  </li>
-                )
-              })}
-            </ul>
-          ) : (
-            <EmptyState icon={<Icons.CheckCircle size={20} />} title="Nothing due this week" text="New Moodle deadlines show up here automatically." />
-          )}
-          {data.overdue.length > 0 && (
-            <p className="deadline-overdue">
-              <Status tone="danger">{data.overdue.length} overdue and not submitted</Status>
-            </p>
-          )}
-        </>
-      )}
-    </article>
-  )
-}
-
-/* ─── SEMESTER COURSES (US-09) ───────────────────────────────────── */
-function SemesterCoursesCard({ courses, semester }) {
-  return (
-    <article className="card card-flush">
-      <header className="group-head">
-        <h2>Semester {semester} courses</h2>
-        <span>{courses.length}</span>
-      </header>
-      {courses.length ? (
-        <ul className="course-list">
-          {courses.map((c, i) => {
-            const score = c.grade_percent ?? c.grade
-            return (
-              <li key={i} className="course-row">
-                <div className="course-main">
-                  <b>{c.course_name}</b>
-                  <span>{c.course_code} · {c.credits ?? c.ects ?? '—'} ECTS</span>
-                </div>
-                <span className="course-score">{formatScore(score)}</span>
-                <span className={`grade tint-${gradeTone(c.letter_grade)}`}>{c.letter_grade || '—'}</span>
-              </li>
-            )
-          })}
-        </ul>
-      ) : (
-        <EmptyState icon={<Icons.Book size={20} />} title="No courses in this semester" />
-      )}
-    </article>
-  )
-}
-
-function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token }) {
+function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token, onOpenCourses }) {
   const [recommendations, setRecommendations] = useState([])
   const [semester, setSemester] = useState(null)
   const connected = !!sduStatus?.connected
+  const deadlines = useDeadlines(token, connected)
 
   useEffect(() => {
     if (!token || !connected) return
@@ -1765,14 +1738,20 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token
   const semCourses = transcript.filter(c => Number(c.semester) === selected)
 
   const cumulativeGpa = calcGPA(transcript)
-  const gpa = selected != null ? calcGPA(semCourses) : cumulativeGpa
+  const semesterGpa = calcGPA(semCourses)
+  // The current term usually has no grades yet ("IP"): fall back to the cumulative GPA
+  const showCumulative = isCurrent && semesterGpa == null
+  const gpa = showCumulative ? cumulativeGpa : semesterGpa
   const standing = gpaStanding(gpa)
   const attendance = calcOverallAttendance(attendanceList)
   const attStanding = attendanceStanding(attendance)
-  const semCredits = calcCompletedCredits(semCourses)
   const totalCredits = calcCompletedCredits(transcript)
+  const semCredits = calcCompletedCredits(semCourses)
 
   const attention = [
+    ...(deadlines.data?.overdue || []).map(d => ({
+      tone: 'danger', title: d.title, text: `Missed deadline · ${stripTeacher(d.course || '') || d.type}`, tab: 'dashboard',
+    })),
     ...attendanceList
       .filter(a => absenceOf(a) >= ABSENCE_WARN)
       .sort((a, b) => absenceOf(b) - absenceOf(a))
@@ -1797,51 +1776,54 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token
     ...recommendations
       .slice(0, 1)
       .map(r => ({ tone: 'accent', title: r.course, text: r.action, tab: 'insights' })),
-  ].slice(0, 4)
+  ].slice(0, 5)
 
   return (
     <div className="page page-fade">
-      {semesters.length > 1 && (
-        <div className="toolbar" style={{ justifyContent: 'flex-start' }}>
-          <span className="muted">Showing</span>
-          <select className="select" value={selected ?? ''} onChange={e => setSemester(Number(e.target.value))} aria-label="Semester">
-            {semesters.map(n => (
-              <option key={n} value={n}>Semester {n}{n === currentSemester ? ' (current)' : ''}</option>
-            ))}
-          </select>
+      <section className="overview-stats">
+        {semesters.length > 1 && (
+          <div className="stats-head">
+            <select className="select select-quiet" value={selected ?? ''} onChange={e => setSemester(Number(e.target.value))} aria-label="Semester">
+              {semesters.map(n => (
+                <option key={n} value={n}>Semester {n}{n === currentSemester ? ' · current' : ''}</option>
+              ))}
+            </select>
+            <button type="button" className="link-btn" onClick={() => onOpenCourses(selected)}>
+              {semCourses.length} courses <Icons.ArrowRight size={14} />
+            </button>
+          </div>
+        )}
+        <div className="metric-grid">
+          <Metric
+            label={showCumulative ? 'GPA' : `GPA · semester ${selected}`}
+            value={gpa != null ? gpa.toFixed(2) : '—'}
+            unit="/ 4.00"
+            foot={<Status tone={standing.tone}>
+              {showCumulative ? 'Cumulative' : `Cumulative ${cumulativeGpa != null ? cumulativeGpa.toFixed(2) : '—'}`}
+            </Status>}
+          />
+          <Metric
+            label="Attendance"
+            value={isCurrent && attendanceList.length ? `${attendance}%` : '—'}
+            foot={isCurrent
+              ? <Status tone={attendanceList.length ? attStanding.tone : 'neutral'}>{attendanceList.length ? attStanding.label : 'No data yet'}</Status>
+              : <span className="muted">Available for the current term only</span>}
+          />
+          <Metric
+            label="Credits earned"
+            value={totalCredits}
+            unit={`/ ${DEGREE_CREDITS} ECTS`}
+            foot={<>
+              <ProgressBar pct={Math.min(100, (totalCredits / DEGREE_CREDITS) * 100)} />
+              {!isCurrent && <span className="muted metric-note">{semCredits} ECTS in semester {selected}</span>}
+            </>}
+          />
         </div>
-      )}
-
-      <section className="metric-grid">
-        <Metric
-          label={isCurrent ? 'GPA this semester' : `GPA · Semester ${selected}`}
-          value={gpa != null ? gpa.toFixed(2) : '—'}
-          unit="/ 4.00"
-          foot={<Status tone={standing.tone}>{standing.label} · cumulative {cumulativeGpa != null ? cumulativeGpa.toFixed(2) : '—'}</Status>}
-        />
-        <Metric
-          label="Attendance"
-          value={isCurrent && attendanceList.length ? `${attendance}%` : '—'}
-          foot={isCurrent
-            ? <Status tone={attendanceList.length ? attStanding.tone : 'neutral'}>{attendanceList.length ? attStanding.label : 'No data'}</Status>
-            : <span className="muted">SDU shares attendance for the current term only</span>}
-        />
-        <Metric
-          label={isCurrent ? 'Credits this semester' : `Credits · Semester ${selected}`}
-          value={semCredits}
-          unit="ECTS"
-          foot={<span className="muted">{totalCredits} / {DEGREE_CREDITS} ECTS in total</span>}
-        />
       </section>
 
-      <section className="split">
-        <NextClassCard nextInfo={findNextClass(sduData.schedule || [])} onOpenSchedule={() => setTab('schedule')} />
+      <section className="split split-even">
+        <ComingUpCard nextInfo={findNextClass(sduData.schedule || [])} deadlines={deadlines} onOpenSchedule={() => setTab('schedule')} />
         <AttentionCard items={attention} onSelect={setTab} />
-      </section>
-
-      <section className="split">
-        <DeadlinesCard token={token} connected={connected} />
-        <SemesterCoursesCard courses={semCourses} semester={selected} />
       </section>
     </div>
   )
@@ -1898,13 +1880,13 @@ function ScheduleTab({ sduData, sduLoading, sduStatus, onConnect }) {
                   </div>
                   <div className="timeline-body">
                     <h3>
-                      {s.course_name}
+                      {cleanCourseName(s.course_name)}
                       {isNext && <span className="tag tag-accent">Next</span>}
                       {s.is_online && <span className="tag">Online</span>}
                     </h3>
                     <p>
-                      {classLocation(s)} · {s.lesson_type || 'Lecture'}
-                      {s.teacher ? ` · ${s.teacher}` : ''}
+                      {classLocation(s)} · {lessonType(s.lesson_type)}
+                      {s.teacher ? ` · ${teacherName(s.teacher)}` : ''}
                     </p>
                   </div>
                   <code className="course-code">{s.course_code}</code>
@@ -2013,8 +1995,8 @@ function DegreeProgressCard({ transcript }) {
   )
 }
 
-function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, token }) {
-  const [semester, setSemester] = useState(null)
+function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, token, initialSemester }) {
+  const [semester, setSemester] = useState(initialSemester != null ? String(initialSemester) : null)
   const [view, setView] = useState('list')
   const [breakdownFor, setBreakdownFor] = useState(null)
   const transcript = sduData.transcript || []
@@ -3095,6 +3077,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
   const [tab, setTab] = useState('dashboard')
   const [unread, setUnread] = useState(0)
   const [showWhatIf, setShowWhatIf] = useState(false)
+  const [gradesSemester, setGradesSemester] = useState(null)
 
   // SDU status & live data state
   const [sduStatus, setSduStatus] = useState(null)
@@ -3366,9 +3349,10 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
         </header>
 
         <main className="content">
-          {tab === 'dashboard'  && <DashboardTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} setTab={setTab} token={token} />}
+          {tab === 'dashboard'  && <DashboardTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} setTab={setTab} token={token}
+                                       onOpenCourses={sem => { setGradesSemester(sem); setTab('transcript') }} />}
           {tab === 'schedule'   && <ScheduleTab  sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} />}
-          {tab === 'transcript' && <TranscriptTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} token={token} />}
+          {tab === 'transcript' && <TranscriptTab key={gradesSemester ?? 'all'} sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} token={token} initialSemester={gradesSemester} />}
           {tab === 'support'    && <SupportTab token={token} defaultEmail={sduData.profile?.email || ''} page="student" />}
           {tab === 'insights'   && <InsightsTab token={token} sduStatus={sduStatus} onConnect={handleSduConnect} />}
           {tab === 'attendance' && <AttendanceTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} />}
