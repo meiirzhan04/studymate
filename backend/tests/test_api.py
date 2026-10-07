@@ -1041,3 +1041,15 @@ def test_sdu_short_message_reads_nested_errors():
     assert sdu_short_message({"detail": {"code": "moodle_not_linked", "message": "Link Moodle first"}}) == "Link Moodle first [moodle_not_linked]"
     assert sdu_short_message({"detail": "plain"}) == "plain"
     assert sdu_short_message({"detail": {"code": "x"}}) == "[x]"
+
+
+def test_new_sdu_connection_resets_baseline():
+    """Switching demo -> real SDU must not announce every existing grade as new."""
+    from app.main import repo
+    u = repo.create_user("Switch Student", f"5{secrets.randbelow(10**8):08d}", "password123")
+    sid = u["student_id"]
+    repo.sync_sdu_student_data(u["id"], {"student_id": sid}, None, [{"lesson": "Demo course", "grade": 80}], None)
+    repo.save_sdu_connection(u["id"], "real_token", time.time() + 3600, "profile:read")
+    real = [{"lesson": f"MDE {i}", "grade": 70 + i} for i in range(5)]
+    res = repo.sync_sdu_student_data(u["id"], {"student_id": sid}, None, real, None)
+    assert res["new_notifications"] == 0

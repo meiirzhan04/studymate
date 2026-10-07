@@ -468,6 +468,16 @@ const absenceOf = a => Number(a.absence_percent ?? a.absence ?? 0) || 0
 const attendanceTitle = a => a.lesson || a.course_name || a.course_title || a.course || a.subject || a.name || 'Course'
 const absenceTone = abs => (abs >= ABSENCE_LIMIT ? 'danger' : abs >= ABSENCE_WARN ? 'warning' : 'success')
 
+// "IP" (in progress) courses have no grade yet; they are not failed
+const isInProgress = c => ['IP', 'I'].includes(String(c.letter_grade ?? c.grade ?? '').trim().toUpperCase())
+const isFailed = c => c.passed === false && !isInProgress(c)
+
+function formatScore(score) {
+  if (score == null || score === '') return '—'
+  const n = Number(score)
+  return Number.isFinite(n) ? `${n}%` : '—'
+}
+
 function latestSemester(transcript = []) {
   const sems = transcript.map(c => Number(c.semester)).filter(n => !Number.isNaN(n) && n > 0)
   return sems.length ? Math.max(...sems) : null
@@ -1718,7 +1728,7 @@ function SemesterCoursesCard({ courses, semester }) {
                   <b>{c.course_name}</b>
                   <span>{c.course_code} · {c.credits ?? c.ects ?? '—'} ECTS</span>
                 </div>
-                <span className="course-score">{score != null ? `${score}%` : '—'}</span>
+                <span className="course-score">{formatScore(score)}</span>
                 <span className={`grade tint-${gradeTone(c.letter_grade)}`}>{c.letter_grade || '—'}</span>
               </li>
             )
@@ -1775,11 +1785,11 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token
         tab: 'attendance',
       })),
     ...transcript
-      .filter(c => c.passed === false || (c.semester != null && c.semester === currentSemester && Number(c.grade_percent ?? c.grade) < LOW_GRADE_THRESHOLD))
+      .filter(c => isFailed(c) || (!isInProgress(c) && c.semester != null && c.semester === currentSemester && Number(c.grade_percent ?? c.grade) < LOW_GRADE_THRESHOLD))
       .map(c => ({
         tone: 'danger',
         title: c.course_name,
-        text: c.passed === false
+        text: isFailed(c)
           ? `Not passed · grade ${c.letter_grade || '—'}`
           : `Low grade · ${c.grade_percent ?? c.grade}% (below ${LOW_GRADE_THRESHOLD}%)`,
         tab: 'transcript',
@@ -2133,11 +2143,12 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, token }) {
                       <b>{c.course_name}</b>
                       <span>
                         {c.course_code} · {c.credits ?? c.ects ?? '—'} ECTS
-                        {c.passed === false && <span className="tone-danger"> · Not passed</span>}
+                        {isFailed(c) && <span className="tone-danger"> · Not passed</span>}
+                        {isInProgress(c) && <span> · In progress</span>}
                       </span>
                     </div>
                     <span className="course-score">
-                      {score != null ? (typeof score === 'number' ? `${score}%` : score) : '—'}
+                      {formatScore(score)}
                     </span>
                     <span className={`grade tint-${gradeTone(c.letter_grade)}`}>{c.letter_grade || '—'}</span>
                   </li>
