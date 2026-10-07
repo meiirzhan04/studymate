@@ -162,6 +162,25 @@ def grades() -> dict:
     return {"source": DEMO_SOURCE, "fetched_at": _now(), "grades": items}
 
 
+def deadlines() -> dict:
+    """Demo Moodle deadlines, placed relative to now so the demo always has upcoming and overdue work."""
+    now = datetime.now(timezone.utc).timestamp()
+    day = 86400
+    rows = [
+        ("demo-dl-1", "Lab 4: REST API endpoints", "Mobile Application Development", "assignment", now + 1 * day + 3600, False),
+        ("demo-dl-2", "Sprint 3 review report", "Project Management", "assignment", now + 3 * day, False),
+        ("demo-dl-3", "Midterm exam", "Information Security", "exam", now + 5 * day, None),
+        ("demo-dl-4", "Dashboard prototype", "Data Analytics", "assignment", now + 12 * day, False),
+        ("demo-dl-5", "Case study: TOGAF", "Enterprise Architecture", "assignment", now - 2 * day, False),
+        ("demo-dl-6", "Quiz 2", "Project Management", "quiz", now - 4 * day, True),
+    ]
+    items = [
+        {"id": i, "title": t, "course": c, "type": k, "due": int(due), "submitted": sub}
+        for i, t, c, k, due, sub in rows
+    ]
+    return {"source": DEMO_SOURCE, "fetched_at": _now(), "deadlines": items}
+
+
 def fetch(endpoint: str, params: dict | None = None) -> tuple[int, dict]:
     """Drop-in replacement for sdu_client.fetch_sdu_data in demo mode."""
     params = params or {}
@@ -179,4 +198,6 @@ def fetch(endpoint: str, params: dict | None = None) -> tuple[int, dict]:
         return 200, attendance()
     if endpoint == "grades":
         return 200, grades()
+    if endpoint == "moodle/deadlines":
+        return 200, deadlines()
     return 404, {"detail": f"Unknown demo endpoint: {endpoint}"}

@@ -1001,3 +1001,36 @@ button.avatar:hover { box-shadow: 0 0 0 3px var(--accent-ring); }
 .otp-input { text-align: center; font-size: 22px !important; letter-spacing: 10px; font-weight: 600; font-variant-numeric: tabular-nums; height: 48px !important; }
 .resend { align-self: flex-start; }
 .resend:disabled { color: var(--text-muted); text-decoration: none; cursor: default; opacity: 1; }
+
+/* ─── Sprint 3: deadlines, grade breakdown ──────────────────── */
+.deadline-list { display: flex; flex-direction: column; }
+.deadline { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 10px 0; }
+.deadline + .deadline { border-top: 1px solid var(--border); }
+.deadline-date { display: flex; flex-direction: column; align-items: center; padding: 4px 0; border-radius: 10px; background: var(--accent-soft); color: var(--accent-text); line-height: 1.15; }
+.deadline-date span { font-size: 11px; font-weight: 500; text-transform: uppercase; }
+.deadline-date b { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.deadline-when { font-size: 12.5px; color: var(--text-muted); white-space: nowrap; }
+.deadline-overdue { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+
+.course-row-clickable { cursor: pointer; transition: background-color .15s; }
+.course-row-clickable:hover { background: var(--surface-2); }
+
+/* Categorical slots from the validated dataviz reference palette */
+.viz-root { --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100; }
+[data-theme="dark"] .viz-root { --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; }
+.series-1 { background: var(--series-1); }
+.series-2 { background: var(--series-2); }
+.series-3 { background: var(--series-3); }
+.series-4 { background: var(--series-4); }
+.weight-bar { display: flex; gap: 2px; height: 14px; margin-top: 10px; }
+.weight-seg { min-width: 6px; }
+.weight-seg:first-child { border-radius: 4px 0 0 4px; }
+.weight-seg:last-child { border-radius: 0 4px 4px 0; }
+.weight-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 10px; font-size: 13px; color: var(--text-secondary); }
+.weight-legend li { display: flex; align-items: center; gap: 6px; }
+.weight-legend i { width: 10px; height: 10px; border-radius: 3px; }
+.weight-legend b { color: var(--text-primary); font-weight: 600; }
+.breakdown-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.breakdown-table th { text-align: left; font-weight: 500; font-size: 12.5px; color: var(--text-muted); padding: 8px 0; border-bottom: 1px solid var(--border); }
+.breakdown-table td { padding: 9px 0; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.breakdown-table td:first-child { color: var(--text-primary); font-weight: 500; }

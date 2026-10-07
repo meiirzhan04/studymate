@@ -501,6 +501,7 @@ function notifTarget(type) {
   if (type === 'low_attendance') return { tab: 'attendance', label: 'View attendance' }
   if (type === 'teacher_intervention') return { tab: 'insights', label: 'Open study plan' }
   if (type === 'support_reply') return { tab: 'support', label: 'Open conversation' }
+  if (type === 'missed_deadline') return { tab: 'dashboard', label: 'View deadlines' }
   return null
 }
 
@@ -514,6 +515,7 @@ function notifMeta(type) {
     case 'grade_posted':   return { icon: <Icons.Award size={16} />, tone: 'success' }
     case 'teacher_intervention': return { icon: <Icons.Mail size={16} />, tone: 'accent' }
     case 'support_reply':  return { icon: <Icons.Mail size={16} />, tone: 'accent' }
+    case 'missed_deadline': return { icon: <Icons.Clock size={16} />, tone: 'danger' }
     default:               return { icon: <Icons.Bell size={16} />, tone: 'accent' }
   }
 }
@@ -1630,8 +1632,108 @@ function AttentionCard({ items, onSelect }) {
   )
 }
 
+/* ─── UPCOMING DEADLINES (US-12) ─────────────────────────────────── */
+function dueLabel(iso) {
+  const due = new Date(iso)
+  const now = new Date()
+  const startOfDay = d => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  const days = Math.round((startOfDay(due) - startOfDay(now)) / 86400000)
+  const time = due.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  if (days === 0) return `Today, ${time}`
+  if (days === 1) return `Tomorrow, ${time}`
+  return `In ${days} days · ${due.toLocaleDateString([], { weekday: 'short' })}, ${time}`
+}
+
+function DeadlinesCard({ token, connected }) {
+  const [data, setData] = useState(null)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    if (!connected) return
+    api('/api/sdu/deadlines?days=7', token).then(setData).catch(e => setErr(e.message))
+  }, [token, connected])
+
+  return (
+    <article className="card">
+      <header className="card-head">
+        <h2>Due in the next 7 days</h2>
+        {data?.upcoming?.length > 0 && <span className="count-pill">{data.upcoming.length}</span>}
+      </header>
+      {err ? (
+        <EmptyState icon={<Icons.Clock size={20} />} title="Deadlines unavailable" text={err} />
+      ) : !data ? (
+        <PageLoader label="Loading deadlines…" />
+      ) : !data.available ? (
+        <EmptyState icon={<Icons.Clock size={20} />} title="Deadlines unavailable" text={data.reason} />
+      ) : (
+        <>
+          {data.upcoming.length ? (
+            <ul className="deadline-list">
+              {data.upcoming.map(d => {
+                const due = new Date(d.due_at)
+                return (
+                  <li key={d.id} className="deadline">
+                    <div className="deadline-date">
+                      <span>{due.toLocaleDateString([], { month: 'short' })}</span>
+                      <b>{due.getDate()}</b>
+                    </div>
+                    <div className="course-main">
+                      <b>{d.title}</b>
+                      <span>{[d.course, d.type].filter(Boolean).join(' · ')}</span>
+                    </div>
+                    <span className="deadline-when">{dueLabel(d.due_at)}</span>
+                  </li>
+                )
+              })}
+            </ul>
+          ) : (
+            <EmptyState icon={<Icons.CheckCircle size={20} />} title="Nothing due this week" text="New Moodle deadlines show up here automatically." />
+          )}
+          {data.overdue.length > 0 && (
+            <p className="deadline-overdue">
+              <Status tone="danger">{data.overdue.length} overdue and not submitted</Status>
+            </p>
+          )}
+        </>
+      )}
+    </article>
+  )
+}
+
+/* ─── SEMESTER COURSES (US-09) ───────────────────────────────────── */
+function SemesterCoursesCard({ courses, semester }) {
+  return (
+    <article className="card card-flush">
+      <header className="group-head">
+        <h2>Semester {semester} courses</h2>
+        <span>{courses.length}</span>
+      </header>
+      {courses.length ? (
+        <ul className="course-list">
+          {courses.map((c, i) => {
+            const score = c.grade_percent ?? c.grade
+            return (
+              <li key={i} className="course-row">
+                <div className="course-main">
+                  <b>{c.course_name}</b>
+                  <span>{c.course_code} · {c.credits ?? c.ects ?? '—'} ECTS</span>
+                </div>
+                <span className="course-score">{score != null ? `${score}%` : '—'}</span>
+                <span className={`grade tint-${gradeTone(c.letter_grade)}`}>{c.letter_grade || '—'}</span>
+              </li>
+            )
+          })}
+        </ul>
+      ) : (
+        <EmptyState icon={<Icons.Book size={20} />} title="No courses in this semester" />
+      )}
+    </article>
+  )
+}
+
 function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token }) {
   const [recommendations, setRecommendations] = useState([])
+  const [semester, setSemester] = useState(null)
   const connected = !!sduStatus?.connected
 
   useEffect(() => {
@@ -1646,13 +1748,19 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token
 
   const transcript = sduData.transcript || []
   const attendanceList = sduData.attendance || []
-  const gpa = calcGPA(transcript)
-  const attendance = calcOverallAttendance(attendanceList)
-  const credits = calcCompletedCredits(transcript)
-  const creditsPct = Math.min(100, Math.round((credits / DEGREE_CREDITS) * 100))
-  const standing = gpaStanding(gpa)
-  const attStanding = attendanceStanding(attendance)
   const currentSemester = latestSemester(transcript)
+  const semesters = [...new Set(transcript.map(c => Number(c.semester)).filter(n => n > 0))].sort((a, b) => a - b)
+  const selected = semester ?? currentSemester
+  const isCurrent = selected === currentSemester
+  const semCourses = transcript.filter(c => Number(c.semester) === selected)
+
+  const cumulativeGpa = calcGPA(transcript)
+  const gpa = selected != null ? calcGPA(semCourses) : cumulativeGpa
+  const standing = gpaStanding(gpa)
+  const attendance = calcOverallAttendance(attendanceList)
+  const attStanding = attendanceStanding(attendance)
+  const semCredits = calcCompletedCredits(semCourses)
+  const totalCredits = calcCompletedCredits(transcript)
 
   const attention = [
     ...attendanceList
@@ -1678,34 +1786,52 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token
       })),
     ...recommendations
       .slice(0, 1)
-      .map(r => ({ tone: 'accent', title: r.course, text: r.action, tab: 'transcript' })),
+      .map(r => ({ tone: 'accent', title: r.course, text: r.action, tab: 'insights' })),
   ].slice(0, 4)
 
   return (
     <div className="page page-fade">
+      {semesters.length > 1 && (
+        <div className="toolbar" style={{ justifyContent: 'flex-start' }}>
+          <span className="muted">Showing</span>
+          <select className="select" value={selected ?? ''} onChange={e => setSemester(Number(e.target.value))} aria-label="Semester">
+            {semesters.map(n => (
+              <option key={n} value={n}>Semester {n}{n === currentSemester ? ' (current)' : ''}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
       <section className="metric-grid">
         <Metric
-          label="GPA"
+          label={isCurrent ? 'GPA this semester' : `GPA · Semester ${selected}`}
           value={gpa != null ? gpa.toFixed(2) : '—'}
           unit="/ 4.00"
-          foot={<Status tone={standing.tone}>{standing.label}</Status>}
+          foot={<Status tone={standing.tone}>{standing.label} · cumulative {cumulativeGpa != null ? cumulativeGpa.toFixed(2) : '—'}</Status>}
         />
         <Metric
           label="Attendance"
-          value={attendanceList.length ? `${attendance}%` : '—'}
-          foot={<Status tone={attendanceList.length ? attStanding.tone : 'neutral'}>{attendanceList.length ? attStanding.label : 'No data'}</Status>}
+          value={isCurrent && attendanceList.length ? `${attendance}%` : '—'}
+          foot={isCurrent
+            ? <Status tone={attendanceList.length ? attStanding.tone : 'neutral'}>{attendanceList.length ? attStanding.label : 'No data'}</Status>
+            : <span className="muted">SDU shares attendance for the current term only</span>}
         />
         <Metric
-          label="Credits earned"
-          value={credits}
-          unit={`/ ${DEGREE_CREDITS} ECTS`}
-          foot={<ProgressBar pct={creditsPct} />}
+          label={isCurrent ? 'Credits this semester' : `Credits · Semester ${selected}`}
+          value={semCredits}
+          unit="ECTS"
+          foot={<span className="muted">{totalCredits} / {DEGREE_CREDITS} ECTS in total</span>}
         />
       </section>
 
       <section className="split">
         <NextClassCard nextInfo={findNextClass(sduData.schedule || [])} onOpenSchedule={() => setTab('schedule')} />
         <AttentionCard items={attention} onSelect={setTab} />
+      </section>
+
+      <section className="split">
+        <DeadlinesCard token={token} connected={connected} />
+        <SemesterCoursesCard courses={semCourses} semester={selected} />
       </section>
     </div>
   )
@@ -1822,7 +1948,7 @@ function GpaTrendCard({ groups }) {
   return (
     <article className="card">
       <header className="card-head">
-        <h2>GPA trend</h2>
+        <h2>GPA history</h2>
         <Segmented
           label="Trend scale"
           options={[{ id: 'semesters', label: 'Semesters' }, { id: 'years', label: 'Years' }]}
@@ -1877,9 +2003,10 @@ function DegreeProgressCard({ transcript }) {
   )
 }
 
-function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect }) {
+function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, token }) {
   const [semester, setSemester] = useState(null)
   const [view, setView] = useState('list')
+  const [breakdownFor, setBreakdownFor] = useState(null)
   const transcript = sduData.transcript || []
 
   const groups = useMemo(() => {
@@ -1993,7 +2120,15 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect }) {
               {g.courses.map((c, idx) => {
                 const score = c.grade_percent ?? c.grade
                 return (
-                  <li key={idx} className="course-row">
+                  <li
+                    key={idx}
+                    className="course-row course-row-clickable"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setBreakdownFor(c)}
+                    onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && setBreakdownFor(c)}
+                    title="Show grade breakdown"
+                  >
                     <div className="course-main">
                       <b>{c.course_name}</b>
                       <span>
@@ -2012,6 +2147,85 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect }) {
           </article>
         ))
       )}
+      {breakdownFor && <BreakdownModal token={token} course={breakdownFor} onClose={() => setBreakdownFor(null)} />}
+    </div>
+  )
+}
+
+/* ─── GRADE BREAKDOWN (US-10) ────────────────────────────────────── */
+function BreakdownModal({ token, course, onClose }) {
+  const [data, setData] = useState(null)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    api(`/api/student/grades/breakdown?course=${encodeURIComponent(course.course_name)}`, token)
+      .then(setData)
+      .catch(e => setErr(e.message))
+  }, [token, course.course_name])
+
+  const parts = (data?.components || []).filter(p => p.weight != null)
+  const hasBreakdown = parts.length >= 2
+  const finalScore = course.grade_percent ?? course.grade
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal modal-lg">
+        <div className="modal-head">
+          <div>
+            <h2>{course.course_name}</h2>
+            <p>{course.course_code} · final {finalScore != null ? `${finalScore}%` : '—'} {course.letter_grade ? `(${course.letter_grade})` : ''}</p>
+          </div>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close"><Icons.Close size={18} /></button>
+        </div>
+        <div className="modal-body">
+          {!data && !err ? (
+            <PageLoader label="Loading breakdown…" />
+          ) : !hasBreakdown ? (
+            <EmptyState
+              icon={<Icons.Chart size={20} />}
+              title="No assessment breakdown"
+              text="SDU provides only the final grade for this course, without the weights of quizzes, midterm and final."
+            />
+          ) : (
+            <>
+              <div className="viz-root">
+                <h3 className="section-title" style={{ marginTop: 0 }}>How the final grade is weighted</h3>
+                <div className="weight-bar" role="img"
+                  aria-label={parts.map(p => `${p.name} ${Math.round(p.weight * 100)}%`).join(', ')}>
+                  {parts.map((p, i) => (
+                    <span
+                      key={p.name}
+                      className={`weight-seg series-${(i % 4) + 1}`}
+                      style={{ flexGrow: p.weight }}
+                      title={`${p.name}: ${Math.round(p.weight * 100)}% of the grade · scored ${p.score ?? '—'}%`}
+                    />
+                  ))}
+                </div>
+                <ul className="weight-legend">
+                  {parts.map((p, i) => (
+                    <li key={p.name}><i className={`series-${(i % 4) + 1}`} />{p.name} <b>{Math.round(p.weight * 100)}%</b></li>
+                  ))}
+                </ul>
+              </div>
+              <table className="breakdown-table">
+                <thead>
+                  <tr><th>Assessment</th><th>Weight</th><th>Score</th><th>Adds to final</th></tr>
+                </thead>
+                <tbody>
+                  {parts.map(p => (
+                    <tr key={p.name}>
+                      <td>{p.name}</td>
+                      <td>{Math.round(p.weight * 100)}%</td>
+                      <td>{p.score != null ? `${p.percentage ?? p.score}%` : '—'}</td>
+                      <td>{p.score != null ? `${Math.round((p.percentage ?? p.score) * p.weight * 10) / 10} pts` : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
@@ -3143,7 +3357,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
         <main className="content">
           {tab === 'dashboard'  && <DashboardTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} setTab={setTab} token={token} />}
           {tab === 'schedule'   && <ScheduleTab  sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} />}
-          {tab === 'transcript' && <TranscriptTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} />}
+          {tab === 'transcript' && <TranscriptTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} token={token} />}
           {tab === 'support'    && <SupportTab token={token} defaultEmail={sduData.profile?.email || ''} page="student" />}
           {tab === 'insights'   && <InsightsTab token={token} sduStatus={sduStatus} onConnect={handleSduConnect} />}
           {tab === 'attendance' && <AttendanceTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} />}

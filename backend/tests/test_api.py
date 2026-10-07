@@ -959,3 +959,78 @@ def test_reset_is_step_by_step_and_limits_wrong_codes(no_real_email):
     client.post("/api/auth/send-reset-code", json={"email": other})
     statuses = [client.post("/api/auth/check-reset-code", json={"email": other, "code": "000000"}).status_code for _ in range(6)]
     assert statuses[:5] == [400] * 5 and statuses[5] == 429
+
+
+# ─── Sprint 3: deadlines (US-12/13), breakdown by name (US-10) ───────────────
+def test_deadline_normalizer_accepts_common_moodle_shapes():
+    from datetime import datetime, timezone
+    from app import deadlines as dl
+    soon = int(datetime.now(timezone.utc).timestamp()) + 86400
+
+    a, err_a = dl.normalize({"deadlines": [{"id": 1, "title": "Lab", "course": "DB", "due": soon, "submitted": False}]})
+    b, err_b = dl.normalize({"data": {"items": [{"name": "Essay", "coursename": "ENG", "duedate": soon * 1000, "status": "new"}]}})
+    c, err_c = dl.normalize([{"activityname": "Quiz", "course": {"fullname": "Math"}, "timestart": datetime.fromtimestamp(soon, timezone.utc).isoformat()}])
+    assert not err_a and not err_b and not err_c
+    assert (a[0]["title"], a[0]["submitted"]) == ("Lab", False)
+    assert (b[0]["course"], b[0]["submitted"]) == ("ENG", False)
+    assert (c[0]["course"], c[0]["submitted"]) == ("Math", None)
+
+    _, problem = dl.normalize({"unexpected": {"secret": "value"}})
+    assert "unexpected" in problem and "value" not in problem
+
+
+def test_moodle_errors_do_not_disconnect_sdu(monkeypatch):
+    import app.sdu_client as sdu_mod
+    from app.main import repo
+
+    u = repo.create_user("Moodle Student", f"stu_md_{secrets.token_hex(4)}", "password123")
+    tok = token(u["student_id"], "password123")
+    repo.save_sdu_connection(u["id"], "live_token_md", time.time() + 3600, "profile:read moodle:read")
+
+    async def moodle_401(endpoint, access_token, params=None, client=None):
+        return 401, {"detail": "moodle not linked"}
+    monkeypatch.setattr(sdu_mod, "fetch_sdu_data", moodle_401)
+
+    res = client.get("/api/sdu/deadlines", headers=auth(tok)).json()
+    assert res["available"] is False
+    assert repo.get_sdu_connection(u["id"]) is not None
+
+    # Without the moodle scope the API isn't even called
+    repo.save_sdu_connection(u["id"], "live_token_md", time.time() + 3600, "profile:read")
+    res = client.get("/api/sdu/deadlines", headers=auth(tok)).json()
+    assert res["available"] is False and "Reconnect" in res["reason"]
+
+
+def test_demo_deadlines_next_7_days_and_missed_alert_once():
+    session = client.post("/api/sdu/demo-connect", json={}).json()
+    headers = auth(session["access_token"])
+    data = client.get("/api/sdu/deadlines", headers=headers).json()
+    assert data["available"] is True
+    due = [d["due_at"] for d in data["upcoming"]]
+    assert due == sorted(due) and len(due) == 3          # 12-day item and the overdue ones are excluded
+    assert [d["title"] for d in data["overdue"]] == ["Case study: TOGAF"]   # submitted quiz is not missed
+
+    def missed_count():
+        items = client.get("/api/student/notifications", headers=headers).json()["items"]
+        return len([n for n in items if n["type"] == "missed_deadline" and "TOGAF" in n["detail"]])
+    assert missed_count() == 1
+    client.post("/api/sdu/sync", headers=headers)
+    assert missed_count() == 1
+
+
+def test_missed_alert_needs_explicit_unsubmitted_flag():
+    from app.main import repo
+    from datetime import datetime, timezone, timedelta
+    u = repo.create_user("No Flag", f"6{secrets.randbelow(10**8):08d}", "password123")
+    past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    unknown = [{"id": "x", "title": "Lab", "course": "DB", "type": "assignment", "due_at": past, "submitted": None, "url": None}]
+    res = repo.sync_sdu_student_data(u["id"], {"student_id": u["student_id"]}, None, None, None, deadlines=unknown)
+    assert res["new_notifications"] == 0
+
+
+def test_breakdown_lookup_by_course_name():
+    tok = token("240103118", "studymate2026")
+    res = client.get("/api/student/grades/breakdown", params={"course": "Fundamentals of Programming"}, headers=auth(tok))
+    assert res.status_code == 200
+    assert {c["name"] for c in res.json()["components"]} >= {"Midterm", "Final"}
+    assert client.get("/api/student/grades/breakdown", params={"course": "No Such Course"}, headers=auth(tok)).status_code == 404

@@ -10,7 +10,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import sdu_mock
+from . import deadlines as deadlines_mod, sdu_mock
 
 # Alert thresholds (US-05)
 LOW_GRADE_THRESHOLD = 60
@@ -1130,7 +1130,8 @@ class SQLiteRepository:
 
             return {"id": new_uid, "name": clean_name, "role": "student", "student_id": clean_sid, "teacher_id": None}
 
-    def sync_sdu_student_data(self, user_id: str, profile: dict, schedule: list | None, grades: list | None, attendance: list | None) -> dict:
+    def sync_sdu_student_data(self, user_id: str, profile: dict, schedule: list | None, grades: list | None, attendance: list | None,
+                              deadlines: list | None = None) -> dict:
         student_id = profile.get("student_id")
         fullname = profile.get("fullname")
         email = profile.get("email")
@@ -1197,6 +1198,7 @@ class SQLiteRepository:
             if sid:
                 created += self._notify_grade_changes(db, user_id, sid, grades, now)
                 created += self._notify_absence_changes(db, user_id, sid, attendance, now)
+                created += self._notify_missed_deadlines(db, user_id, sid, deadlines)
 
             db.execute("UPDATE sdu_connections SET updated_at = ? WHERE user_id = ?", (now, user_id))
             db.commit()
@@ -1212,6 +1214,27 @@ class SQLiteRepository:
             (user_id, kind, json.dumps(data), now)
         )
         return json.loads(row["data_json"]) if row else None
+
+    def _notify_missed_deadlines(self, db, user_id: str, sid: str, items: list | None) -> int:
+        """US-13: one urgent alert per assignment that is past due and explicitly not submitted."""
+        if not isinstance(items, list):
+            return 0
+        row = db.execute("SELECT data_json FROM sdu_snapshots WHERE user_id = ? AND kind = 'deadlines_alerted'", (user_id,)).fetchone()
+        alerted = set(json.loads(row["data_json"]).get("ids", [])) if row else set()
+        now = datetime.now(timezone.utc).isoformat()
+        created = 0
+        for d in deadlines_mod.missed(items):
+            if d["id"] in alerted:
+                continue
+            due = datetime.fromisoformat(d["due_at"]).strftime("%d %b, %H:%M UTC")
+            course = f" ({d['course']})" if d.get("course") else ""
+            created += self._add_notification(
+                db, sid, "missed_deadline", "Missed deadline",
+                f"{d['title']}{course} was due {due} and has not been submitted. Contact your instructor as soon as possible.",
+                d.get("course"), now)
+            alerted.add(d["id"])
+        self._swap_snapshot(db, user_id, "deadlines_alerted", {"ids": sorted(alerted)}, now)
+        return created
 
     def _add_notification(self, db, sid: str, ntype: str, title: str, detail: str, course: str | None, now: str) -> int:
         db.execute(

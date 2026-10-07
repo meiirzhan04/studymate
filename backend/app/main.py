@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 
 from .repository import LOW_GRADE_THRESHOLD, MIN_ATTENDANCE, SQLiteRepository
 from . import admin, sdu_client, sdu_mock
+from . import deadlines as deadlines_mod
 
 
 class SduAuthorizeRequest(BaseModel):
@@ -738,6 +739,7 @@ def sdu_demo_connect(user: Annotated[Optional[User], Depends(optional_current_us
         schedule=sdu_mock.schedule().get("schedule"),
         grades=sdu_mock.grades().get("grades"),
         attendance=sdu_mock.attendance().get("attendance"),
+        deadlines=deadlines_mod.normalize(sdu_mock.deadlines())[0],
     )
 
     return {
@@ -910,8 +912,10 @@ async def sdu_sync(user: Annotated[User, Depends(current_user)], auto: bool = Qu
             schedule=sdu_mock.schedule().get("schedule"),
             grades=sdu_mock.grades().get("grades"),
             attendance=sdu_mock.attendance().get("attendance"),
+            deadlines=deadlines_mod.normalize(sdu_mock.deadlines())[0],
         )
-        return {"ok": True, "connected": True, "synced": True, "demo_mode": True, "updated_at": res.get("updated_at")}
+        return {"ok": True, "connected": True, "synced": True, "demo_mode": True, "updated_at": res.get("updated_at"),
+                "new_notifications": res.get("new_notifications", 0)}
 
     access_token = conn["access_token"]
     status_code, profile_data = await sdu_client.fetch_sdu_data("profile", access_token)
@@ -937,12 +941,14 @@ async def sdu_sync(user: Annotated[User, Depends(current_user)], auto: bool = Qu
     _, att_data = await sdu_client.fetch_sdu_data("attendance", access_token, params=active_term_params)
     _, grades_data = await sdu_client.fetch_sdu_data("grades", access_token, params=active_term_params)
 
+    deadline_items, deadlines_ok, _ = await fetch_deadlines(conn, user.student_id)
     res = repo.sync_sdu_student_data(
         user.id,
         profile=profile_data if isinstance(profile_data, dict) else {},
         schedule=sched_data.get("schedule") if isinstance(sched_data, dict) else None,
         grades=grades_data.get("grades") if isinstance(grades_data, dict) else None,
         attendance=att_data.get("attendance") if isinstance(att_data, dict) else None,
+        deadlines=deadline_items if deadlines_ok else None,
     )
     return {"ok": True, "connected": True, "synced": True, "updated_at": res.get("updated_at"), "new_notifications": res.get("new_notifications", 0)}
 
@@ -960,6 +966,43 @@ def seconds_since(iso_time: Optional[str]) -> float:
         return (datetime.now(timezone.utc) - then).total_seconds()
     except ValueError:
         return float("inf")
+
+
+MOODLE_SCOPE = "moodle:read"
+
+
+async def fetch_deadlines(conn: dict, student_id: Optional[str]) -> tuple[list, bool, Optional[str]]:
+    """(items, available, reason). Moodle problems never disconnect SDU."""
+    if sdu_mock.is_demo_connection(conn):
+        items, _ = deadlines_mod.normalize(sdu_mock.deadlines())
+        return items, True, None
+    if MOODLE_SCOPE not in (conn.get("scope") or "").split():
+        return [], False, "Reconnect SDU to allow access to Moodle deadlines."
+    status_code, data = await sdu_client.fetch_sdu_data("moodle/deadlines", conn["access_token"])
+    if status_code != 200:
+        reason = sdu_short_message(data)
+        admin.record_sdu_error("moodle/deadlines", status_code, reason or "request failed", student_id)
+        return [], False, f"Moodle deadlines are unavailable right now ({status_code})."
+    items, problem = deadlines_mod.normalize(data)
+    if problem:
+        # Key names only, never values
+        admin.record_sdu_error("moodle/deadlines", status_code, problem, student_id)
+        return [], False, "Moodle returned deadlines in an unexpected format."
+    return items, True, None
+
+
+@app.get("/api/sdu/deadlines")
+async def sdu_deadlines(user: Annotated[User, Depends(current_user)], days: int = Query(7, ge=1, le=60)):
+    conn = require_sdu_connection(user.id)
+    items, available, reason = await fetch_deadlines(conn, user.student_id)
+    return {
+        "available": available,
+        "reason": reason,
+        "days": days,
+        "upcoming": deadlines_mod.upcoming(items, days),
+        "overdue": deadlines_mod.missed(items),
+        "total": len(items),
+    }
 
 
 def require_sdu_connection(user_id: str) -> dict:
@@ -1253,8 +1296,15 @@ def student_grades(user: Annotated[User, Depends(require_role("student"))], seme
 
 
 @app.get("/api/student/grades/breakdown")
-def grades_breakdown(user: Annotated[User, Depends(require_role("student"))], course_code: str, semester: Optional[str] = None):
+def grades_breakdown(user: Annotated[User, Depends(require_role("student"))], course_code: Optional[str] = None,
+                     semester: Optional[str] = None, course: Optional[str] = None):
+    course_name = (course or "").strip().lower()
+    if not course_code and not course_name:
+        raise HTTPException(status_code=422, detail="Provide course_code or course")
     course = None
+    if course_name and not course_code:
+        match = next((g for g in repo.grades if g["student_id"] == user.student_id and g["course"].strip().lower() == course_name), None)
+        course_code = match["code"] if match else "__none__"
     target_sem = resolve_semester(semester) if semester else None
     for g in repo.grades:
         if g["student_id"] == user.student_id and g["code"] == course_code:
