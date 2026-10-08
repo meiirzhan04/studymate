@@ -60,10 +60,18 @@ class RegisterRequest(BaseModel):
     cohort: Optional[str] = "CS-2026"
 
 
+class WhatIfComponent(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    weight: float = Field(gt=0.0, le=1.0)
+    score: Optional[float] = Field(default=None, ge=0.0, le=100.0)
+
+
 class WhatIfRequest(BaseModel):
     course_code: str = Field(min_length=1, max_length=20)
     target_score: float = Field(ge=0.0, le=100.0)
     component_name: str = Field(min_length=1, max_length=100)
+    # SDU only exposes a course total, so the student can supply the syllabus breakdown themselves
+    components: Optional[list[WhatIfComponent]] = Field(default=None, min_length=1, max_length=12)
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -1430,49 +1438,56 @@ def grades_breakdown(user: Annotated[User, Depends(require_role("student"))], co
     }
 
 
-@app.post("/api/student/grades/whatif")
-def grades_whatif(user: Annotated[User, Depends(require_role("student"))], req: WhatIfRequest):
-    course = next((c for c in repo.grades if c["student_id"] == user.student_id and c["code"] == req.course_code), None)
+def stored_components(student_id: str, course_code: str) -> list[dict]:
+    course = next((c for c in repo.grades if c["student_id"] == student_id and c["code"] == course_code), None)
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-        
     items = repo.get_assessment_items(course["id"])
-    target_comp = None
-    other_score = 0.0
-    
     if items:
-        for item in items:
-            if item["name"] == req.component_name:
-                target_comp = item
-            else:
-                other_score += (item["score"] / item["max_score"] * 100) * item["weight"]
-    else:
-        for c in course.get("components", []):
-            if c["name"] == req.component_name:
-                target_comp = c
-            else:
-                other_score += (c.get("score", 0)) * c["weight"]
-                
+        return [{"name": i["name"], "weight": i["weight"], "score": i["score"] / i["max_score"] * 100} for i in items]
+    return [{"name": c["name"], "weight": c["weight"], "score": c.get("score")} for c in course.get("components", [])]
+
+
+def solve_whatif(components: list[dict], component_name: str, target_score: float) -> dict:
+    names = [c["name"] for c in components]
+    if len(set(names)) != len(names):
+        raise HTTPException(status_code=400, detail="Component names must be unique.")
+    target_comp = next((c for c in components if c["name"] == component_name), None)
     if not target_comp:
         raise HTTPException(status_code=404, detail="Component not found")
-
+    if not math.isclose(sum(c["weight"] for c in components), 1.0, abs_tol=0.005):
+        raise HTTPException(status_code=400, detail="Component weights must add up to 100%.")
     weight = target_comp.get("weight", 0.0)
     if weight <= 0:
         raise HTTPException(status_code=400, detail="Component weight must be greater than zero.")
+    others = [c for c in components if c is not target_comp]
+    missing = [c["name"] for c in others if c.get("score") is None]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Enter your score for: {', '.join(missing)}")
 
-    raw_needed = (req.target_score - other_score) / weight
-    needed_score = round(raw_needed, 1)
+    other_score = sum(c["score"] * c["weight"] for c in others)
+    needed_score = round((target_score - other_score) / weight, 1)
+    return whatif_verdict(needed_score, component_name, target_score)
 
+
+@app.post("/api/student/grades/whatif")
+def grades_whatif(user: Annotated[User, Depends(require_role("student"))], req: WhatIfRequest):
+    components = [c.model_dump() for c in req.components] if req.components \
+        else stored_components(user.student_id, req.course_code)
+    return solve_whatif(components, req.component_name, req.target_score)
+
+
+def whatif_verdict(needed_score: float, component_name: str, target_score: float) -> dict:
     if needed_score <= 0.0:
         needed_score = 0.0
         feasible = True
-        message = f"You have already achieved {req.target_score}%. Even with 0% on {req.component_name}, your target is secured!"
+        message = f"You have already achieved {target_score}%. Even with 0% on {component_name}, your target is secured!"
     elif needed_score <= 100.0:
         feasible = True
-        message = f"You need at least {needed_score}% on {req.component_name} to reach {req.target_score}%"
+        message = f"You need at least {needed_score}% on {component_name} to reach {target_score}%"
     else:
         feasible = False
-        message = f"Mathematically unachievable: you would need {needed_score}% (exceeding 100%) on {req.component_name} to reach {req.target_score}%."
+        message = f"Mathematically unachievable: you would need {needed_score}% (exceeding 100%) on {component_name} to reach {target_score}%."
 
     return {
         "needed_score": needed_score,

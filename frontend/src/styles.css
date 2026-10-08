@@ -1090,3 +1090,26 @@ button.avatar:hover { box-shadow: 0 0 0 3px var(--accent-ring); }
 .strip-note { font-style: normal; font-size: 12.5px; color: var(--text-muted); }
 .today-dot { display: inline-block; width: 6px; height: 6px; margin-left: 6px; vertical-align: middle; border-radius: 50%; background: var(--accent); }
 .card-fill > .empty { flex: 1; justify-content: center; }
+
+/* ─── What-if planner components ────────────────────────────── */
+.whatif-grid {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 76px 92px 28px;
+  gap: 6px 8px; align-items: center;
+}
+.whatif-grid-head { font-size: 12px; font-weight: 500; color: var(--text-muted); }
+.modal-body .whatif-grid input { padding: 0 10px; }
+.modal-body .whatif-grid input[type="radio"] {
+  width: 16px; height: 16px; padding: 0; margin: 0 auto;
+  accent-color: var(--accent); cursor: pointer; box-shadow: none;
+}
+.modal-body .whatif-grid input:disabled { background: var(--surface-2); }
+.whatif-grid .icon-btn:disabled { opacity: .35; cursor: not-allowed; }
+.whatif-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12.5px; color: var(--text-muted); }
+.whatif-warn { color: var(--danger); font-weight: 500; }
+.modal-body .whatif-hint { font-size: 12.5px; line-height: 1.5; color: var(--text-muted); }
+@media (max-width: 640px) {
+  .whatif-grid { grid-template-columns: 28px minmax(0, 1fr) 56px 64px 24px; gap: 6px; }
+  .modal-body .whatif-grid input { padding: 0 6px; }
+  .whatif-grid-head { font-size: 11px; }
+}

@@ -1089,3 +1089,53 @@ def test_real_sync_uses_transcript_and_only_the_active_term():
     assert data["term_label"] == "Semester 1"
     assert [r["course"] for r in data["ranked"]] == ["Calculus", "Programming"]
     assert [w["course"] for w in data["weak_subjects"]] == ["Calculus"]
+
+
+# ─── What-if planner ─────────────────────────────────────────────────────────
+def whatif(tok, **body):
+    return client.post("/api/student/grades/whatif", json=body, headers=auth(tok))
+
+
+def test_whatif_uses_stored_breakdown_for_seeded_course():
+    tok = token("240103118", "studymate2026")
+    course = client.get("/api/student/grades?semester=spring-2026", headers=auth(tok)).json()["items"][0]
+    comps = course["components"]
+    target = comps[-1]
+    others = sum(c["score"] * c["weight"] for c in comps[:-1])
+    res = whatif(tok, course_code=course["code"], target_score=80, component_name=target["name"])
+    assert res.status_code == 200
+    assert res.json()["needed_score"] == max(0.0, round((80 - others) / target["weight"], 1))
+
+
+def test_whatif_with_own_components_works_for_in_progress_sdu_course():
+    from app.main import repo, ACTIVE_TERM
+    u = repo.create_user("Whatif Real", f"4{secrets.randbelow(10**8):08d}", "password123")
+    repo.sync_sdu_student_data(
+        u["id"], {"student_id": u["student_id"]}, None,
+        [{"lesson": "INF 451", "year": ACTIVE_TERM["year"], "term": ACTIVE_TERM["term"], "grade": None}], None,
+        transcript=[{"semester": 5, "course_code": "INF 451", "course_name": "Project Management", "grade_percent": None, "letter_grade": "IP"}],
+        active_term=ACTIVE_TERM, replace_local_grades=True)
+    tok = token(u["student_id"], "password123")
+    components = [
+        {"name": "Midterm", "weight": 0.3, "score": 70},
+        {"name": "Endterm", "weight": 0.3, "score": 80},
+        {"name": "Final exam", "weight": 0.4, "score": None},
+    ]
+    res = whatif(tok, course_code="INF 451", target_score=75, component_name="Final exam", components=components)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["needed_score"] == 75.0          # (75 - 21 - 24) / 0.4
+    assert body["feasible"] is True
+
+
+def test_whatif_rejects_incomplete_or_inconsistent_components():
+    tok = token("240103118", "studymate2026")
+    base = {"course_code": "ANY 100", "target_score": 70, "component_name": "Final"}
+    missing = whatif(tok, **base, components=[{"name": "Midterm", "weight": 0.5}, {"name": "Final", "weight": 0.5}])
+    assert missing.status_code == 400 and "Midterm" in missing.json()["detail"]
+    bad_sum = whatif(tok, **base, components=[{"name": "Midterm", "weight": 0.5, "score": 60}, {"name": "Final", "weight": 0.2}])
+    assert bad_sum.status_code == 400 and "100%" in bad_sum.json()["detail"]
+    dup = whatif(tok, **base, components=[{"name": "Final", "weight": 0.5, "score": 60}, {"name": "Final", "weight": 0.5}])
+    assert dup.status_code == 400
+    no_target = whatif(tok, **{**base, "component_name": "Quiz"}, components=[{"name": "Final", "weight": 1.0}])
+    assert no_target.status_code == 404

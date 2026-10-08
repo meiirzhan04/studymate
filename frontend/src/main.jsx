@@ -1409,64 +1409,163 @@ function Login({ onLogin, theme, toggleTheme }) {
 }
 
 /* ─── WHAT-IF CALCULATOR MODAL ───────────────────────────────────── */
-function WhatIfModal({ token, courses, onClose }) {
-  const [availableCourses, setAvailableCourses] = useState([])
-  const [courseCode, setCourseCode]    = useState('')
-  const [component, setComponent]     = useState('')
+// SDU only reports a course total, so these are editable starting weights, not SDU policy
+const DEFAULT_WHATIF_ROWS = [
+  { name: 'Midterm', weight: 30, score: '' },
+  { name: 'Endterm', weight: 30, score: '' },
+  { name: 'Final exam', weight: 40, score: '' },
+]
+const MAX_WHATIF_ROWS = 12
+
+const currentTermCourses = (transcript = []) => {
+  const sem = latestSemester(transcript)
+  return transcript
+    .filter(c => Number(c.semester) === sem && c.course_code)
+    .map(c => ({ code: c.course_code, course: c.course_name || c.course_code, score: c.grade_percent ?? null }))
+}
+
+const firstUnscored = rows => {
+  const i = rows.findIndex(r => r.score === '')
+  return i >= 0 ? i : rows.length - 1
+}
+
+const isFullWeight = total => Math.abs(total - 100) < 0.5
+
+function WhatIfRows({ rows, solveIndex, onSolve, onChange, onRemove }) {
+  return (
+    <div className="whatif-grid" role="group" aria-label="Assessment components">
+      <span className="whatif-grid-head" title="Which component to solve for">Solve</span>
+      <span className="whatif-grid-head">Component</span>
+      <span className="whatif-grid-head">Weight %</span>
+      <span className="whatif-grid-head">Your score %</span>
+      <span />
+      {rows.map((r, i) => {
+        const solving = i === solveIndex
+        return (
+          <React.Fragment key={i}>
+            <input
+              type="radio"
+              name="whatif-solve"
+              checked={solving}
+              onChange={() => onSolve(i)}
+              aria-label={`Solve for ${r.name || 'this component'}`}
+            />
+            <input value={r.name} maxLength={100} onChange={e => onChange(i, 'name', e.target.value)} aria-label="Component name" />
+            <input type="number" min={0} max={100} value={r.weight} onChange={e => onChange(i, 'weight', e.target.value)} aria-label="Weight percent" />
+            <input
+              type="number" min={0} max={100}
+              value={solving ? '' : r.score}
+              placeholder={solving ? '?' : '—'}
+              disabled={solving}
+              onChange={e => onChange(i, 'score', e.target.value)}
+              aria-label="Your score percent"
+            />
+            <button type="button" className="icon-btn" onClick={() => onRemove(i)} disabled={rows.length <= 2} aria-label={`Remove ${r.name}`}>
+              <Icons.Close size={14} />
+            </button>
+          </React.Fragment>
+        )
+      })}
+    </div>
+  )
+}
+
+function WhatIfModal({ token, transcript, onClose }) {
+  const [fetchedCourses, setFetchedCourses] = useState([])
+  const [courseCode, setCourseCode]   = useState('')
+  const [rows, setRows]               = useState(DEFAULT_WHATIF_ROWS)
+  const [solveIndex, setSolveIndex]   = useState(DEFAULT_WHATIF_ROWS.length - 1)
+  const [isDefault, setIsDefault]     = useState(true)
   const [target, setTarget]           = useState(85)
-  const [components, setComponents]   = useState([])
   const [result, setResult]           = useState(null)
   const [loading, setLoading]         = useState(false)
   const [loadingComp, setLoadingComp] = useState(false)
   const [err, setErr]                 = useState('')
 
-  // 1. Initialize from props and auto-fetch spring-2026 courses
+  // The modal can open before SDU data arrives, so derive from the prop on every render
+  const transcriptCourses = currentTermCourses(transcript)
+  const courses = transcriptCourses.length ? transcriptCourses : fetchedCourses
+  const courseCodes = courses.map(c => c.code).join('|')
+
+  // 1. No SDU transcript (password-only account): fall back to this term's stored grades
   useEffect(() => {
-    const list = (courses || []).map(c => ({
-      code: c.code || c.course_code || '',
-      course: c.course || c.course_name || c.lesson || 'Course',
-      score: c.score ?? c.grade ?? c.grade_percent ?? null
-    })).filter(c => c.code)
+    if (transcriptCourses.length || !token) return
+    api('/api/student/grades?semester=spring-2026', token)
+      .then(d => setFetchedCourses((d?.items || []).map(c => ({ code: c.code, course: c.course, score: c.score }))))
+      .catch(e => setErr(e.message))
+  }, [transcriptCourses.length, token])
 
-    if (list.length) {
-      setAvailableCourses(list)
-      setCourseCode(list[0].code)
-    }
+  // Keep the selection valid when the course list appears or changes
+  useEffect(() => {
+    const codes = courseCodes ? courseCodes.split('|') : []
+    if (!codes.includes(courseCode)) setCourseCode(codes[0] ?? '')
+  }, [courseCodes, courseCode])
 
-    if (token) {
-      api('/api/student/grades?semester=spring-2026', token)
-        .then(d => {
-          if (d?.items?.length) {
-            setAvailableCourses(d.items)
-            // The transcript codes used for the first render may not exist in this term's grade list
-            setCourseCode(prev => (d.items.some(c => c.code === prev) ? prev : d.items[0].code))
-          }
-        })
-        .catch(() => {})
-    }
-  }, [courses, token])
-
-  // 2. Load assessment breakdown components when courseCode changes
+  // 2. Prefill from a stored breakdown when there is one, otherwise start from the default template
   useEffect(() => {
     if (!courseCode) return
-    setLoadingComp(true); setComponents([]); setComponent(''); setResult(null); setErr('')
+    const useTemplate = () => {
+      setRows(DEFAULT_WHATIF_ROWS); setSolveIndex(DEFAULT_WHATIF_ROWS.length - 1); setIsDefault(true)
+    }
+    setLoadingComp(true); setResult(null); setErr('')
     api(`/api/student/grades/breakdown?course_code=${encodeURIComponent(courseCode)}`, token)
       .then(d => {
         const comps = d.components || []
-        setComponents(comps)
-        setComponent(comps[0]?.name ?? '')
+        if (comps.length < 2) return useTemplate()   // SDU sync stores only a single "Final Grade"
+        const prefilled = comps.map(c => ({
+          name: c.name,
+          weight: Math.round(c.weight * 100),
+          score: (c.percentage ?? c.score) ?? '',
+        }))
+        setRows(prefilled); setSolveIndex(firstUnscored(prefilled)); setIsDefault(false)
       })
-      .catch(e => setErr(e.message))
+      .catch(useTemplate)   // 404: in-progress course SDU has not graded yet
       .finally(() => setLoadingComp(false))
   }, [courseCode, token])
 
+  const weightTotal = rows.reduce((sum, r) => sum + (Number(r.weight) || 0), 0)
+  // Mirror the backend limits so the user never gets a raw 422
+  const rowsValid = rows.every((r, i) => {
+    const weight = Number(r.weight)
+    const score = Number(r.score)
+    const scoreOk = i === solveIndex || r.score === '' || (score >= 0 && score <= 100)
+    return r.name.trim() && weight > 0 && weight <= 100 && scoreOk
+  })
+  const targetOk = target !== '' && Number(target) >= 0 && Number(target) <= 100
+  const canCalculate = !loading && !loadingComp && rowsValid && targetOk && isFullWeight(weightTotal)
+  const showRows = courses.length > 0 && !loadingComp
+
+  const updateRow = (index, field, value) => {
+    setRows(prev => prev.map((r, i) => (i === index ? { ...r, [field]: value } : r)))
+    setResult(null)
+  }
+  const addRow = () => {
+    setRows(prev => [...prev, { name: `Component ${prev.length + 1}`, weight: 0, score: '' }])
+    setResult(null)
+  }
+  const removeRow = index => {
+    setRows(prev => prev.filter((_, i) => i !== index))
+    setSolveIndex(prev => (prev === index ? 0 : prev > index ? prev - 1 : prev))
+    setResult(null)
+  }
+  const solveFor = index => { setSolveIndex(index); setResult(null) }
+
   const calculate = async () => {
-    if (!courseCode || !component) return
+    if (!courseCode || !canCalculate) return
     setLoading(true); setErr(''); setResult(null)
     try {
       const r = await api('/api/student/grades/whatif', token, {
         method: 'POST',
-        body: JSON.stringify({ course_code: courseCode, target_score: Number(target), component_name: component })
+        body: JSON.stringify({
+          course_code: courseCode,
+          target_score: Number(target),
+          component_name: rows[solveIndex].name.trim(),
+          components: rows.map((row, i) => ({
+            name: row.name.trim(),
+            weight: Number(row.weight) / 100,
+            score: i === solveIndex || row.score === '' ? null : Number(row.score),
+          })),
+        })
       })
       setResult(r)
     } catch (e) { setErr(e.message) }
@@ -1475,7 +1574,7 @@ function WhatIfModal({ token, courses, onClose }) {
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal">
+      <div className="modal modal-lg">
         <div className="modal-head">
           <div>
             <h2>What-if planner</h2>
@@ -1484,31 +1583,45 @@ function WhatIfModal({ token, courses, onClose }) {
           <button className="icon-btn" onClick={onClose} aria-label="Close"><Icons.Close size={18} /></button>
         </div>
 
-        <div className="modal-body">
-          <label>
-            Course
-            <select value={courseCode} onChange={e => setCourseCode(e.target.value)}>
-              {availableCourses.map(c => (
-                <option key={c.code} value={c.code}>
-                  {c.code} — {c.course} {c.score != null ? `(${c.score}%)` : ''}
-                </option>
-              ))}
-            </select>
-          </label>
+        <div className="modal-body modal-scroll">
+          {courses.length ? (
+            <label>
+              Course
+              <select value={courseCode} onChange={e => setCourseCode(e.target.value)}>
+                {courses.map(c => (
+                  <option key={c.code} value={c.code}>
+                    {c.code} — {c.course} {c.score != null ? `(${c.score}%)` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <p>No courses for the current term yet.</p>
+          )}
 
-          <label>
-            Component / Assessment
-            {loadingComp
-              ? <div className="loading-sm" style={{ padding: '8px 0', fontSize: '.85rem', color: 'var(--text-muted)' }}>Loading components…</div>
-              : <select value={component} onChange={e => setComponent(e.target.value)} disabled={!components.length}>
-                  {components.map(c => <option key={c.name} value={c.name}>{c.name} (weight: {Math.round(c.weight * 100)}%)</option>)}
-                </select>
-            }
-          </label>
+          {loadingComp && <div className="loading-sm">Loading components…</div>}
+          {showRows && (
+            <>
+              <WhatIfRows rows={rows} solveIndex={solveIndex} onSolve={solveFor} onChange={updateRow} onRemove={removeRow} />
+              <div className="whatif-meta">
+                <button type="button" className="btn-ghost btn-sm" onClick={addRow} disabled={rows.length >= MAX_WHATIF_ROWS}>+ Add component</button>
+                <span className={isFullWeight(weightTotal) && rowsValid ? '' : 'whatif-warn'}>
+                  {rowsValid
+                    ? `Weights total ${weightTotal}%${isFullWeight(weightTotal) ? '' : ' — must be 100%'}`
+                    : 'Each weight must be 1–100%, scores 0–100%'}
+                </span>
+              </div>
+              {isDefault && (
+                <p className="whatif-hint">
+                  SDU shares only the final course grade, so these are typical weights. Edit them to match your syllabus and enter the scores you already have.
+                </p>
+              )}
+            </>
+          )}
 
           <label>
             Target final score (0–100)
-            <input type="number" min={0} max={100} value={target} onChange={e => setTarget(e.target.value)} />
+            <input type="number" min={0} max={100} value={target} onChange={e => { setTarget(e.target.value); setResult(null) }} />
           </label>
 
           {err && <div className="alert-box alert-danger">{err}</div>}
@@ -1530,7 +1643,7 @@ function WhatIfModal({ token, courses, onClose }) {
 
         <div className="modal-foot">
           <button className="btn-ghost" onClick={onClose}>Cancel</button>
-          <button className="btn-primary" onClick={calculate} disabled={loading || !component} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <button className="btn-primary" onClick={calculate} disabled={!canCalculate} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             {loading ? 'Calculating…' : <><Icons.Sliders size={15} /> Calculate</>}
           </button>
         </div>
@@ -3465,7 +3578,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
       {showWhatIf && (
         <WhatIfModal
           token={token}
-          courses={sduData.transcript || []}
+          transcript={sduData.transcript || []}
           onClose={() => setShowWhatIf(false)}
         />
       )}
