@@ -1192,3 +1192,17 @@ def test_whatif_does_not_save_rejected_breakdown():
     bad = [{"name": "Labs", "weight": 0.5, "score": None}, {"name": "Exam", "weight": 0.5}]
     assert whatif(tok, course_code="CSS 216", target_score=80, component_name="Exam", components=bad).status_code == 400
     assert whatif_template(tok, "CSS 216").json()["source"] == "syllabus"
+
+
+def test_synced_sdu_grades_are_weighted_by_ects_like_the_official_transcript():
+    from app.main import repo, ACTIVE_TERM, student_courses
+    u = repo.create_user("Ects User", f"4{secrets.randbelow(10**8):08d}", "password123")
+    grades = [
+        {"lesson": "CSS 105", "year": ACTIVE_TERM["year"], "term": ACTIVE_TERM["term"], "grade": 90, "credits": 3, "ects": 5},
+        {"lesson": "MDE 283", "year": ACTIVE_TERM["year"], "term": ACTIVE_TERM["term"], "grade": 82, "credits": 3, "ects": 4},
+    ]
+    repo.sync_sdu_student_data(u["id"], {"student_id": u["student_id"]}, None, grades, None,
+                               active_term=ACTIVE_TERM, replace_local_grades=True)
+    assert sorted(c["credits"] for c in student_courses(u["student_id"], "spring-2026")) == [4, 5]
+    dash = client.get("/api/student/dashboard", headers=auth(token(u["student_id"], "password123"))).json()
+    assert dash["gpa"]["value"] == round((3.67 * 5 + 3.0 * 4) / 9, 2)   # A- and B, ECTS-weighted

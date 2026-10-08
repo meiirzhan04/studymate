@@ -1224,7 +1224,7 @@ class SQLiteRepository:
                     except (TypeError, ValueError):
                         grade_val = None  # "IP" etc.: not graded yet
                     course_name = names.get(str(lesson).strip().upper()) or lesson
-                    credits_val = g.get("credits") or g.get("ects") or 3
+                    credits_val = g.get("ects") or g.get("credits") or 3   # SDU GPA is ECTS-weighted
                     # Stable across restarts (built-in hash() is randomized per process)
                     code_val = lesson if names.get(str(lesson).strip().upper()) else \
                         f"SDU-{int(hashlib.sha1(str(lesson).encode()).hexdigest(), 16) % 900 + 100}"

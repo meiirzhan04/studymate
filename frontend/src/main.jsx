@@ -5,6 +5,7 @@ import {
   Tooltip, XAxis, YAxis, Scatter, ScatterChart
 } from 'recharts'
 import './styles.css'
+import { calcGPA, calcCompletedCredits, ectsOf } from './gpa.js'
 
 /* ─── API helper ──────────────────────────────────────────────────── */
 const RENDER_BACKEND_URL = 'https://studymate-knap.onrender.com'
@@ -1662,29 +1663,12 @@ function WhatIfModal({ token, transcript, onClose }) {
 }
 
 /* ─── SDU DATA CALCULATORS & HELPERS ──────────────────────────────── */
-function calcGPA(transcript) {
-  if (!transcript || !transcript.length) return null
-  const graded = transcript.filter(c => c.grade_point != null && !isNaN(Number(c.grade_point)) && (c.credits || c.ects))
-  if (!graded.length) return null
-  const totalCredits = graded.reduce((sum, c) => sum + Number(c.credits || c.ects || 3), 0)
-  const totalPoints = graded.reduce((sum, c) => sum + (Number(c.grade_point) * Number(c.credits || c.ects || 3)), 0)
-  const res = totalCredits > 0 ? (totalPoints / totalCredits) : null
-  return (res != null && !isNaN(res)) ? res : null
-}
-
 function calcOverallAttendance(attendanceList) {
   if (!attendanceList || !attendanceList.length) return 100.0
   const valid = attendanceList.filter(a => (a.absence_percent != null || a.absence != null) && !isNaN(Number(a.absence_percent ?? a.absence)))
   if (!valid.length) return 100.0
   const avgAbsence = valid.reduce((sum, a) => sum + Number(a.absence_percent ?? a.absence), 0) / valid.length
   return Math.max(0, Math.min(100, Math.round((100 - avgAbsence) * 10) / 10))
-}
-
-function calcCompletedCredits(transcript) {
-  if (!transcript || !transcript.length) return 0
-  return transcript
-    .filter(c => c.passed === true)
-    .reduce((sum, c) => sum + Number(c.credits || c.ects || 0), 0)
 }
 
 /* ─── SDU ONBOARDING / DISCONNECTED CARD ──────────────────────────── */
@@ -2108,7 +2092,7 @@ function creditBreakdown(transcript = []) {
   transcript.filter(c => c.passed === true).forEach(c => {
     const prefix = String(c.course_code || '').trim().split(/\s+/)[0].toUpperCase()
     const cat = CREDIT_CATEGORIES.find(k => k.prefixes.includes(prefix))
-    totals[cat ? cat.id : 'other'] += Number(c.credits || c.ects || 0)
+    totals[cat ? cat.id : 'other'] += ectsOf(c)
   })
   return totals
 }
@@ -2211,7 +2195,7 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, token, initi
           name: key === '—' ? 'Other' : `Sem ${key}`,
           courses,
           gpa: gpa != null ? Math.round(gpa * 100) / 100 : null,
-          credits: courses.reduce((sum, c) => sum + Number(c.credits || c.ects || 0), 0),
+          credits: courses.reduce((sum, c) => sum + ectsOf(c), 0),
         }
       })
   }, [transcript])
@@ -2230,12 +2214,12 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, token, initi
 
   const exportCSV = () => {
     if (!transcript.length) return
-    const headers = ['Semester', 'Course Code', 'Course Name', 'Credits', 'Grade (%)', 'Letter Grade', 'Grade Point', 'Status']
+    const headers = ['Semester', 'Course Code', 'Course Name', 'ECTS', 'Grade (%)', 'Letter Grade', 'Grade Point', 'Status']
     const rows = transcript.map(c => [
       c.semester ?? '',
       `"${c.course_code ?? ''}"`,
       `"${c.course_name ?? ''}"`,
-      c.credits ?? c.ects ?? '',
+      ectsOf(c),
       c.grade_percent ?? c.grade ?? '',
       `"${c.letter_grade ?? ''}"`,
       c.grade_point != null && !isNaN(Number(c.grade_point)) ? Number(c.grade_point).toFixed(2) : (c.grade_point ?? ''),
@@ -2322,7 +2306,7 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, token, initi
                     <div className="course-main">
                       <b>{courseTitle(c.course_name, c.course_code)}</b>
                       <span>
-                        {c.course_code} · {c.credits ?? c.ects ?? '—'} ECTS
+                        {c.course_code} · {ectsOf(c)} ECTS
                         {isFailed(c) && <span className="tone-danger"> · Not passed</span>}
                       </span>
                     </div>

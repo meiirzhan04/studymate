@@ -133,12 +133,15 @@ def weighted_score(record: dict) -> Optional[float]:
     return round(sum(c["score"] * c["weight"] for c in components), 1)
 
 
+# Official SDU scale, as printed on the my.sdu.edu.kz transcript: (min percent, grade point)
+SDU_GRADE_POINTS = (
+    (95, 4.0), (90, 3.67), (85, 3.33), (80, 3.0), (75, 2.67), (70, 2.33),
+    (65, 2.0), (60, 1.67), (55, 1.33), (50, 1.0),
+)
+
+
 def grade_point(score: float) -> float:
-    if score >= 90: return 4.0
-    if score >= 80: return 3.0
-    if score >= 70: return 2.0
-    if score >= 60: return 1.0
-    return 0.0
+    return next((gp for minimum, gp in SDU_GRADE_POINTS if score >= minimum), 0.0)
 
 
 def sign(payload: str) -> str:
@@ -1371,7 +1374,7 @@ def student_dashboard(user: Annotated[User, Depends(require_role("student"))], s
         else:
             c["progress"] = 100.0
 
-    return {"semester": semester, "gpa": {"value": gpa, "data_status": "available" if gpa is not None else "insufficient_data", "scale": "demo_4_point_unconfirmed"}, "attendance": {"value": repo.attendance.get(user.student_id), "data_status": "available"}, "credits": credits, "courses": courses, "alerts": alerts, "recommendations": recommendations, "updated_at": datetime.now(timezone.utc).isoformat()}
+    return {"semester": semester, "gpa": {"value": gpa, "data_status": "available" if gpa is not None else "insufficient_data", "scale": "sdu_4_point"}, "attendance": {"value": repo.attendance.get(user.student_id), "data_status": "available"}, "credits": credits, "courses": courses, "alerts": alerts, "recommendations": recommendations, "updated_at": datetime.now(timezone.utc).isoformat()}
 
 
 @app.get("/api/student/grades")
