@@ -155,6 +155,13 @@ class SQLiteRepository:
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY (user_id, kind)
                 );
+                CREATE TABLE IF NOT EXISTS whatif_templates (
+                    user_id TEXT NOT NULL,
+                    course_code TEXT NOT NULL,
+                    components_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (user_id, course_code)
+                );
                 CREATE TABLE IF NOT EXISTS support_tickets (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id TEXT,
@@ -502,6 +509,22 @@ class SQLiteRepository:
     def get_assessment_items(self, grade_id: int):
         with self.connect() as db:
             return [dict(r) for r in db.execute("SELECT * FROM assessment_items WHERE grade_id = ?", (grade_id,))]
+
+    def get_whatif_template(self, user_id: str, course_code: str) -> list[dict] | None:
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT components_json FROM whatif_templates WHERE user_id = ? AND course_code = ?",
+                (user_id, course_code)
+            ).fetchone()
+            return json.loads(row["components_json"]) if row else None
+
+    def save_whatif_template(self, user_id: str, course_code: str, components: list[dict]) -> None:
+        with self.connect() as db:
+            db.execute(
+                "INSERT OR REPLACE INTO whatif_templates (user_id, course_code, components_json, updated_at) VALUES (?, ?, ?, ?)",
+                (user_id, course_code, json.dumps(components), datetime.now(timezone.utc).isoformat())
+            )
+            db.commit()
 
     def get_notifications(self, student_id: str):
         with self.connect() as db:

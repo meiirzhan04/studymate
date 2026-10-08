@@ -1424,9 +1424,17 @@ const currentTermCourses = (transcript = []) => {
     .map(c => ({ code: c.course_code, course: c.course_name || c.course_code, score: c.grade_percent ?? null }))
 }
 
+const WHATIF_SOURCE_HINTS = {
+  saved: 'Remembered from your last calculation for this course.',
+  syllabus: 'Weights from the official course syllabus. Enter the scores you already have; edit if your section differs.',
+  default: 'SDU shares only the final course grade, so these are typical weights. Edit them to match your syllabus and enter the scores you already have.',
+}
+
+// Solve for the first missing score; with nothing entered yet, the last component (usually the final)
 const firstUnscored = rows => {
-  const i = rows.findIndex(r => r.score === '')
-  return i >= 0 ? i : rows.length - 1
+  const missing = rows.map((r, i) => (r.score === '' ? i : -1)).filter(i => i >= 0)
+  if (!missing.length || missing.length === rows.length) return rows.length - 1
+  return missing[0]
 }
 
 const isFullWeight = total => Math.abs(total - 100) < 0.5
@@ -1475,7 +1483,8 @@ function WhatIfModal({ token, transcript, onClose }) {
   const [courseCode, setCourseCode]   = useState('')
   const [rows, setRows]               = useState(DEFAULT_WHATIF_ROWS)
   const [solveIndex, setSolveIndex]   = useState(DEFAULT_WHATIF_ROWS.length - 1)
-  const [isDefault, setIsDefault]     = useState(true)
+  const [source, setSource]           = useState('default')
+  const [sourceLabel, setSourceLabel] = useState(null)
   const [target, setTarget]           = useState(85)
   const [result, setResult]           = useState(null)
   const [loading, setLoading]         = useState(false)
@@ -1501,25 +1510,24 @@ function WhatIfModal({ token, transcript, onClose }) {
     if (!codes.includes(courseCode)) setCourseCode(codes[0] ?? '')
   }, [courseCodes, courseCode])
 
-  // 2. Prefill from a stored breakdown when there is one, otherwise start from the default template
+  // 2. Starting breakdown: the student's saved one > stored grades > course syllabus > default
   useEffect(() => {
     if (!courseCode) return
-    const useTemplate = () => {
-      setRows(DEFAULT_WHATIF_ROWS); setSolveIndex(DEFAULT_WHATIF_ROWS.length - 1); setIsDefault(true)
+    const applyTemplate = (list, nextSource, nextLabel) => {
+      setRows(list); setSolveIndex(firstUnscored(list)); setSource(nextSource); setSourceLabel(nextLabel)
     }
     setLoadingComp(true); setResult(null); setErr('')
-    api(`/api/student/grades/breakdown?course_code=${encodeURIComponent(courseCode)}`, token)
+    api(`/api/student/grades/whatif/template?course_code=${encodeURIComponent(courseCode)}`, token)
       .then(d => {
-        const comps = d.components || []
-        if (comps.length < 2) return useTemplate()   // SDU sync stores only a single "Final Grade"
-        const prefilled = comps.map(c => ({
+        const list = (d.components || []).map(c => ({
           name: c.name,
-          weight: Math.round(c.weight * 100),
-          score: (c.percentage ?? c.score) ?? '',
+          weight: Math.round(c.weight * 1000) / 10,
+          score: c.score ?? '',
         }))
-        setRows(prefilled); setSolveIndex(firstUnscored(prefilled)); setIsDefault(false)
+        if (list.length < 2) return applyTemplate(DEFAULT_WHATIF_ROWS, 'default', null)
+        applyTemplate(list, d.source, d.label)
       })
-      .catch(useTemplate)   // 404: in-progress course SDU has not graded yet
+      .catch(() => applyTemplate(DEFAULT_WHATIF_ROWS, 'default', null))
       .finally(() => setLoadingComp(false))
   }, [courseCode, token])
 
@@ -1611,9 +1619,10 @@ function WhatIfModal({ token, transcript, onClose }) {
                     : 'Each weight must be 1–100%, scores 0–100%'}
                 </span>
               </div>
-              {isDefault && (
+              {WHATIF_SOURCE_HINTS[source] && (
                 <p className="whatif-hint">
-                  SDU shares only the final course grade, so these are typical weights. Edit them to match your syllabus and enter the scores you already have.
+                  {sourceLabel && <b>{sourceLabel}. </b>}
+                  {WHATIF_SOURCE_HINTS[source]}
                 </p>
               )}
             </>

@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 from .repository import LOW_GRADE_THRESHOLD, MIN_ATTENDANCE, SQLiteRepository
 from . import admin, sdu_client, sdu_mock
 from . import deadlines as deadlines_mod
+from . import syllabi
 
 
 class SduAuthorizeRequest(BaseModel):
@@ -1438,10 +1439,10 @@ def grades_breakdown(user: Annotated[User, Depends(require_role("student"))], co
     }
 
 
-def stored_components(student_id: str, course_code: str) -> list[dict]:
+def find_stored_components(student_id: str, course_code: str) -> Optional[list[dict]]:
     course = next((c for c in repo.grades if c["student_id"] == student_id and c["code"] == course_code), None)
     if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
+        return None
     items = repo.get_assessment_items(course["id"])
     if items:
         return [{"name": i["name"], "weight": i["weight"], "score": i["score"] / i["max_score"] * 100} for i in items]
@@ -1472,9 +1473,33 @@ def solve_whatif(components: list[dict], component_name: str, target_score: floa
 
 @app.post("/api/student/grades/whatif")
 def grades_whatif(user: Annotated[User, Depends(require_role("student"))], req: WhatIfRequest):
-    components = [c.model_dump() for c in req.components] if req.components \
-        else stored_components(user.student_id, req.course_code)
-    return solve_whatif(components, req.component_name, req.target_score)
+    if not req.components:
+        components = find_stored_components(user.student_id, req.course_code)
+        if components is None:
+            raise HTTPException(status_code=404, detail="Course not found")
+        return solve_whatif(components, req.component_name, req.target_score)
+
+    components = [c.model_dump() for c in req.components]
+    verdict = solve_whatif(components, req.component_name, req.target_score)
+    # Only a breakdown that passed validation is remembered for next time
+    repo.save_whatif_template(user.id, syllabi.normalize_code(req.course_code), components)
+    return verdict
+
+
+@app.get("/api/student/grades/whatif/template")
+def grades_whatif_template(user: Annotated[User, Depends(require_role("student"))],
+                           course_code: str = Query(min_length=1, max_length=20)):
+    """Starting breakdown for the planner: the student's own > stored grades > syllabus > default."""
+    saved = repo.get_whatif_template(user.id, syllabi.normalize_code(course_code))
+    if saved:
+        return {"source": "saved", "label": "Your saved breakdown", "components": saved}
+    stored = find_stored_components(user.student_id, course_code)
+    if stored and len(stored) > 1:   # SDU sync keeps only a single "Final Grade"
+        return {"source": "grades", "label": None, "components": stored}
+    preset = syllabi.preset_for(course_code)
+    if preset:
+        return {"source": "syllabus", "label": syllabi.SYLLABUS_LABEL, "components": preset}
+    return {"source": "default", "label": None, "components": syllabi.as_components(syllabi.DEFAULT_COMPONENTS)}
 
 
 def whatif_verdict(needed_score: float, component_name: str, target_score: float) -> dict:

@@ -1139,3 +1139,56 @@ def test_whatif_rejects_incomplete_or_inconsistent_components():
     assert dup.status_code == 400
     no_target = whatif(tok, **{**base, "component_name": "Quiz"}, components=[{"name": "Final", "weight": 1.0}])
     assert no_target.status_code == 404
+
+
+def whatif_template(tok, code):
+    return client.get("/api/student/grades/whatif/template", params={"course_code": code}, headers=auth(tok))
+
+
+def fresh_student():
+    from app.main import repo
+    u = repo.create_user("Template User", f"4{secrets.randbelow(10**8):08d}", "password123")
+    return token(u["student_id"], "password123")
+
+
+def test_whatif_template_uses_syllabus_preset_for_known_course():
+    tok = fresh_student()
+    body = whatif_template(tok, "CSS 216").json()
+    assert body["source"] == "syllabus"
+    assert [(c["name"], c["weight"]) for c in body["components"]] == [
+        ("Homework", 0.2), ("Quiz", 0.2), ("Midterm", 0.2), ("Final Exam", 0.2), ("Final Project", 0.2)]
+    assert whatif_template(tok, "inf451").json()["source"] == "syllabus"     # code spacing/case ignored
+    law = whatif_template(tok, "MDE 162").json()["components"]
+    assert round(sum(c["weight"] for c in law), 3) == 1.0
+
+
+def test_whatif_template_defaults_for_unknown_course():
+    body = whatif_template(fresh_student(), "XYZ 999").json()
+    assert body["source"] == "default"
+    assert [c["weight"] for c in body["components"]] == [0.3, 0.3, 0.4]
+
+
+def test_whatif_template_prefers_stored_breakdown_for_seeded_course():
+    tok = token("240103118", "studymate2026")
+    items = client.get("/api/student/grades?semester=spring-2026", headers=auth(tok)).json()["items"]
+    code = next(i["code"] for i in items if len(i["components"]) > 1)
+    body = whatif_template(tok, code).json()
+    assert body["source"] == "grades"
+    assert len(body["components"]) >= 2 and all(c["score"] is not None for c in body["components"])
+
+
+def test_whatif_remembers_own_breakdown_per_user_and_course():
+    tok, other = fresh_student(), fresh_student()
+    comps = [{"name": "Labs", "weight": 0.5, "score": 90}, {"name": "Exam", "weight": 0.5, "score": None}]
+    assert whatif(tok, course_code="MDE 162", target_score=80, component_name="Exam", components=comps).status_code == 200
+    saved = whatif_template(tok, "MDE 162").json()
+    assert saved["source"] == "saved"
+    assert [(c["name"], c["weight"], c["score"]) for c in saved["components"]] == [("Labs", 0.5, 90.0), ("Exam", 0.5, None)]
+    assert whatif_template(other, "MDE 162").json()["source"] == "syllabus"   # other students are unaffected
+
+
+def test_whatif_does_not_save_rejected_breakdown():
+    tok = fresh_student()
+    bad = [{"name": "Labs", "weight": 0.5, "score": None}, {"name": "Exam", "weight": 0.5}]
+    assert whatif(tok, course_code="CSS 216", target_score=80, component_name="Exam", components=bad).status_code == 400
+    assert whatif_template(tok, "CSS 216").json()["source"] == "syllabus"
