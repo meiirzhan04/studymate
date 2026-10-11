@@ -1022,7 +1022,8 @@ def seconds_since(iso_time: Optional[str]) -> float:
 MOODLE_SCOPE = "moodle:read"
 # Each student links Moodle on SDU Platform itself; without that link SDU answers 409 moodle_reconnect_required
 SDU_PLATFORM_MOODLE_URL = os.getenv("SDU_PLATFORM_MOODLE_URL", "https://sdu.javazhan.tech/moodle")
-MOODLE_NOT_LINKED = "Moodle is not linked to your SDU Platform account. Connect it on SDU Platform → Moodle, then refresh."
+MOODLE_NOT_LINKED = ("SDU Platform asks to connect or reconnect Moodle before other apps can read deadlines. "
+                     "Open SDU Platform → Moodle, check the connection, then refresh StudyMate.")
 
 
 async def fetch_deadlines(conn: dict, student_id: Optional[str]) -> tuple[list, bool, Optional[str]]:
