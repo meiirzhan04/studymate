@@ -28,6 +28,7 @@ from .repository import LOW_GRADE_THRESHOLD, MIN_ATTENDANCE, SQLiteRepository
 from . import admin, sdu_client, sdu_mock
 from . import deadlines as deadlines_mod
 from . import syllabi
+from . import db as dbmod
 
 
 class SduAuthorizeRequest(BaseModel):
@@ -263,7 +264,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 @app.get("/health")
-def health(): return {"status": "ok", "time": datetime.now(timezone.utc).isoformat()}
+def health(): return {"status": "ok", "db": dbmod.BACKEND, "time": datetime.now(timezone.utc).isoformat()}
 
 
 @app.post("/api/auth/login")

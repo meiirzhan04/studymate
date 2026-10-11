@@ -40,7 +40,14 @@ pytest
 
 ## Configuration
 
-Copy `.env.example` to `.env` if you want to override `SQLITE_PATH`. SQLite is used for now; the repository boundary keeps a later PostgreSQL migration isolated from the API contract.
+Copy `.env.example` to `.env` if you want to override `SQLITE_PATH`.
+
+### Database
+
+- Without `DATABASE_URL` the API uses SQLite (`SQLITE_PATH`), which is what local development and the tests use.
+- With `DATABASE_URL` (a Postgres URL, e.g. a free Neon database) the same code runs on Postgres; `app/db.py` translates the SQLite-dialect SQL. Production needs this: Render's free instances lose their disk on every deploy and restart.
+- `GET /health` reports which backend is active (`"db": "postgres"` or `"sqlite"`).
+- Run the suite on Postgres with a throwaway database: `TEST_DATABASE_URL=postgresql://... python -m pytest` (the schema in that database is dropped first, so never point it at production).
 
 ## Railway deployment
 

@@ -134,7 +134,7 @@ def create_admin_router(repo: SQLiteRepository, sign: Callable[[str], str], sdu_
             "open_support_tickets": len(repo.list_support_tickets(status="open")),
             "system": {
                 "database_path": db_path,
-                "database_ephemeral": db_path.startswith("/tmp"),
+                "database_ephemeral": not db_path.startswith("postgres") and (db_path.startswith("/tmp") or bool(os.getenv("RENDER"))),
                 "sdu_origin": sdu_origin,
                 "sdu_client_id": sdu_client_id,
                 "admin_password_from_env": bool(os.getenv("ADMIN_PASSWORD")),

@@ -5,12 +5,11 @@ import hmac
 import json
 import os
 import secrets
-import sqlite3
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import deadlines as deadlines_mod, sdu_mock
+from . import db as dbmod, deadlines as deadlines_mod, sdu_mock
 
 # Alert thresholds (US-05)
 LOW_GRADE_THRESHOLD = 60
@@ -22,9 +21,15 @@ def hash_password(password: str, salt: str) -> str:
 
 
 class SQLiteRepository:
-    """Small SQLite repository for local development and the current MVP."""
+    """Repository in SQLite's SQL dialect; runs on Postgres when DATABASE_URL is set (see db.py)."""
 
     def __init__(self, database_path: str | None = None):
+        # An explicit file path always means SQLite (tests use throwaway files); otherwise DATABASE_URL decides
+        self.backend = "sqlite" if database_path else dbmod.BACKEND
+        if self.backend == "postgres":
+            self.path = dbmod.describe()
+            self._initialize()
+            return
         default_path = Path(__file__).resolve().parents[1] / "data" / "student_monitoring.db"
         candidate = Path(database_path or os.getenv("SQLITE_PATH", str(default_path)))
         try:
@@ -38,10 +43,7 @@ class SQLiteRepository:
         self._initialize()
 
     def connect(self):
-        connection = sqlite3.connect(self.path)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        return connection
+        return dbmod.connect_postgres() if self.backend == "postgres" else dbmod.connect_sqlite(self.path)
 
     def _initialize(self):
         with self.connect() as db:
@@ -206,8 +208,10 @@ class SQLiteRepository:
             # Built-in accounts that an admin deleted must not be re-created on restart
             deleted = {r[0] for r in db.execute("SELECT user_id FROM deleted_accounts")}
 
-            # Check if the real SDU Information Systems curriculum is loaded
-            has_is = db.execute("SELECT COUNT(*) FROM grades WHERE code = 'CSS 105'").fetchone()[0]
+            # The demo curriculum wipes grades/notifications before seeding, so it may only ever run on a
+            # database without semesters. Keying it on a seeded grade (as before) could erase real
+            # SDU-synced data on restart once the database persists.
+            has_is = db.execute("SELECT COUNT(*) FROM semesters").fetchone()[0]
             if has_is == 0:
                 self._seed_is_curriculum(db)
             else:
@@ -579,7 +583,7 @@ class SQLiteRepository:
                            WHEN identifier LIKE '%@gmail.com' THEN 1 
                            ELSE 2 
                        END, 
-                       rowid DESC 
+                       identifier
                    LIMIT 1""",
                 (user_id,)
             ).fetchone()
@@ -1058,7 +1062,7 @@ class SQLiteRepository:
                            c.expires_at AS sdu_expires_at, {self._DEMO_SQL} AS sdu_demo,
                            (SELECT GROUP_CONCAT(identifier, ', ') FROM login_identifiers i WHERE i.user_id = u.id) AS identifiers
                     FROM users u LEFT JOIN sdu_connections c ON c.user_id = u.id
-                    WHERE ? = '' OR u.name LIKE ? OR u.id LIKE ? OR IFNULL(u.student_id, '') LIKE ?
+                    WHERE ? = '' OR u.name LIKE ? OR u.id LIKE ? OR COALESCE(u.student_id, '') LIKE ?
                        OR u.id IN (SELECT user_id FROM login_identifiers WHERE identifier LIKE ?)
                     ORDER BY u.role DESC, u.name LIMIT ?""",
                 (sdu_mock.DEMO_ACCESS_TOKEN, sdu_mock.DEMO_SCOPE, query, like, like, like, like, limit)

@@ -1246,3 +1246,26 @@ def test_demo_attendance_for_a_past_semester_lists_that_semesters_courses():
     past = client.get("/api/sdu/attendance", params={"terms_back": 1}, headers=auth(tok)).json()["attendance"]
     assert past and {a["lesson"] for a in past} != {a["lesson"] for a in current}
     assert all(0 <= a["absence_percent"] <= 30 for a in past)
+
+
+# ─── Persistence: a restart must never wipe real data ───────────────────────
+def test_restart_keeps_sdu_data_even_without_seeded_css105_grades():
+    from app.main import repo, ACTIVE_TERM
+    from app.repository import SQLiteRepository
+    u = repo.create_user("Restart User", f"4{secrets.randbelow(10**8):08d}", "password123")
+    sid = u["student_id"]
+    grades = [{"lesson": "INF 451", "year": ACTIVE_TERM["year"], "term": ACTIVE_TERM["term"], "grade": 77, "ects": 5}]
+    repo.sync_sdu_student_data(u["id"], {"student_id": sid}, None, grades, None,
+                               active_term=ACTIVE_TERM, replace_local_grades=True)
+    repo.save_sdu_connection(u["id"], "live-token", time.time() + 3600, "grades-attendance:read")
+    repo.save_whatif_template(u["id"], "INF451", [{"name": "Final", "weight": 1.0, "score": None}])
+    with repo.connect() as db:   # the old trigger for a full re-seed
+        db.execute("DELETE FROM assessment_items WHERE grade_id IN (SELECT id FROM grades WHERE code = 'CSS 105')")
+        db.execute("DELETE FROM grades WHERE code = 'CSS 105'")
+
+    restarted = SQLiteRepository() if repo.backend == "postgres" else SQLiteRepository(str(repo.path))
+
+    assert [g["course"] for g in restarted.grades if g["student_id"] == sid] == ["INF 451"]
+    assert restarted.get_sdu_connection(u["id"])["access_token"] == "live-token"
+    assert restarted.get_whatif_template(u["id"], "INF451")
+    assert restarted.authenticate(u["student_id"], "password123")["id"] == u["id"]
