@@ -1269,3 +1269,21 @@ def test_restart_keeps_sdu_data_even_without_seeded_css105_grades():
     assert restarted.get_sdu_connection(u["id"])["access_token"] == "live-token"
     assert restarted.get_whatif_template(u["id"], "INF451")
     assert restarted.authenticate(u["student_id"], "password123")["id"] == u["id"]
+
+
+def test_moodle_not_linked_on_sdu_platform_points_the_student_to_fix_it(monkeypatch):
+    import app.sdu_client as sdu_mod
+    from app.main import repo
+    u = repo.create_user("Moodle Unlinked", f"stu_ml_{secrets.token_hex(4)}", "password123")
+    tok = token(u["student_id"], "password123")
+    repo.save_sdu_connection(u["id"], "live_token_ml", time.time() + 3600, "profile:read moodle:read")
+
+    async def moodle_409(endpoint, access_token, params=None, client=None):
+        return 409, {"detail": {"code": "moodle_reconnect_required", "message": "Connect or reconnect Moodle in SDU Platform"}}
+    monkeypatch.setattr(sdu_mod, "fetch_sdu_data", moodle_409)
+
+    res = client.get("/api/sdu/deadlines", headers=auth(tok)).json()
+    assert res["available"] is False
+    assert "Moodle" in res["reason"] and "SDU Platform" in res["reason"]
+    assert res["action_url"] == "https://sdu.javazhan.tech/moodle"
+    assert repo.get_sdu_connection(u["id"]) is not None      # SDU itself stays connected

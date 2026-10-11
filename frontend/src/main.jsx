@@ -1825,7 +1825,14 @@ function ComingUpCard({ nextInfo, deadlines, onOpenSchedule }) {
       <div className="up-section">
         <span className="up-label">Deadlines this week</span>
         {err || (data && !data.available) ? (
-          <p className="muted up-empty">{err || data.reason}</p>
+          <p className="muted up-empty">
+            {err || data.reason}
+            {!err && data.action_url && (
+              <a className="link-btn up-action" href={data.action_url} target="_blank" rel="noopener noreferrer">
+                Open SDU Platform → Moodle <Icons.ArrowRight size={14} />
+              </a>
+            )}
+          </p>
         ) : !data ? (
           <div className="skeleton" style={{ height: 40, marginTop: 8 }} />
         ) : !upcoming.length ? (

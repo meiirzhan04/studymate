@@ -1020,6 +1020,9 @@ def seconds_since(iso_time: Optional[str]) -> float:
 
 
 MOODLE_SCOPE = "moodle:read"
+# Each student links Moodle on SDU Platform itself; without that link SDU answers 409 moodle_reconnect_required
+SDU_PLATFORM_MOODLE_URL = os.getenv("SDU_PLATFORM_MOODLE_URL", "https://sdu.javazhan.tech/moodle")
+MOODLE_NOT_LINKED = "Moodle is not linked to your SDU Platform account. Connect it on SDU Platform → Moodle, then refresh."
 
 
 async def fetch_deadlines(conn: dict, student_id: Optional[str]) -> tuple[list, bool, Optional[str]]:
@@ -1034,6 +1037,8 @@ async def fetch_deadlines(conn: dict, student_id: Optional[str]) -> tuple[list, 
         reason = sdu_short_message(data)
         admin.record_sdu_error("moodle/deadlines", status_code, reason or "request failed", student_id)
         if status_code == 409:
+            if "moodle" in (reason or "").lower():
+                return [], False, MOODLE_NOT_LINKED
             return [], False, f"SDU needs an action before Moodle deadlines can load: {reason or 'link your Moodle account or sign in again on the SDU portal'}."
         return [], False, f"Moodle deadlines are unavailable right now ({status_code})."
     items, problem = deadlines_mod.normalize(data)
@@ -1051,6 +1056,7 @@ async def sdu_deadlines(user: Annotated[User, Depends(current_user)], days: int 
     return {
         "available": available,
         "reason": reason,
+        "action_url": SDU_PLATFORM_MOODLE_URL if reason == MOODLE_NOT_LINKED else None,
         "days": days,
         "upcoming": deadlines_mod.upcoming(items, days),
         "overdue": deadlines_mod.missed(items),

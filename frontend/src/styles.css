@@ -1130,3 +1130,4 @@ button.avatar:hover { box-shadow: 0 0 0 3px var(--accent-ring); }
   .whatif-grid-head { font-size: 11px; }
 }
 .modal-body .whatif-hint b { font-weight: 600; color: var(--text-secondary); }
+.up-action { display: flex; width: fit-content; align-items: center; gap: 4px; margin-top: 6px; }
