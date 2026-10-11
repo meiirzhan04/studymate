@@ -771,6 +771,12 @@ def sdu_demo_connect(user: Annotated[Optional[User], Depends(optional_current_us
 ACTIVE_TERM = {"year": 2026, "term": 1}
 
 
+def term_shift(active: dict, terms_back: int) -> dict:
+    """SDU terms run (year, 1) -> (year, 2) -> (year + 1, 1); walk back `terms_back` of them."""
+    index = active["year"] * 2 + (active["term"] - 1) - terms_back
+    return {"year": index // 2, "term": index % 2 + 1}
+
+
 def extract_transcript(data) -> Optional[list]:
     if isinstance(data, list):
         return data
@@ -1153,16 +1159,19 @@ async def sdu_live_attendance(
     user: Annotated[User, Depends(current_user)],
     year: Optional[int] = None,
     term: Optional[int] = None,
-    all_terms: Optional[bool] = Query(False)
+    all_terms: Optional[bool] = Query(False),
+    terms_back: Optional[int] = Query(None, ge=0, le=20),   # US-09: 1 = previous semester
 ):
     conn = require_sdu_connection(user.id)
+    if terms_back is not None:
+        shifted = term_shift(ACTIVE_TERM, terms_back)
+        year, term = shifted["year"], shifted["term"]
     if sdu_mock.is_demo_connection(conn):
-        return sdu_mock.attendance()
+        return sdu_mock.attendance(terms_back or 0)
 
     params = {}
     if not all_terms and year is None and term is None:
-        params["year"] = 2026
-        params["term"] = 1
+        params.update(ACTIVE_TERM)
     elif year is not None and term is not None:
         params["year"] = year
         params["term"] = term

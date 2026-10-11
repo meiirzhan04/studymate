@@ -11,6 +11,7 @@ with real university data.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 from datetime import datetime, timezone
 
@@ -149,11 +150,21 @@ def transcript(semester: int | None = None, passed: bool | None = None) -> dict:
     return {"source": DEMO_SOURCE, "fetched_at": _now(), "courses": courses}
 
 
-def attendance() -> dict:
-    items = [
-        {"lesson": lesson, "year": _YEAR, "term": _TERM, "absence_percent": absence, "updated_at": _now()}
-        for lesson, absence in _ATTENDANCE_ROWS
-    ]
+def attendance(terms_back: int = 0) -> dict:
+    if terms_back <= 0:
+        items = [
+            {"lesson": lesson, "year": _YEAR, "term": _TERM, "absence_percent": absence, "updated_at": _now()}
+            for lesson, absence in _ATTENDANCE_ROWS
+        ]
+    else:
+        # A past term: that transcript semester's courses with stable, made-up absence
+        semester = max(row[0] for row in _TRANSCRIPT_ROWS) - terms_back + 1
+        index = _YEAR * 2 + (_TERM - 1) - terms_back
+        items = [
+            {"lesson": name, "year": index // 2, "term": index % 2 + 1,
+             "absence_percent": float(int(hashlib.sha1(code.encode()).hexdigest(), 16) % 16), "updated_at": _now()}
+            for sem, code, name, _ects, _pct in _TRANSCRIPT_ROWS if sem == semester
+        ]
     return {"source": DEMO_SOURCE, "fetched_at": _now(), "attendance": items}
 
 

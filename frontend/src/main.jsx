@@ -1776,6 +1776,21 @@ function useDeadlines(token, connected) {
   return { data, err }
 }
 
+// US-09: SDU attendance for an earlier semester (termsBack = 1 is the previous one)
+function usePastAttendance(token, connected, termsBack) {
+  const [state, setState] = useState({ termsBack: 0, list: [], loading: false, failed: false })
+  useEffect(() => {
+    if (!connected || termsBack <= 0) return
+    let cancelled = false
+    setState({ termsBack, list: [], loading: true, failed: false })
+    api(`/api/sdu/attendance?terms_back=${termsBack}`, token)
+      .then(d => !cancelled && setState({ termsBack, list: d?.attendance || [], loading: false, failed: false }))
+      .catch(() => !cancelled && setState({ termsBack, list: [], loading: false, failed: true }))
+    return () => { cancelled = true }
+  }, [token, connected, termsBack])
+  return state.termsBack === termsBack ? state : { termsBack, list: [], loading: termsBack > 0, failed: false }
+}
+
 function ComingUpCard({ nextInfo, deadlines, onOpenSchedule }) {
   const [showAll, setShowAll] = useState(false)
   const c = nextInfo?.course
@@ -1876,6 +1891,9 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token
   const [semester, setSemester] = useState(null)
   const connected = !!sduStatus?.connected
   const deadlines = useDeadlines(token, connected)
+  const latestSem = latestSemester(sduData.transcript || [])
+  const termsBack = semester != null && latestSem != null ? Math.max(0, latestSem - semester) : 0
+  const pastAttendance = usePastAttendance(token, connected, termsBack)
 
   useEffect(() => {
     if (!token || !connected) return
@@ -1901,8 +1919,12 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token
   const showCumulative = isCurrent && semesterGpa == null
   const gpa = showCumulative ? cumulativeGpa : semesterGpa
   const standing = gpaStanding(gpa)
-  const attendance = calcOverallAttendance(attendanceList)
+  const shownAttendance = isCurrent ? attendanceList : pastAttendance.list
+  const attendance = calcOverallAttendance(shownAttendance)
   const attStanding = attendanceStanding(attendance)
+  const pastAttendanceNote = pastAttendance.loading ? 'Loading…'
+    : pastAttendance.failed ? 'Could not load attendance for this semester'
+    : `No attendance from SDU for semester ${selected}`
   const totalCredits = calcCompletedCredits(transcript)
   const semCredits = calcCompletedCredits(semCourses)
 
@@ -1962,10 +1984,10 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token
           />
           <Metric
             label="Attendance"
-            value={isCurrent && attendanceList.length ? `${attendance}%` : '—'}
-            foot={isCurrent
-              ? <Status tone={attendanceList.length ? attStanding.tone : 'neutral'}>{attendanceList.length ? attStanding.label : 'No data yet'}</Status>
-              : <span className="muted">Available for the current term only</span>}
+            value={shownAttendance.length ? `${attendance}%` : '—'}
+            foot={isCurrent || shownAttendance.length
+              ? <Status tone={shownAttendance.length ? attStanding.tone : 'neutral'}>{shownAttendance.length ? attStanding.label : 'No data yet'}</Status>
+              : <span className="muted">{pastAttendanceNote}</span>}
           />
           <Metric
             label="Credits earned"
@@ -2331,17 +2353,69 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, token, initi
 }
 
 /* ─── GRADE BREAKDOWN (US-10) ────────────────────────────────────── */
+const SERIES_SLOTS = 6
+const BREAKDOWN_SOURCE_NOTES = {
+  syllabus: 'Weights from the official course syllabus.',
+  saved: 'Weights from your What-if planner breakdown for this course.',
+}
+const pct = weight => Math.round(weight * 1000) / 10
+const scoreOf = p => p.percentage ?? p.score
+
+// Stacked part-of-whole bar; hover or keyboard focus shows each assessment's share
+function WeightBar({ parts }) {
+  const [active, setActive] = useState(null)
+  const starts = parts.reduce((acc, p, i) => [...acc, i ? acc[i - 1] + parts[i - 1].weight : 0], [])
+  const tip = active != null ? parts[active] : null
+  return (
+    <div className="weight-viz">
+      {tip && (
+        <div className="weight-tip" role="status" style={{ left: `${(starts[active] + tip.weight / 2) * 100}%` }}>
+          <b>{tip.name}</b> · {pct(tip.weight)}% of the grade
+          {scoreOf(tip) != null && <> · scored {scoreOf(tip)}%</>}
+        </div>
+      )}
+      <div className={`weight-bar ${active != null ? 'has-active' : ''}`} onMouseLeave={() => setActive(null)}>
+        {parts.map((p, i) => (
+          <span
+            key={p.name}
+            className={`weight-seg ${active === i ? 'is-active' : ''}`}
+            style={{ flexGrow: p.weight }}
+            tabIndex={0}
+            aria-label={`${p.name}: ${pct(p.weight)}% of the grade`}
+            onMouseEnter={() => setActive(i)}
+            onFocus={() => setActive(i)}
+            onBlur={() => setActive(null)}
+          >
+            <i className={`series-${(i % SERIES_SLOTS) + 1}`} />
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function BreakdownModal({ token, course, onClose }) {
-  const [data, setData] = useState(null)
-  const [err, setErr] = useState('')
+  const [state, setState] = useState({ loading: true, parts: [], source: null, label: null })
 
   useEffect(() => {
+    let cancelled = false
+    // SDU itself only reports the final grade: fall back to the syllabus or the student's own breakdown
+    const fromTemplate = () => (course.course_code
+      ? api(`/api/student/grades/whatif/template?course_code=${encodeURIComponent(course.course_code)}`, token)
+        .then(t => (BREAKDOWN_SOURCE_NOTES[t.source] ? { parts: t.components || [], source: t.source, label: t.label } : { parts: [] }))
+      : Promise.resolve({ parts: [] }))
     api(`/api/student/grades/breakdown?course=${encodeURIComponent(course.course_name)}`, token)
-      .then(setData)
-      .catch(e => setErr(e.message))
-  }, [token, course.course_name])
+      .then(d => {
+        const parts = (d?.components || []).filter(p => p.weight != null)
+        return parts.length >= 2 ? { parts, source: 'grades', label: null } : fromTemplate()
+      })
+      .catch(fromTemplate)
+      .catch(() => ({ parts: [] }))
+      .then(result => !cancelled && setState({ loading: false, source: null, label: null, ...result }))
+    return () => { cancelled = true }
+  }, [token, course.course_name, course.course_code])
 
-  const parts = (data?.components || []).filter(p => p.weight != null)
+  const { loading, parts, source, label } = state
   const hasBreakdown = parts.length >= 2
   const finalScore = course.grade_percent ?? course.grade
 
@@ -2356,32 +2430,25 @@ function BreakdownModal({ token, course, onClose }) {
           <button type="button" className="icon-btn" onClick={onClose} aria-label="Close"><Icons.Close size={18} /></button>
         </div>
         <div className="modal-body">
-          {!data && !err ? (
+          {loading ? (
             <PageLoader label="Loading breakdown…" />
           ) : !hasBreakdown ? (
             <EmptyState
               icon={<Icons.Chart size={20} />}
               title="No assessment breakdown"
-              text="SDU provides only the final grade for this course, without the weights of quizzes, midterm and final."
+              text="SDU provides only the final grade for this course. Save your syllabus weights in the What-if planner and they will show up here."
             />
           ) : (
             <>
               <div className="viz-root">
                 <h3 className="section-title" style={{ marginTop: 0 }}>How the final grade is weighted</h3>
-                <div className="weight-bar" role="img"
-                  aria-label={parts.map(p => `${p.name} ${Math.round(p.weight * 100)}%`).join(', ')}>
-                  {parts.map((p, i) => (
-                    <span
-                      key={p.name}
-                      className={`weight-seg series-${(i % 4) + 1}`}
-                      style={{ flexGrow: p.weight }}
-                      title={`${p.name}: ${Math.round(p.weight * 100)}% of the grade · scored ${p.score ?? '—'}%`}
-                    />
-                  ))}
-                </div>
+                {BREAKDOWN_SOURCE_NOTES[source] && (
+                  <p className="breakdown-source">{label && <b>{label}. </b>}{BREAKDOWN_SOURCE_NOTES[source]}</p>
+                )}
+                <WeightBar parts={parts} />
                 <ul className="weight-legend">
                   {parts.map((p, i) => (
-                    <li key={p.name}><i className={`series-${(i % 4) + 1}`} />{p.name} <b>{Math.round(p.weight * 100)}%</b></li>
+                    <li key={p.name}><i className={`series-${(i % SERIES_SLOTS) + 1}`} />{p.name} <b>{pct(p.weight)}%</b></li>
                   ))}
                 </ul>
               </div>
@@ -2393,9 +2460,9 @@ function BreakdownModal({ token, course, onClose }) {
                   {parts.map(p => (
                     <tr key={p.name}>
                       <td>{p.name}</td>
-                      <td>{Math.round(p.weight * 100)}%</td>
-                      <td>{p.score != null ? `${p.percentage ?? p.score}%` : '—'}</td>
-                      <td>{p.score != null ? `${Math.round((p.percentage ?? p.score) * p.weight * 10) / 10} pts` : '—'}</td>
+                      <td>{pct(p.weight)}%</td>
+                      <td>{scoreOf(p) != null ? `${scoreOf(p)}%` : '—'}</td>
+                      <td>{scoreOf(p) != null ? `${Math.round(scoreOf(p) * p.weight * 10) / 10} pts` : '—'}</td>
                     </tr>
                   ))}
                 </tbody>

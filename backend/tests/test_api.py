@@ -1206,3 +1206,43 @@ def test_synced_sdu_grades_are_weighted_by_ects_like_the_official_transcript():
     assert sorted(c["credits"] for c in student_courses(u["student_id"], "spring-2026")) == [4, 5]
     dash = client.get("/api/student/dashboard", headers=auth(token(u["student_id"], "password123"))).json()
     assert dash["gpa"]["value"] == round((3.67 * 5 + 3.0 * 4) / 9, 2)   # A- and B, ECTS-weighted
+
+
+# ─── US-09: attendance for a past semester ──────────────────────────────────
+def test_term_shift_walks_back_through_sdu_terms():
+    from app.main import term_shift
+    active = {"year": 2026, "term": 1}            # 2026-2027, fall
+    assert term_shift(active, 0) == {"year": 2026, "term": 1}
+    assert term_shift(active, 1) == {"year": 2025, "term": 2}
+    assert term_shift(active, 2) == {"year": 2025, "term": 1}
+    assert term_shift(active, 3) == {"year": 2024, "term": 2}
+
+
+def test_past_semester_attendance_asks_sdu_for_that_term(monkeypatch):
+    import app.sdu_client as sdu_mod
+    from app.main import repo
+    u = repo.create_user("Past Attendance", f"stu_att_{secrets.token_hex(4)}", "password123")
+    tok = token(u["student_id"], "password123")
+    repo.save_sdu_connection(u["id"], "dummy_live_token", time.time() + 3600, "grades-attendance:read")
+    seen = []
+
+    async def fake_fetch(endpoint, access_token, params=None, client=None):
+        seen.append((endpoint, params))
+        return 200, {"source": "live_sdu", "attendance": [
+            {"lesson": "Linear Algebra", "year": params["year"], "term": params["term"], "absence_percent": 8.0}]}
+
+    monkeypatch.setattr(sdu_mod, "fetch_sdu_data", fake_fetch)
+    res = client.get("/api/sdu/attendance", params={"terms_back": 2}, headers=auth(tok))
+    assert res.status_code == 200
+    assert seen[-1] == ("attendance", {"year": 2025, "term": 1})
+    assert res.json()["attendance"][0]["lesson"] == "Linear Algebra"
+    assert client.get("/api/sdu/attendance", params={"terms_back": -1}, headers=auth(tok)).status_code == 422
+
+
+def test_demo_attendance_for_a_past_semester_lists_that_semesters_courses():
+    session = client.post("/api/sdu/demo-connect", json={}).json()
+    tok = session["access_token"]
+    current = client.get("/api/sdu/attendance", headers=auth(tok)).json()["attendance"]
+    past = client.get("/api/sdu/attendance", params={"terms_back": 1}, headers=auth(tok)).json()["attendance"]
+    assert past and {a["lesson"] for a in past} != {a["lesson"] for a in current}
+    assert all(0 <= a["absence_percent"] <= 30 for a in past)
