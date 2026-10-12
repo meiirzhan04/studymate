@@ -5,23 +5,38 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="robots" content="noindex" />
 <title>StudyMate Admin</title>
+<script>
+  const adminThemeKey = 'studymate-admin-theme'
+  const adminColorScheme = window.matchMedia('(prefers-color-scheme: dark)')
+  let adminTheme = 'system'
+  try {
+    const saved = localStorage.getItem(adminThemeKey)
+    if (['light', 'dark', 'system'].includes(saved)) adminTheme = saved
+  } catch {}
+  function applyAdminTheme() {
+    document.documentElement.dataset.theme = adminTheme === 'system'
+      ? (adminColorScheme.matches ? 'dark' : 'light') : adminTheme
+  }
+  applyAdminTheme()
+  adminColorScheme.addEventListener('change', applyAdminTheme)
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
 <style>
   :root {
+    color-scheme: light;
     --bg: #F6F7F9; --surface: #fff; --surface-2: #F1F2F5; --border: #E4E6EB;
     --text: #0F1219; --text-2: #4E5566; --muted: #8B91A0;
     --accent: #4F46E5; --accent-soft: rgba(79,70,229,.08);
     --success: #16A34A; --warning: #D97706; --danger: #DC2626;
     --success-soft: rgba(22,163,74,.1); --warning-soft: rgba(217,119,6,.11); --danger-soft: rgba(220,38,38,.09);
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #0B0C0F; --surface: #131519; --surface-2: #1A1D23; --border: #23262D;
-      --text: #ECEEF2; --text-2: #A3A9B6; --muted: #6C7280;
-      --accent: #818CF8; --accent-soft: rgba(129,140,248,.13);
-      --success: #4ADE80; --warning: #FBBF24; --danger: #F87171;
-    }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0B0C0F; --surface: #131519; --surface-2: #1A1D23; --border: #23262D;
+    --text: #ECEEF2; --text-2: #A3A9B6; --muted: #6C7280;
+    --accent: #818CF8; --accent-soft: rgba(129,140,248,.13);
+    --success: #4ADE80; --warning: #FBBF24; --danger: #F87171;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font: 14px/1.5 Inter, system-ui, sans-serif; background: var(--bg); color: var(--text); }
@@ -47,10 +62,14 @@
   .btn-danger:hover { background: var(--danger-soft); }
   .error { padding: 10px 12px; border-radius: 10px; background: var(--danger-soft); color: var(--danger); font-size: 13px; }
 
-  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 32px; border-bottom: 1px solid var(--border); background: var(--surface); }
+  header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 32px; border-bottom: 1px solid var(--border); background: var(--surface); }
   .brand { display: flex; align-items: center; gap: 10px; }
+  .header-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .theme-control { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); }
+  .theme-control select { height: 32px; }
+  button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
   .mark { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; background: var(--accent); color: #fff; font-weight: 700; }
-  nav { display: flex; gap: 4px; padding: 3px; border-radius: 10px; background: var(--surface-2); }
+  nav { display: flex; flex-wrap: wrap; gap: 4px; padding: 3px; border-radius: 10px; background: var(--surface-2); }
   nav button { height: 30px; padding: 0 12px; border-radius: 7px; font-size: 13px; font-weight: 500; color: var(--text-2); }
   nav button.active { background: var(--surface); color: var(--text); box-shadow: 0 0 0 1px var(--border); }
 
@@ -118,6 +137,13 @@
     <label>Password <input class="input" id="password" type="password" autocomplete="current-password" required /></label>
     <div id="login-error" class="error hidden"></div>
     <button class="btn btn-primary" type="submit">Sign in</button>
+    <label>Theme
+      <select class="input" data-theme-select>
+        <option value="system">System</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+      </select>
+    </label>
   </form>
 </section>
 
@@ -131,7 +157,16 @@
       <button data-tab="sdu">SDU connections</button>
       <button data-tab="errors">SDU errors</button>
     </nav>
-    <button class="btn btn-sm" id="logout">Sign out</button>
+    <div class="header-actions">
+      <label class="theme-control">Theme
+        <select class="input" data-theme-select>
+          <option value="system">System</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </label>
+      <button class="btn btn-sm" id="logout">Sign out</button>
+    </div>
   </header>
 
   <main>
@@ -205,6 +240,16 @@
 <div id="toast" class="toast hidden"></div>
 
 <script>
+  const themeSelects = document.querySelectorAll('[data-theme-select]')
+  themeSelects.forEach(select => {
+    select.value = adminTheme
+    select.addEventListener('change', () => {
+      adminTheme = select.value
+      try { localStorage.setItem(adminThemeKey, adminTheme) } catch {}
+      applyAdminTheme()
+      themeSelects.forEach(control => { control.value = adminTheme })
+    })
+  })
   const $ = id => document.getElementById(id)
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
   const fmtTime = v => {
