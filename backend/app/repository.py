@@ -775,6 +775,11 @@ class SQLiteRepository:
             row = db.execute("SELECT data_json FROM sdu_snapshots WHERE user_id = ? AND kind = ?", (user_id, kind)).fetchone()
             return json.loads(row["data_json"]) if row else None
 
+    def save_snapshot(self, user_id: str, kind: str, data: dict) -> None:
+        with self.connect() as db:
+            self._swap_snapshot(db, user_id, kind, data, datetime.now(timezone.utc).isoformat())
+            db.commit()
+
     def notify_support_reply(self, user_id: str, subject: str) -> None:
         with self.connect() as db:
             row = db.execute("SELECT student_id FROM users WHERE id = ?", (user_id,)).fetchone()
@@ -1036,6 +1041,7 @@ class SQLiteRepository:
     def delete_sdu_connection(self, user_id: str) -> bool:
         with self.connect() as db:
             cur = db.execute("DELETE FROM sdu_connections WHERE user_id = ?", (user_id,))
+            db.execute("DELETE FROM sdu_snapshots WHERE user_id = ? AND kind = 'schedule'", (user_id,))
             db.commit()
             return cur.rowcount > 0
 
@@ -1203,6 +1209,10 @@ class SQLiteRepository:
                     for c in transcript if isinstance(c, dict)
                 ]
                 self._swap_snapshot(db, user_id, "transcript", {"courses": compact}, datetime.now(timezone.utc).isoformat())
+            # Last good schedule: served when a live SDU schedule request fails or comes back empty
+            if isinstance(schedule, list) and schedule:
+                now_iso = datetime.now(timezone.utc).isoformat()
+                self._swap_snapshot(db, user_id, "schedule", {"schedule": schedule, "fetched_at": now_iso}, now_iso)
             names = {str(c.get("course_code") or "").strip().upper(): c.get("course_name")
                      for c in (transcript or []) if isinstance(c, dict) and c.get("course_code")}
 

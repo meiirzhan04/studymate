@@ -6,6 +6,7 @@ import {
 } from 'recharts'
 import './styles.css'
 import { calcGPA, calcCompletedCredits, ectsOf } from './gpa.js'
+import { UNKNOWN_DAY, classLocation, classTimes, findNextClass, getDayOrder, mergeBlocks, normalizeSchedule, sortSchedule } from './schedule.js'
 
 /* ─── API helper ──────────────────────────────────────────────────── */
 const RENDER_BACKEND_URL = 'https://studymate-knap.onrender.com'
@@ -370,80 +371,10 @@ const DAY_NAMES = ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', '
 const DAY_SHORT = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const DEGREE_CREDITS = 240
 
-function classTimes(s) {
-  const pick = v => (String(v || '').match(/\d{1,2}:\d{2}/) || [''])[0]
-  if (s.start_time || s.end_time) return [pick(s.start_time), pick(s.end_time)]
-  const parts = String(s.times || '').match(/\d{1,2}:\d{2}/g) || []
-  return [parts[0] || '', parts[1] || '']
-}
-
 function formatClassTime(s) {
   const [start, end] = classTimes(s)
   if (!start) return 'Time TBD'
   return end ? `${start} – ${end}` : start
-}
-
-function classLocation(s) {
-  if (s.room) return `${s.building ? `${s.building}, ` : ''}Room ${s.room}`
-  return s.is_online ? 'Online' : 'SDU Campus'
-}
-
-const DAY_ORDER_MAP = {
-  1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7,
-  '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7,
-  'mon': 1, 'monday': 1,
-  'tue': 2, 'tuesday': 2,
-  'wed': 3, 'wednesday': 3,
-  'thu': 4, 'thursday': 4,
-  'fri': 5, 'friday': 5,
-  'sat': 6, 'saturday': 6,
-  'sun': 7, 'sunday': 7,
-}
-
-function getDayOrder(s) {
-  if (s.day_of_week != null) return DAY_ORDER_MAP[s.day_of_week] || 9
-  if (s.weekday) return DAY_ORDER_MAP[String(s.weekday).toLowerCase().trim()] || 9
-  return 9
-}
-
-function getStartTimeMinutes(s) {
-  const str = s.start_time || (s.times ? String(s.times).split(/[-–]/)[0]?.trim() : '')
-  if (!str) return 9999
-  const m = str.match(/(\d{1,2}):(\d{2})/)
-  if (!m) return 9999
-  return parseInt(m[1], 10) * 60 + parseInt(m[2], 10)
-}
-
-function sortSchedule(list = []) {
-  return [...list].sort((a, b) => {
-    const dayA = getDayOrder(a)
-    const dayB = getDayOrder(b)
-    if (dayA !== dayB) return dayA - dayB
-    return getStartTimeMinutes(a) - getStartTimeMinutes(b)
-  })
-}
-
-function findNextClass(schedule = []) {
-  if (!schedule || !schedule.length) return null
-  const sorted = sortSchedule(schedule)
-  const now = new Date()
-  const todayDay = now.getDay() === 0 ? 7 : now.getDay() // 1: Mon ... 7: Sun
-  const currentMinutes = now.getHours() * 60 + now.getMinutes()
-
-  // Find class today starting in future or ongoing
-  const upcomingToday = sorted.find(c => {
-    const day = getDayOrder(c)
-    if (day !== todayDay) return false
-    return getStartTimeMinutes(c) >= currentMinutes - 20
-  })
-  if (upcomingToday) return { course: upcomingToday, isToday: true }
-
-  // Otherwise next class on subsequent days
-  const futureDay = sorted.find(c => getDayOrder(c) > todayDay)
-  if (futureDay) return { course: futureDay, isToday: false }
-
-  // Wrap around to beginning of week
-  return { course: sorted[0], isToday: false }
 }
 
 function getPasswordStrength(pw) {
@@ -1791,7 +1722,7 @@ function usePastAttendance(token, connected, termsBack) {
   return state.termsBack === termsBack ? state : { termsBack, list: [], loading: termsBack > 0, failed: false }
 }
 
-function ComingUpCard({ nextInfo, deadlines, onOpenSchedule }) {
+function ComingUpCard({ nextInfo, scheduleFailed, deadlines, onOpenSchedule }) {
   const [showAll, setShowAll] = useState(false)
   const c = nextInfo?.course
   const { data, err } = deadlines
@@ -1819,7 +1750,7 @@ function ComingUpCard({ nextInfo, deadlines, onOpenSchedule }) {
           </div>
         </div>
       ) : (
-        <p className="muted up-empty">No classes scheduled.</p>
+        <p className="muted up-empty">{scheduleFailed ? "Couldn't load your schedule from SDU." : 'No classes scheduled.'}</p>
       )}
 
       <div className="up-section">
@@ -2009,7 +1940,7 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token
       </section>
 
       <section className="split split-even">
-        <ComingUpCard nextInfo={findNextClass(sduData.schedule || [])} deadlines={deadlines} onOpenSchedule={() => setTab('schedule')} />
+        <ComingUpCard nextInfo={findNextClass(sduData.schedule || [])} scheduleFailed={!!sduData.scheduleIssue && !sduData.schedule?.length} deadlines={deadlines} onOpenSchedule={() => setTab('schedule')} />
         <AttentionCard items={attention} onSelect={setTab} />
       </section>
     </div>
@@ -2017,38 +1948,50 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token
 }
 
 /* ─── SCHEDULE TAB ───────────────────────────────────────────────── */
-// Merge back-to-back periods of the same class (e.g. 14:30–15:20 and 15:30–16:20 in the same room)
-function mergeBlocks(items) {
-  const out = []
-  for (const s of items) {
-    const prev = out[out.length - 1]
-    const [start, end] = classTimes(s)
-    if (prev && prev.course_code === s.course_code && prev.lesson_type === s.lesson_type && classLocation(prev) === classLocation(s)) {
-      const gap = getStartTimeMinutes({ start_time: start }) - getStartTimeMinutes({ start_time: prev._end })
-      if (gap >= 0 && gap <= 15) {
-        prev._end = end || prev._end
-        prev._parts.push(s)
-        continue
-      }
-    }
-    out.push({ ...s, _start: start, _end: end, _parts: [s] })
-  }
-  return out
+function ScheduleIssue({ issue, onRetry }) {
+  const since = issue.since ? new Date(issue.since).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }) : null
+  return (
+    <div className="alert-box alert-warning" role="status">
+      <Icons.AlertTriangle size={16} />
+      <span>
+        {issue.stale ? `Couldn't refresh from SDU, showing the schedule from ${since || 'your last sync'}.` : "Couldn't refresh from SDU, showing the schedule loaded earlier."}
+        {issue.message ? ` ${issue.message}` : ''}
+      </span>
+      <button type="button" className="link-btn" onClick={onRetry}>Try again</button>
+    </div>
+  )
 }
 
-function ScheduleTab({ sduData, sduLoading, sduStatus, onConnect }) {
+function ScheduleTab({ sduData, sduLoading, sduStatus, onConnect, onRetry }) {
   const [selectedDay, setSelectedDay] = useState(null)
 
   if (!sduStatus?.connected) return <SduOnboardCard onConnect={onConnect} />
 
   const schedule = sduData.schedule || []
+  const issue = sduData.scheduleIssue
   if (sduLoading && !schedule.length) return <PageLoader label="Loading schedule…" />
+  if (!schedule.length && issue) {
+    return (
+      <div className="page page-fade">
+        <article className="card">
+          <EmptyState
+            icon={<Icons.Calendar size={20} />}
+            title="Couldn't load your schedule"
+            text={`SDU did not return your classes this time. ${issue.message || ''}`.trim()}
+            action={<button type="button" className="btn-primary" onClick={onRetry}>Try again</button>}
+          />
+        </article>
+      </div>
+    )
+  }
 
   const sorted = sortSchedule(schedule)
+  const unscheduled = sorted.filter(s => getDayOrder(s) === UNKNOWN_DAY)
   const nextInfo = findNextClass(schedule)
   const today = new Date().getDay() || 7
   const counts = {}
   mergeBlocks(sorted).forEach(s => { counts[getDayOrder(s)] = (counts[getDayOrder(s)] || 0) + 1 })
+  const days = counts[7] ? [1, 2, 3, 4, 5, 6, 7] : [1, 2, 3, 4, 5, 6]
 
   const defaultDay = counts[today] ? today : (nextInfo?.course ? getDayOrder(nextInfo.course) : 1)
   const day = selectedDay ?? defaultDay
@@ -2057,8 +2000,9 @@ function ScheduleTab({ sduData, sduLoading, sduStatus, onConnect }) {
 
   return (
     <div className="page page-fade">
+      {issue && <ScheduleIssue issue={issue} onRetry={onRetry} />}
       <div className="day-tabs" role="tablist" aria-label="Day of week">
-        {[1, 2, 3, 4, 5, 6].map(d => (
+        {days.map(d => (
           <button
             key={d}
             type="button"
@@ -2104,6 +2048,24 @@ function ScheduleTab({ sduData, sduLoading, sduStatus, onConnect }) {
           <EmptyState icon={<Icons.Calendar size={20} />} title={`No classes on ${DAY_NAMES[day]}`} text="Enjoy the free time." />
         )}
       </article>
+
+      {unscheduled.length > 0 && (
+        <article className="card card-flush">
+          <header className="group-head"><h2>Day not set by SDU</h2></header>
+          <ol className="timeline">
+            {unscheduled.map((s, idx) => (
+              <li key={idx} className="timeline-row">
+                <div className="timeline-time"><b>{classTimes(s)[0] || 'TBD'}</b></div>
+                <div className="timeline-body">
+                  <h3>{courseTitle(s.course_name, s.course_code)}</h3>
+                  <p>{classLocation(s)}{s.lesson_type ? ` · ${lessonType(s.lesson_type)}` : ''}{s.teacher ? ` · ${teacherName(s.teacher)}` : ''}</p>
+                </div>
+                <code className="course-code">{s.course_code}</code>
+              </li>
+            ))}
+          </ol>
+        </article>
+      )}
     </div>
   )
 }
@@ -3345,6 +3307,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
   const [sduData, setSduData] = useState({
     profile: null,
     schedule: null,
+    scheduleIssue: null,
     transcript: null,
     attendance: null,
     lastFetched: null,
@@ -3383,7 +3346,11 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
       ])
 
       const prof = profRes.status === 'fulfilled' ? profRes.value : null
-      const sched = schedRes.status === 'fulfilled' ? (Array.isArray(schedRes.value) ? schedRes.value : (schedRes.value?.schedule || schedRes.value?.items || [])) : []
+      const sched = schedRes.status === 'fulfilled' ? normalizeSchedule(Array.isArray(schedRes.value) ? schedRes.value : (schedRes.value?.schedule || schedRes.value?.items || [])) : []
+      // The server falls back to the last synced schedule when SDU fails; say so instead of pretending it is fresh
+      const scheduleIssue = schedRes.status === 'rejected'
+        ? { stale: false, message: schedRes.reason?.message || 'SDU did not answer.' }
+        : schedRes.value?.stale ? { stale: true, message: schedRes.value.reason, since: schedRes.value.fetched_at } : null
       const trans = transRes.status === 'fulfilled' ? (Array.isArray(transRes.value) ? transRes.value : (transRes.value?.courses || transRes.value?.transcript || [])) : []
       const att = attRes.status === 'fulfilled' ? (Array.isArray(attRes.value) ? attRes.value : (attRes.value?.attendance || attRes.value?.items || attRes.value?.data || [])) : []
       const lastF = prof?.fetched_at || schedRes.value?.fetched_at || transRes.value?.fetched_at || new Date().toISOString()
@@ -3399,7 +3366,8 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
 
       setSduData(prev => ({
         profile: prof || prev.profile,
-        schedule: sched.length ? sched : prev.schedule,
+        schedule: sched.length ? sched : (scheduleIssue ? prev.schedule : sched),
+        scheduleIssue,
         transcript: trans.length ? trans : prev.transcript,
         attendance: attRes.status === 'fulfilled' ? att : prev.attendance,
         lastFetched: lastF,
@@ -3417,7 +3385,9 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
     ;(async () => {
       const status = await checkSduStatus()
       if (cancelled || !status?.connected) return
-      loadSduLiveData()
+      // Sequential, not parallel: firing the live reads and the sync together overloads SDU and times out schedules
+      await loadSduLiveData()
+      if (cancelled) return
       // Background sync (server throttles to every 10 min) turns SDU changes into notifications
       try {
         const res = await api('/api/sdu/sync?auto=true', token, { method: 'POST' })
@@ -3473,7 +3443,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
     try {
       await api('/api/sdu/disconnect', token, { method: 'POST' })
       setSduStatus({ connected: false, demo_mode: false })
-      setSduData({ profile: null, schedule: null, transcript: null, attendance: null, lastFetched: null, error: null })
+      setSduData({ profile: null, schedule: null, scheduleIssue: null, transcript: null, attendance: null, lastFetched: null, error: null })
       setTab('dashboard')
       showToast('SDU account disconnected')
     } catch (e) {
@@ -3610,7 +3580,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
         <main className="content">
           {tab === 'dashboard'  && <DashboardTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} setTab={setTab} token={token}
                                        onOpenCourses={sem => { setGradesSemester(sem); setTab('transcript') }} />}
-          {tab === 'schedule'   && <ScheduleTab  sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} />}
+          {tab === 'schedule'   && <ScheduleTab  sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRetry={loadSduLiveData} />}
           {tab === 'transcript' && <TranscriptTab key={gradesSemester ?? 'all'} sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} token={token} initialSemester={gradesSemester} />}
           {tab === 'support'    && <SupportTab token={token} defaultEmail={sduData.profile?.email || ''} page="student" />}
           {tab === 'insights'   && <InsightsTab token={token} sduStatus={sduStatus} onConnect={handleSduConnect} />}

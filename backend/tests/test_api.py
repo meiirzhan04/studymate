@@ -572,6 +572,146 @@ def test_sdu_live_endpoints_error_handling_409_502_504(monkeypatch):
     assert res_504.status_code == 504
 
 
+def _schedule_user(label):
+    from app.main import repo
+    u = repo.create_user(f"Schedule {label}", f"stu_sch_{label}_{secrets.token_hex(4)}", "password123")
+    repo.save_sdu_connection(u["id"], f"live_sch_{label}", time.time() + 3600, "profile:read schedule:read")
+    return u, token(u["student_id"], "password123")
+
+
+LIVE_CLASS = {"course_code": "INF 381", "course_name": "Project Management", "weekday": "Monday",
+              "start_time": "08:30:00", "end_time": "09:20:00"}
+
+
+def test_schedule_served_from_last_sync_when_sdu_times_out(monkeypatch):
+    import app.sdu_client as sdu_mod
+    from app.main import admin
+    u, tok = _schedule_user("timeout")
+
+    async def ok(endpoint, access_token, params=None, client=None):
+        return 200, {"schedule": [LIVE_CLASS]}
+
+    monkeypatch.setattr(sdu_mod, "fetch_sdu_data", ok)
+    assert client.get("/api/sdu/schedule", headers=auth(tok)).json()["schedule"] == [LIVE_CLASS]
+
+    async def timeout(endpoint, access_token, params=None, client=None):
+        return 504, {"detail": "upstream_timeout"}
+
+    monkeypatch.setattr(sdu_mod, "fetch_sdu_data", timeout)
+    res = client.get("/api/sdu/schedule", headers=auth(tok))
+    assert res.status_code == 200
+    assert res.json()["stale"] is True
+    assert res.json()["schedule"] == [LIVE_CLASS]
+    assert any(e["stage"] == "schedule" and e["status"] == 504 for e in admin._SDU_ERRORS)
+
+
+def test_schedule_409_uses_cache_and_never_fakes_data(monkeypatch):
+    import app.sdu_client as sdu_mod
+    from app.main import repo
+    u, tok = _schedule_user("409")
+
+    async def need_action(endpoint, access_token, params=None, client=None):
+        return 409, {"detail": {"code": "sdu_reconnect_required", "message": "Sign in again on SDU"}}
+
+    monkeypatch.setattr(sdu_mod, "fetch_sdu_data", need_action)
+    assert client.get("/api/sdu/schedule", headers=auth(tok)).status_code == 409  # nothing cached yet
+
+    repo.save_snapshot(u["id"], "schedule", {"schedule": [LIVE_CLASS], "fetched_at": "2026-10-01T00:00:00+00:00"})
+    res = client.get("/api/sdu/schedule", headers=auth(tok))
+    assert res.status_code == 200
+    assert res.json()["stale"] is True and "Sign in again" in res.json()["reason"]
+
+
+def test_empty_default_schedule_retries_active_term(monkeypatch):
+    import app.sdu_client as sdu_mod
+    from app.main import ACTIVE_TERM
+    u, tok = _schedule_user("term")
+    calls = []
+
+    async def by_term(endpoint, access_token, params=None, client=None):
+        calls.append(params)
+        return 200, {"schedule": [LIVE_CLASS] if params == ACTIVE_TERM else []}
+
+    monkeypatch.setattr(sdu_mod, "fetch_sdu_data", by_term)
+    res = client.get("/api/sdu/schedule", headers=auth(tok))
+    assert res.status_code == 200
+    assert res.json()["schedule"] == [LIVE_CLASS]
+    assert calls == [None, ACTIVE_TERM]
+
+
+def test_active_term_retry_accepts_a_bare_list(monkeypatch):
+    import app.sdu_client as sdu_mod
+    u, tok = _schedule_user("bare")
+
+    async def bare(endpoint, access_token, params=None, client=None):
+        return 200, ([LIVE_CLASS] if params else [])
+
+    monkeypatch.setattr(sdu_mod, "fetch_sdu_data", bare)
+    res = client.get("/api/sdu/schedule", headers=auth(tok))
+    assert res.status_code == 200
+    assert res.json()["schedule"] == [LIVE_CLASS]
+
+
+def test_empty_schedule_without_cache_stays_empty(monkeypatch):
+    import app.sdu_client as sdu_mod
+    u, tok = _schedule_user("empty")
+
+    async def empty(endpoint, access_token, params=None, client=None):
+        return 200, {"items": []}
+
+    monkeypatch.setattr(sdu_mod, "fetch_sdu_data", empty)
+    res = client.get("/api/sdu/schedule", headers=auth(tok))
+    assert res.status_code == 200
+    assert res.json()["schedule"] == []
+    assert "stale" not in res.json()
+
+
+def test_schedule_items_without_day_are_logged_by_key_name(monkeypatch):
+    import app.sdu_client as sdu_mod
+    from app.main import admin
+    u, tok = _schedule_user("nodays")
+    item = {"course_code": "INF 381", "start_time": "08:30", "room": "F203"}
+
+    async def no_day(endpoint, access_token, params=None, client=None):
+        return 200, {"lessons": [item]}
+
+    monkeypatch.setattr(sdu_mod, "fetch_sdu_data", no_day)
+    res = client.get("/api/sdu/schedule", headers=auth(tok))
+    assert res.json()["schedule"] == [item]  # "lessons" key is understood
+    entry = next(e for e in admin._SDU_ERRORS if e["stage"] == "schedule" and "without a day" in e["message"])
+    assert "F203" not in entry["message"] and "room" in entry["message"]
+
+
+def test_sync_keeps_last_good_schedule(monkeypatch):
+    import app.sdu_client as sdu_mod
+    from app.main import repo
+    u, tok = _schedule_user("sync")
+    schedule = [LIVE_CLASS]
+
+    async def fake(endpoint, access_token, params=None, client=None):
+        if endpoint == "profile":
+            return 200, {"student_id": u["student_id"], "fullname": "Schedule sync"}
+        if endpoint == "schedule":
+            return (200, {"schedule": schedule}) if schedule else (504, {"detail": "upstream_timeout"})
+        return 200, {}
+
+    monkeypatch.setattr(sdu_mod, "fetch_sdu_data", fake)
+    assert client.post("/api/sdu/sync", headers=auth(tok)).status_code == 200
+    assert repo.get_snapshot(u["id"], "schedule")["schedule"] == [LIVE_CLASS]
+
+    schedule = []
+    assert client.post("/api/sdu/sync", headers=auth(tok)).status_code == 200
+    assert repo.get_snapshot(u["id"], "schedule")["schedule"] == [LIVE_CLASS]
+
+
+def test_disconnect_clears_cached_schedule():
+    from app.main import repo
+    u, tok = _schedule_user("disc")
+    repo.save_snapshot(u["id"], "schedule", {"schedule": [LIVE_CLASS]})
+    repo.delete_sdu_connection(u["id"])
+    assert repo.get_snapshot(u["id"], "schedule") is None
+
+
 def test_sdu_availability():
     res = client.get("/api/sdu/availability")
     assert res.status_code == 200

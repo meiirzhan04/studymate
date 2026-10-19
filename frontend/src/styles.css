@@ -581,7 +581,7 @@ button.avatar:hover { box-shadow: 0 0 0 3px var(--accent-ring); }
 .attention-text span { font-size: 13px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ─── Schedule ──────────────────────────────────────────────── */
-.day-tabs { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+.day-tabs { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 8px; }
 .day-tab {
   display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
   padding: 10px 14px;
@@ -791,6 +791,9 @@ button.avatar:hover { box-shadow: 0 0 0 3px var(--accent-ring); }
 }
 .alert-danger  { background: var(--danger-soft);  color: var(--danger); }
 .alert-success { background: var(--success-soft); color: var(--success); }
+.alert-warning { background: var(--warning-soft); color: var(--text-primary); }
+.alert-warning svg { color: var(--warning); flex-shrink: 0; }
+.alert-box .link-btn { margin-left: auto; flex-shrink: 0; }
 
 /* ─── Login ─────────────────────────────────────────────────── */
 .login-page { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); background: var(--surface); }
@@ -957,7 +960,7 @@ button.avatar:hover { box-shadow: 0 0 0 3px var(--accent-ring); }
   .card-foot { margin: 20px -18px -18px; padding: 14px 18px; flex-wrap: wrap; }
   .group-head, .course-row, .att-row, .timeline-row, .student-row { padding-left: 18px; padding-right: 18px; }
 
-  .day-tabs { grid-template-columns: repeat(6, minmax(52px, 1fr)); overflow-x: auto; }
+  .day-tabs { grid-auto-columns: minmax(52px, 1fr); overflow-x: auto; }
   .day-tab { padding: 8px 10px; }
   .day-tab small { display: none; }
 

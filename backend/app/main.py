@@ -788,6 +788,54 @@ def extract_transcript(data) -> Optional[list]:
     return None
 
 
+SCHEDULE_DAY_KEYS = ("weekday", "day_of_week", "day", "day_number", "times")
+
+
+def extract_schedule(data) -> Optional[list]:
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ("schedule", "items", "lessons", "data"):
+            if isinstance(data.get(key), list):
+                return data[key]
+    return None
+
+
+_SCHEDULE_REPORTED: dict = {}
+SCHEDULE_REPORT_INTERVAL_SECONDS = 3600
+
+
+def _first_report_in_a_while(key: str) -> bool:
+    """Repeating diagnostics (every page load) must not push real errors out of the admin log."""
+    now = time.time()
+    if now - _SCHEDULE_REPORTED.get(key, 0.0) < SCHEDULE_REPORT_INTERVAL_SECONDS:
+        return False
+    _SCHEDULE_REPORTED[key] = now
+    return True
+
+
+async def fetch_schedule(access_token: str, student_id: Optional[str]) -> tuple[int, dict, list]:
+    """(status, raw body, items). Retries once with the active term when SDU's default term is empty."""
+    status_code, data = await sdu_client.fetch_sdu_data("schedule", access_token)
+    if status_code == 502:
+        status_code, data = await sdu_client.fetch_sdu_data("schedule", access_token)
+    items = (extract_schedule(data) or []) if status_code == 200 else []
+    if status_code == 200 and not items:
+        term_status, term_data = await sdu_client.fetch_sdu_data("schedule", access_token, params=dict(ACTIVE_TERM))
+        term_items = (extract_schedule(term_data) or []) if term_status == 200 else []
+        if term_items:
+            status_code, data, items = term_status, term_data, term_items
+        elif _first_report_in_a_while(f"empty:{student_id}"):
+            admin.record_sdu_error("schedule", status_code, "empty schedule (default and active term)", student_id)
+    elif status_code != 200:
+        admin.record_sdu_error("schedule", status_code, sdu_short_message(data) or "request failed", student_id)
+    undated = [item for item in items if isinstance(item, dict) and not any(item.get(k) not in (None, "") for k in SCHEDULE_DAY_KEYS)]
+    if undated and _first_report_in_a_while(f"undated:{student_id}"):
+        # Key names only, never values
+        admin.record_sdu_error("schedule", status_code, f"{len(undated)} items without a day; keys: {sorted(undated[0])}", student_id)
+    return status_code, data if isinstance(data, dict) else {"schedule": data}, items
+
+
 SDU_ERROR_HINTS = {
     401: "SDU rejected the access token. Please try connecting again.",
     403: "The SDU app is missing a required permission (scope).",
@@ -891,14 +939,14 @@ async def sdu_callback(req: SduCallbackRequest):
 
     # Initial snapshot sync
     try:
-        _, sched_data = await sdu_client.fetch_sdu_data("schedule", access_token)
+        _, _, schedule_items = await fetch_schedule(access_token, student_id)
         _, att_data = await sdu_client.fetch_sdu_data("attendance", access_token, params=dict(ACTIVE_TERM))
         _, grades_data = await sdu_client.fetch_sdu_data("grades", access_token, params=dict(ACTIVE_TERM))
         _, trans_data = await sdu_client.fetch_sdu_data("transcript", access_token)
         repo.sync_sdu_student_data(
             user["id"],
             profile=profile_data,
-            schedule=sched_data.get("schedule") if isinstance(sched_data, dict) else None,
+            schedule=schedule_items or None,
             grades=grades_data.get("grades") if isinstance(grades_data, dict) else None,
             attendance=att_data.get("attendance") if isinstance(att_data, dict) else None,
             transcript=extract_transcript(trans_data),
@@ -985,7 +1033,7 @@ async def sdu_sync(user: Annotated[User, Depends(current_user)], auto: bool = Qu
 
     active_term_params = dict(ACTIVE_TERM)
     _, trans_data = await sdu_client.fetch_sdu_data("transcript", access_token)
-    _, sched_data = await sdu_client.fetch_sdu_data("schedule", access_token)
+    _, _, schedule_items = await fetch_schedule(access_token, user.student_id)
     _, att_data = await sdu_client.fetch_sdu_data("attendance", access_token, params=active_term_params)
     _, grades_data = await sdu_client.fetch_sdu_data("grades", access_token, params=active_term_params)
 
@@ -993,7 +1041,7 @@ async def sdu_sync(user: Annotated[User, Depends(current_user)], auto: bool = Qu
     res = repo.sync_sdu_student_data(
         user.id,
         profile=profile_data if isinstance(profile_data, dict) else {},
-        schedule=sched_data.get("schedule") if isinstance(sched_data, dict) else None,
+        schedule=schedule_items or None,
         grades=grades_data.get("grades") if isinstance(grades_data, dict) else None,
         attendance=att_data.get("attendance") if isinstance(att_data, dict) else None,
         deadlines=deadline_items if deadlines_ok else None,
@@ -1129,16 +1177,24 @@ async def sdu_live_schedule(
     if sdu_mock.is_demo_connection(conn):
         return sdu_mock.schedule()
 
-    params = {}
     if year is not None and term is not None:
-        params["year"] = year
-        params["term"] = term
-    elif year is not None or term is not None:
+        status_code, data = await sdu_client.fetch_sdu_data("schedule", conn["access_token"], params={"year": year, "term": term})
+        _handle_sdu_error_response(user.id, status_code, data)
+        return data
+    if year is not None or term is not None:
         raise HTTPException(status_code=422, detail="Year and term must be provided together.")
 
-    status_code, data = await sdu_client.fetch_sdu_data("schedule", conn["access_token"], params=params or None)
+    status_code, data, items = await fetch_schedule(conn["access_token"], user.student_id)
+    if status_code == 200 and items:
+        repo.save_snapshot(user.id, "schedule", {"schedule": items, "fetched_at": datetime.now(timezone.utc).isoformat()})
+        return {**data, "schedule": items}
+
+    cached = repo.get_snapshot(user.id, "schedule") if status_code != 401 else None
+    if cached and cached.get("schedule"):
+        reason = "SDU returned an empty schedule." if status_code == 200 else (sdu_short_message(data) or f"SDU schedule request failed ({status_code}).")
+        return {"schedule": cached["schedule"], "fetched_at": cached.get("fetched_at"), "stale": True, "reason": reason}
     _handle_sdu_error_response(user.id, status_code, data)
-    return data
+    return {**data, "schedule": items}
 
 
 @app.get("/api/sdu/transcript")
