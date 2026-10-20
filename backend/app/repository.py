@@ -164,6 +164,13 @@ class SQLiteRepository:
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY (user_id, course_code)
                 );
+                CREATE TABLE IF NOT EXISTS academic_goals (
+                    user_id TEXT PRIMARY KEY,
+                    target_gpa REAL,
+                    target_attendance REAL,
+                    course_targets_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS support_tickets (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id TEXT,
@@ -527,6 +534,27 @@ class SQLiteRepository:
             db.execute(
                 "INSERT OR REPLACE INTO whatif_templates (user_id, course_code, components_json, updated_at) VALUES (?, ?, ?, ?)",
                 (user_id, course_code, json.dumps(components), datetime.now(timezone.utc).isoformat())
+            )
+            db.commit()
+
+    def get_goal(self, user_id: str) -> dict | None:
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT target_gpa, target_attendance, course_targets_json, updated_at FROM academic_goals WHERE user_id = ?",
+                (user_id,)
+            ).fetchone()
+        if not row:
+            return None
+        return {"target_gpa": row["target_gpa"], "target_attendance": row["target_attendance"],
+                "course_targets": json.loads(row["course_targets_json"]), "updated_at": row["updated_at"]}
+
+    def save_goal(self, user_id: str, target_gpa: float | None, target_attendance: float | None,
+                  course_targets: dict[str, float]) -> None:
+        with self.connect() as db:
+            db.execute(
+                "INSERT OR REPLACE INTO academic_goals (user_id, target_gpa, target_attendance, course_targets_json, updated_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (user_id, target_gpa, target_attendance, json.dumps(course_targets), datetime.now(timezone.utc).isoformat())
             )
             db.commit()
 
@@ -1107,7 +1135,7 @@ class SQLiteRepository:
             if not db.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone():
                 return False
             db.execute("UPDATE support_tickets SET user_id = NULL WHERE user_id = ?", (user_id,))
-            for table in ("sdu_connections", "sdu_snapshots", "password_reset_tokens", "sdu_oauth_attempts", "login_identifiers"):
+            for table in ("sdu_connections", "sdu_snapshots", "academic_goals", "password_reset_tokens", "sdu_oauth_attempts", "login_identifiers"):
                 db.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
             db.execute("DELETE FROM users WHERE id = ?", (user_id,))
             db.execute(

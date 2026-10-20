@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
-  CartesianGrid, Line, LineChart, ResponsiveContainer,
+  Bar, BarChart, CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer,
   Tooltip, XAxis, YAxis, Scatter, ScatterChart
 } from 'recharts'
 import './styles.css'
@@ -2163,6 +2163,67 @@ function DegreeProgressCard({ transcript }) {
   )
 }
 
+/* ─── FINAL GRADE FORECAST (US-17) ──────────────────────────────── */
+function forecastNote(f, minCompletion) {
+  if (f.status === 'predicted') return `${f.completion}% graded · likely ${f.low}–${f.high}%`
+  if (f.status === 'final') return 'All coursework graded'
+  return `${f.completion}% graded · forecast from ${minCompletion}%`
+}
+
+function ForecastCard({ token }) {
+  const [data, setData] = useState(null)
+
+  useEffect(() => {
+    if (!token) return
+    api('/api/student/forecast?semester=spring-2026', token)
+      .then(setData)
+      .catch(() => setData(null))
+  }, [token])
+
+  const items = data?.items || []
+  if (!items.length) return null
+  // SDU publishes one running total per course: those need a breakdown before they can be forecast
+  const forecastable = items.filter(i => i.forecast.status !== 'no_breakdown')
+  const withoutBreakdown = items.length - forecastable.length
+
+  return (
+    <article className="card card-flush">
+      <header className="group-head">
+        <h2>Final grade forecast</h2>
+        <span>This term · 95% range</span>
+      </header>
+      <ul className="course-list">
+        {forecastable.map(i => {
+          const f = i.forecast
+          const shown = f.status === 'predicted' || f.status === 'final'
+          return (
+            <li key={i.code + i.course} className="course-row">
+              <div className="course-main">
+                <b>{i.course}</b>
+                <span>{forecastNote(f, data.min_completion)}</span>
+              </div>
+              {shown ? (
+                <>
+                  <span className="course-score">{formatScore(f.predicted_score)}</span>
+                  <span className={`grade tint-${gradeTone(f.letter)}`}>{f.letter}</span>
+                </>
+              ) : (
+                <span className="grade grade-wide tint-neutral">Not yet</span>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+      {withoutBreakdown > 0 && (
+        <p className="forecast-foot">
+          {withoutBreakdown} {withoutBreakdown === 1 ? 'course has' : 'courses have'} only a running total from SDU.
+          Enter the assessment breakdown in the What-if planner to see a forecast.
+        </p>
+      )}
+    </article>
+  )
+}
+
 function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, token, initialSemester }) {
   const [semester, setSemester] = useState(initialSemester != null ? String(initialSemester) : null)
   const [view, setView] = useState('list')
@@ -2264,6 +2325,8 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, token, initi
           </button>
         </div>
       </div>
+
+      {view === 'list' && <ForecastCard token={token} />}
 
       {view === 'trend' ? (
         <>
@@ -2602,6 +2665,87 @@ function TutoringModal({ token, courses, defaultCourse, onClose, onCreated }) {
   )
 }
 
+/* ─── SUBJECT COMPARISON & STRENGTHS (US-14, US-15) ───────────────── */
+const COMPARISON_ROW_HEIGHT = 34
+const COMPARISON_LABEL_CHARS = 24
+
+// Middle ellipsis keeps the end, which often tells similar names apart ("Module … (Psychology)")
+function shortLabel(text = '', max = COMPARISON_LABEL_CHARS) {
+  if (text.length <= max) return text
+  const head = Math.ceil((max - 1) / 2)
+  return `${text.slice(0, head).trimEnd()}…${text.slice(text.length - (max - 1 - head)).trimStart()}`
+}
+
+function ComparisonTick({ x, y, payload }) {
+  return (
+    <text x={x} y={y} dy={4} textAnchor="end" fill="var(--text-secondary)" fontSize={12}>
+      <title>{payload.value}</title>
+      {shortLabel(payload.value)}
+    </text>
+  )
+}
+
+function ComparisonTooltip({ active, payload, average }) {
+  if (!active || !payload?.length) return null
+  const row = payload[0].payload
+  const delta = average != null ? Math.round((row.score - average) * 10) / 10 : null
+  return (
+    <div className="chart-tip">
+      <b>{row.course}</b>
+      <span>{row.score}%{delta != null ? ` · ${delta >= 0 ? '+' : ''}${delta} vs your average` : ''}</span>
+    </div>
+  )
+}
+
+function SubjectComparisonCard({ ranked, average, strengths, threshold }) {
+  const data = [...ranked].sort((a, b) => b.score - a.score)
+  if (data.length < 2) return null
+  const strengthNames = strengths.map(s => s.course)
+
+  return (
+    <article className="card">
+      <header className="card-head">
+        <h2>Subject comparison</h2>
+        {average != null && <span className="muted">Your average {average}%</span>}
+      </header>
+      <div style={{ width: '100%', height: data.length * COMPARISON_ROW_HEIGHT + 28 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data} layout="vertical" margin={{ top: 0, right: 16, left: 0, bottom: 0 }} barCategoryGap={8}>
+            <CartesianGrid horizontal={false} stroke="var(--border)" />
+            <XAxis type="number" domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} stroke="var(--text-muted)" fontSize={12} tickLine={false} axisLine={false} />
+            <YAxis type="category" dataKey="course" width={180} tick={<ComparisonTick />} tickLine={false} axisLine={false} />
+            <Tooltip content={<ComparisonTooltip average={average} />} cursor={{ fill: 'var(--surface-2)' }} />
+            {average != null && <ReferenceLine x={average} stroke="var(--text-muted)" strokeDasharray="4 4" />}
+            <Bar dataKey="score" fill="var(--accent)" radius={[0, 4, 4, 0]} maxBarSize={16} isAnimationActive={false} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <p className="strengths-line">
+        {strengthNames.length
+          ? <>Academic strengths: {strengthNames.map(name => <span key={name} className="tag tag-success">{name}</span>)}</>
+          : <span className="muted">No subject above {threshold}% yet: your strengths appear here once one is.</span>}
+      </p>
+    </article>
+  )
+}
+
+/* ─── STUDY RESOURCES (US-16) ───────────────────────────────────── */
+const RESOURCE_LABELS = { video: 'Lectures', practice: 'Practice', library: 'Library' }
+
+function ResourceList({ items = [] }) {
+  if (!items.length) return null
+  return (
+    <ul className="resource-list" aria-label="Study resources">
+      {items.map(r => (
+        <li key={r.kind + r.url}>
+          <span className="resource-kind">{RESOURCE_LABELS[r.kind] || r.kind}</span>
+          <a href={r.url} target="_blank" rel="noopener noreferrer">{r.title}</a>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 function InsightsTab({ token, sduStatus, onConnect }) {
   const [data, setData] = useState(null)
   const [err, setErr] = useState('')
@@ -2639,8 +2783,12 @@ function InsightsTab({ token, sduStatus, onConnect }) {
   const plan = data.study_plan
   const courseNames = data.ranked.map(r => r.course)
 
+  const strengthNames = (data.strengths || []).map(st => st.course)
+
   return (
     <div className="page page-fade">
+      <SubjectComparisonCard ranked={data.ranked} average={data.average} strengths={data.strengths || []} threshold={data.strength_threshold} />
+
       <section className="split">
         <article className="card card-flush">
           <header className="group-head">
@@ -2655,6 +2803,7 @@ function InsightsTab({ token, sduStatus, onConnect }) {
                     <b>
                       {r.course}
                       {r.weak && weak[0]?.course === r.course && <span className="tag tag-danger" style={{ marginLeft: 8 }}>#1 priority</span>}
+                      {strengthNames.includes(r.course) && <span className="tag tag-success" style={{ marginLeft: 8 }}>Strength</span>}
                     </b>
                     <span>
                       {r.topic_gap
@@ -2696,6 +2845,7 @@ function InsightsTab({ token, sduStatus, onConnect }) {
                       </li>
                     ))}
                   </ul>
+                  <ResourceList items={w.resources} />
                 </div>
               ))}
             </>
@@ -2734,6 +2884,158 @@ function InsightsTab({ token, sduStatus, onConnect }) {
           onCreated={load}
         />
       )}
+    </div>
+  )
+}
+
+/* ─── GOALS (US-18, US-19) ──────────────────────────────────────── */
+const GPA_GOAL_RANGE = { min: 1, max: 4, step: 0.01 }
+const ATTENDANCE_GOAL_RANGE = { min: 50, max: 100, step: 1 }
+const ON_TRACK_CAUTION = 90
+
+function onTrackTone(pct) {
+  if (pct == null) return 'accent'
+  return pct >= 100 ? 'success' : pct >= ON_TRACK_CAUTION ? 'warning' : 'danger'
+}
+
+function numberOrNull(value) {
+  return value === '' || value == null ? null : Number(value)
+}
+
+function GoalMetric({ label, current, target, pct }) {
+  return (
+    <Metric
+      label={label}
+      value={current ?? '—'}
+      unit={target != null ? `/ ${target}` : undefined}
+      foot={target != null && pct != null ? (
+        <>
+          <ProgressBar pct={pct} tone={onTrackTone(pct)} />
+          <span className="muted metric-note">{pct}% on track</span>
+        </>
+      ) : <span className="muted">{target != null ? 'No data yet' : 'No target set'}</span>}
+    />
+  )
+}
+
+function goalForm(goal) {
+  return {
+    gpa: goal?.target_gpa ?? '',
+    attendance: goal?.target_attendance ?? '',
+    courses: Object.fromEntries(Object.entries(goal?.course_targets || {}).map(([k, v]) => [k, String(v)])),
+  }
+}
+
+function GoalCourseRow({ course, value, onChange }) {
+  return (
+    <li className="course-row goal-row">
+      <div className="course-main">
+        <b>{course.course}</b>
+        <span>
+          Now {formatScore(course.score)}
+          {course.on_track === true && <span className="tone-success"> · on target</span>}
+          {course.on_track === false && <span className="tone-danger"> · {course.gap}% to go</span>}
+        </span>
+      </div>
+      <label className="goal-course-input">
+        <span className="sr-only">Target for {course.course}, %</span>
+        <input className="input" type="number" inputMode="numeric" min={0} max={100} step={1}
+          placeholder={course.target_source === 'gpa' ? String(course.target) : 'Target %'}
+          value={value ?? ''} onChange={e => onChange(course.code, e.target.value)} />
+      </label>
+    </li>
+  )
+}
+
+function GoalsTab({ token }) {
+  const [data, setData] = useState(null)
+  const [form, setForm] = useState(() => goalForm(null))
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    api('/api/student/goals?semester=spring-2026', token)
+      .then(d => { setData(d); setForm(goalForm(d.goal)) })
+      .catch(e => setErr(e.message))
+  }, [token])
+
+  if (err && !data) return <div className="page page-narrow"><div className="alert-box alert-danger">{err}</div></div>
+  if (!data) return <PageLoader label="Loading your goals…" />
+
+  const { gpa, attendance, courses, courses_on_track: onTarget, courses_tracked: tracked } = data.progress
+  const setField = (key, value) => { setSaved(false); setForm(prev => ({ ...prev, [key]: value })) }
+  const setCourse = (code, value) => { setSaved(false); setForm(prev => ({ ...prev, courses: { ...prev.courses, [code]: value } })) }
+
+  const save = async e => {
+    e.preventDefault()
+    setBusy(true); setErr('')
+    const courseTargets = Object.fromEntries(
+      Object.entries(form.courses).filter(([, v]) => v !== '').map(([k, v]) => [k, Number(v)])
+    )
+    try {
+      const d = await api('/api/student/goals?semester=spring-2026', token, {
+        method: 'PUT',
+        body: JSON.stringify({ target_gpa: numberOrNull(form.gpa), target_attendance: numberOrNull(form.attendance), course_targets: courseTargets }),
+      })
+      setData(d); setForm(goalForm(d.goal)); setSaved(true)
+    } catch (e2) {
+      setErr(e2.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="page page-fade">
+      <section className="metric-grid">
+        <GoalMetric label="Term GPA" current={gpa.current?.toFixed(2)} target={gpa.target?.toFixed(2)} pct={gpa.on_track_pct} />
+        <GoalMetric label="Attendance" current={attendance.current != null ? `${attendance.current}%` : null}
+          target={attendance.target != null ? `${attendance.target}%` : null} pct={attendance.on_track_pct} />
+        <Metric
+          label="Courses on target"
+          value={tracked ? onTarget : '—'}
+          unit={tracked ? `/ ${tracked}` : undefined}
+          foot={<span className="muted">{tracked ? 'Current score at or above target' : 'Set a GPA or course target'}</span>}
+        />
+      </section>
+
+      <form className="card" onSubmit={save}>
+        <header className="card-head">
+          <h2>Targets for this term</h2>
+          {saved && <Status tone="success">Saved</Status>}
+        </header>
+        <div className="goal-fields">
+          <label>
+            Target GPA
+            <input className="input" type="number" inputMode="decimal" placeholder="e.g. 3.80" value={form.gpa}
+              min={GPA_GOAL_RANGE.min} max={GPA_GOAL_RANGE.max} step={GPA_GOAL_RANGE.step}
+              onChange={e => setField('gpa', e.target.value)} />
+          </label>
+          <label>
+            Target attendance, %
+            <input className="input" type="number" inputMode="numeric" placeholder="e.g. 90" value={form.attendance}
+              min={ATTENDANCE_GOAL_RANGE.min} max={ATTENDANCE_GOAL_RANGE.max} step={ATTENDANCE_GOAL_RANGE.step}
+              onChange={e => setField('attendance', e.target.value)} />
+          </label>
+        </div>
+        {gpa.required_score != null && (
+          <p className="muted goal-hint">A {gpa.target.toFixed(2)} GPA needs at least {gpa.required_score}% in every course without its own target.</p>
+        )}
+
+        {courses.length ? (
+          <ul className="course-list goal-courses">
+            {courses.map(c => <GoalCourseRow key={c.code} course={c} value={form.courses[c.code]} onChange={setCourse} />)}
+          </ul>
+        ) : (
+          <EmptyState icon={<Icons.Book size={20} />} title="No grades this term yet" text="Course targets appear once grades are published." />
+        )}
+
+        {err && <div className="alert-box alert-danger">{err}</div>}
+        <div className="goal-actions">
+          <button type="submit" className="btn-primary" disabled={busy}>{busy ? 'Saving…' : 'Save goals'}</button>
+        </div>
+      </form>
     </div>
   )
 }
@@ -3280,6 +3582,7 @@ const STUDENT_NAV = [
   { id: 'transcript', label: 'Grades',     icon: Icons.Book },
   { id: 'attendance', label: 'Attendance', icon: Icons.CheckCircle },
   { id: 'insights',   label: 'Insights',   icon: Icons.Target },
+  { id: 'goals',      label: 'Goals',      icon: Icons.Award },
 ]
 
 function Brand({ subtitle }) {
@@ -3461,6 +3764,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
     transcript: ['Grades', connected && courseCount ? `${courseCount} courses on your transcript` : null],
     attendance: ['Attendance', connected ? 'How much of each course you have attended' : null],
     insights:   ['Insights', connected ? 'What to focus on this term' : null],
+    goals:      ['Goals', 'Your targets for this term'],
     support:    ['Help & support', 'Tell us about a problem or ask a question'],
     profile:    ['Profile', null],
     alerts:     ['Notifications', null],
@@ -3584,6 +3888,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
           {tab === 'transcript' && <TranscriptTab key={gradesSemester ?? 'all'} sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} token={token} initialSemester={gradesSemester} />}
           {tab === 'support'    && <SupportTab token={token} defaultEmail={sduData.profile?.email || ''} page="student" />}
           {tab === 'insights'   && <InsightsTab token={token} sduStatus={sduStatus} onConnect={handleSduConnect} />}
+          {tab === 'goals'      && <GoalsTab token={token} />}
           {tab === 'attendance' && <AttendanceTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} />}
           {tab === 'profile'    && <SduProfileTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onDisconnect={handleSduDisconnect} onRefresh={loadSduLiveData} user={user} token={token} />}
           {tab === 'alerts'     && <AlertsTab    token={token} onUnreadChange={setUnread} onSelectTab={setTab} />}

@@ -22,12 +22,13 @@ import logging
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .repository import LOW_GRADE_THRESHOLD, MIN_ATTENDANCE, SQLiteRepository
 from . import admin, sdu_client, sdu_mock
 from . import deadlines as deadlines_mod
 from . import syllabi
+from . import academics
 from . import db as dbmod
 
 
@@ -134,15 +135,7 @@ def weighted_score(record: dict) -> Optional[float]:
     return round(sum(c["score"] * c["weight"] for c in components), 1)
 
 
-# Official SDU scale, as printed on the my.sdu.edu.kz transcript: (min percent, grade point)
-SDU_GRADE_POINTS = (
-    (95, 4.0), (90, 3.67), (85, 3.33), (80, 3.0), (75, 2.67), (70, 2.33),
-    (65, 2.0), (60, 1.67), (55, 1.33), (50, 1.0),
-)
-
-
-def grade_point(score: float) -> float:
-    return next((gp for minimum, gp in SDU_GRADE_POINTS if score >= minimum), 0.0)
+grade_point = academics.grade_point   # one SDU scale for the whole backend
 
 
 def sign(payload: str) -> str:
@@ -1389,7 +1382,93 @@ def get_student_insights(user: Annotated[User, Depends(require_role("student"))]
         "completion_rate": round(done / len(tasks) * 100) if tasks else None,
     }
     data["tutoring_requests"] = repo.get_tutoring_requests(user.student_id)
+    # US-14/15/16 build on the same ranking, so comparison, strengths and the plan never disagree
+    data["average"] = academics.comparison_average(data["ranked"])
+    data["strength_threshold"] = academics.STRENGTH_THRESHOLD
+    data["strengths"] = academics.strengths(data["ranked"])
+    for w in data["weak_subjects"]:
+        w["resources"] = academics.study_resources(w["course"], (w.get("topic_gap") or {}).get("name"))
     return data
+
+
+def past_scores(student_id: str, user_id: str, current_semester: str) -> list[float]:
+    """Final percents from earlier terms: the SDU transcript, else locally stored grades."""
+    snap = repo.get_snapshot(user_id, "transcript") or {}
+    scores = []
+    for c in snap.get("courses") or []:
+        try:
+            scores.append(float(c.get("grade_percent") if c.get("grade_percent") is not None else c.get("grade")))
+        except (TypeError, ValueError):
+            continue
+    if scores:
+        return scores
+    current = resolve_semester(current_semester)
+    return [s for s in (weighted_score(g) for g in repo.grades
+                        if g["student_id"] == student_id and g["semester"] not in (current, current_semester))
+            if s is not None]
+
+
+def forecast_components(user_id: str, course: dict) -> list[dict]:
+    """The course's own breakdown, else the breakdown the student saved in the What-if planner."""
+    items = repo.get_assessment_items(course["id"])
+    if items:
+        return [{"name": i["name"], "weight": i["weight"],
+                 "score": i["score"] / i["max_score"] * 100 if i["score"] is not None else None} for i in items]
+    if len(course.get("components") or []) >= 2:
+        return course["components"]
+    return repo.get_whatif_template(user_id, syllabi.normalize_code(course["code"])) or []
+
+
+@app.get("/api/student/forecast")
+def student_forecast(user: Annotated[User, Depends(require_role("student"))], semester: str = Query("spring-2026")):
+    """US-17: projected final grade per current course, once 70% of its coursework is graded."""
+    history = past_scores(user.student_id, user.id, semester)
+    items = [
+        {"course": c["course"], "code": c["code"], "credits": c["credits"], "current_score": c["score"],
+         "forecast": academics.forecast(forecast_components(user.id, c), history)}
+        for c in student_courses(user.student_id, semester)
+    ]
+    return {"semester": semester, "min_completion": round(academics.FORECAST_MIN_COMPLETION * 100), "items": items}
+
+
+class GoalRequest(BaseModel):
+    target_gpa: Optional[float] = Field(default=None, ge=1.0, le=4.0)
+    target_attendance: Optional[float] = Field(default=None, ge=50, le=100)
+    course_targets: dict[str, float] = Field(default_factory=dict, max_length=30)
+
+    @field_validator("course_targets")
+    @classmethod
+    def valid_course_targets(cls, value: dict[str, float]) -> dict[str, float]:
+        for code, target in value.items():
+            if not code.strip() or len(code) > 40:
+                raise ValueError("Course code must be 1-40 characters")
+            if not 0 <= target <= 100:
+                raise ValueError("Course targets must be between 0 and 100")
+        return {code.strip(): round(target, 1) for code, target in value.items()}
+
+
+def goals_payload(user: User, semester: str) -> dict:
+    goal = repo.get_goal(user.id)
+    courses = [c for c in student_courses(user.student_id, semester) if c["score"] is not None]
+    progress = academics.goal_progress(goal, courses, repo.attendance.get(user.student_id))
+    return {"semester": semester, "goal": goal, "progress": progress}
+
+
+@app.get("/api/student/goals")
+def get_goals(user: Annotated[User, Depends(require_role("student"))], semester: str = Query("spring-2026")):
+    """US-18/19: saved targets with the score each course needs and how far along the student is."""
+    return goals_payload(user, semester)
+
+
+@app.put("/api/student/goals")
+def save_goals(req: GoalRequest, user: Annotated[User, Depends(require_role("student"))],
+               semester: str = Query("spring-2026")):
+    known = {c["code"] for c in student_courses(user.student_id, semester)}
+    unknown = sorted(set(req.course_targets) - known)
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Not a course this term: {', '.join(unknown)}")
+    repo.save_goal(user.id, req.target_gpa, req.target_attendance, req.course_targets)
+    return goals_payload(user, semester)
 
 
 class StudyTaskUpdate(BaseModel):

@@ -917,7 +917,7 @@ button.avatar:hover { box-shadow: 0 0 0 3px var(--accent-ring); }
 
   .bottom-nav {
     position: fixed; inset: auto 0 0 0; z-index: 40;
-    display: grid; grid-template-columns: repeat(5, 1fr);
+    display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
     padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
     background: color-mix(in srgb, var(--surface) 92%, transparent);
     backdrop-filter: blur(12px);
@@ -1134,3 +1134,31 @@ button.avatar:hover { box-shadow: 0 0 0 3px var(--accent-ring); }
 }
 .modal-body .whatif-hint b { font-weight: 600; color: var(--text-secondary); }
 .up-action { display: flex; width: fit-content; align-items: center; gap: 4px; margin-top: 6px; }
+
+/* ─── Sprint 4: comparison, resources, goals ───────────────── */
+.tag-success { background: var(--success-soft); color: var(--success); }
+.strengths-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 14px; font-size: 13px; color: var(--text-secondary); }
+
+.resource-list { margin-top: 8px; padding: 10px 12px; border-radius: var(--radius); background: var(--surface-2); }
+.resource-list li { display: flex; align-items: baseline; gap: 10px; padding: 3px 0; font-size: 13px; min-width: 0; }
+.resource-kind { flex: 0 0 64px; font-size: 12px; font-weight: 500; color: var(--text-muted); }
+.resource-list a { color: var(--accent-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.resource-list a:hover { text-decoration: underline; }
+.resource-list a:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; border-radius: 4px; }
+
+.goal-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.goal-fields label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 500; color: var(--text-secondary); }
+.goal-hint { margin-top: 10px; font-size: 12.5px; }
+.goal-courses { margin: 18px -24px 0; border-top: 1px solid var(--border); }
+.goal-courses > li:last-child { border-bottom: 1px solid var(--border); }
+.goal-row { grid-template-columns: minmax(0, 1fr) 96px; }
+.goal-course-input .input { text-align: right; font-variant-numeric: tabular-nums; }
+.goal-actions { display: flex; justify-content: flex-end; margin-top: 18px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+@media (max-width: 640px) {
+  .goal-fields { grid-template-columns: minmax(0, 1fr); }
+  .goal-courses { margin-left: -18px; margin-right: -18px; }
+}
+.forecast-foot { padding: 12px 24px; font-size: 12.5px; color: var(--text-muted); }
+.course-list + .forecast-foot { border-top: 1px solid var(--border); }
+@media (max-width: 640px) { .forecast-foot { padding-left: 18px; padding-right: 18px; } }

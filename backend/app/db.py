@@ -22,6 +22,7 @@ BACKEND = "postgres" if DATABASE_URL else "sqlite"
 
 # Conflict targets for INSERT OR REPLACE, i.e. each table's primary key
 UPSERT_KEYS: dict[str, tuple[str, ...]] = {
+    "academic_goals": ("user_id",),
     "deleted_accounts": ("user_id",),
     "sdu_connections": ("user_id",),
     "sdu_oauth_attempts": ("state",),
