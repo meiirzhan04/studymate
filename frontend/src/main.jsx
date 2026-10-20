@@ -2934,7 +2934,7 @@ function GoalCourseRow({ course, value, onChange }) {
         <span>
           Now {formatScore(course.score)}
           {course.on_track === true && <span className="tone-success"> · on target</span>}
-          {course.on_track === false && <span className="tone-danger"> · {course.gap}% to go</span>}
+          {course.on_track === false && <span className="tone-danger"> · {course.gap}% below target</span>}
         </span>
       </div>
       <label className="goal-course-input">
@@ -2970,8 +2970,10 @@ function GoalsTab({ token }) {
   const save = async e => {
     e.preventDefault()
     setBusy(true); setErr('')
+    // Only this term's courses: a target kept for a course that has since left the list would be rejected
+    const currentCodes = new Set(courses.map(c => c.code))
     const courseTargets = Object.fromEntries(
-      Object.entries(form.courses).filter(([, v]) => v !== '').map(([k, v]) => [k, Number(v)])
+      Object.entries(form.courses).filter(([k, v]) => v !== '' && currentCodes.has(k)).map(([k, v]) => [k, Number(v)])
     )
     try {
       const d = await api('/api/student/goals?semester=spring-2026', token, {
@@ -3020,7 +3022,7 @@ function GoalsTab({ token }) {
           </label>
         </div>
         {gpa.required_score != null && (
-          <p className="muted goal-hint">A {gpa.target.toFixed(2)} GPA needs at least {gpa.required_score}% in every course without its own target.</p>
+          <p className="muted goal-hint">Scoring {gpa.required_score}%+ in every course guarantees a {gpa.target.toFixed(2)} GPA. Courses with their own target use that instead.</p>
         )}
 
         {courses.length ? (

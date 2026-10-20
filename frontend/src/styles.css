@@ -1162,3 +1162,8 @@ button.avatar:hover { box-shadow: 0 0 0 3px var(--accent-ring); }
 .forecast-foot { padding: 12px 24px; font-size: 12.5px; color: var(--text-muted); }
 .course-list + .forecast-foot { border-top: 1px solid var(--border); }
 @media (max-width: 640px) { .forecast-foot { padding-left: 18px; padding-right: 18px; } }
+/* Six tabs in the bottom bar: keep the longest label ("Attendance") inside its slot on small phones */
+@media (max-width: 400px) {
+  .bottom-nav { padding-left: 4px; padding-right: 4px; }
+  .bottom-link { font-size: 10.5px; }
+}

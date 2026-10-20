@@ -185,3 +185,18 @@ def test_saved_goal_round_trips_through_json():
     repo.save_goal(u["id"], None, 85.0, {})
     assert repo.get_goal(u["id"])["target_attendance"] == 85.0
     assert json.loads(json.dumps(repo.get_goal(u["id"])))["course_targets"] == {}
+
+
+def test_goals_still_load_and_save_after_a_targeted_course_disappears():
+    from app.main import repo
+    u, tok = _insights_student({
+        "Physics": [{"name": "Final", "score": 90, "weight": 1.0}],
+        "Calculus": [{"name": "Final", "score": 70, "weight": 1.0}],
+    })
+    assert client.put("/api/student/goals", headers=auth(tok), json={"course_targets": {"CAL 101": 80}}).status_code == 200
+    with repo.connect() as db:     # e.g. a re-sync renamed the course code
+        db.execute("DELETE FROM grades WHERE student_id = ? AND course = 'Calculus'", (u["student_id"],))
+        db.commit()
+    body = client.get("/api/student/goals", headers=auth(tok)).json()
+    assert [r["course"] for r in body["progress"]["courses"]] == ["Physics"]
+    assert client.put("/api/student/goals", headers=auth(tok), json={"target_gpa": 3.0, "course_targets": {}}).status_code == 200
