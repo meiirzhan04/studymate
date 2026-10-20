@@ -43,6 +43,7 @@ def term_gpa(courses: list[dict]) -> Optional[float]:
 
 
 IN_PROGRESS_LETTERS = {"IP", "I"}
+LETTER_POINTS = {letter: gp for _minimum, letter, gp in SDU_SCALE} | {"F": 0.0}
 
 
 def _number(value) -> Optional[float]:
@@ -63,9 +64,10 @@ def transcript_gpa(transcript: list[dict]) -> Optional[float]:
     points = credits = 0.0
     for c in transcript or []:
         gp = _number(c.get("grade_point"))
-        if gp is None:   # snapshots saved before grade_point was kept: derive it from the percent
-            pct = _number(c.get("grade_percent") if c.get("grade_percent") is not None else c.get("grade"))
-            gp = grade_point(pct) if pct is not None else None
+        if gp is None:
+            # Snapshots saved before grade_point was kept: use the official letter. Pass/fail ("P")
+            # and in-progress ("IP") letters are not on the scale and never count, as on SDU.
+            gp = LETTER_POINTS.get(str(c.get("letter_grade") or "").strip().upper())
         ects = _ects(c)
         if gp is None or ects <= 0:
             continue

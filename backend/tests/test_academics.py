@@ -210,9 +210,11 @@ def test_transcript_gpa_matches_the_overview_rule():
         {"semester": 1, "course_code": "B 1", "grade_point": 2.0, "ects": 4},
         {"semester": 2, "course_code": "C 1", "grade_point": None, "letter_grade": "IP", "ects": 5},
         {"semester": 1, "course_code": "D 1", "grade_point": 3.0, "ects": 0},          # 0 ECTS never counts
-        {"semester": 1, "course_code": "E 1", "grade_percent": 85, "credits": 5},     # old snapshot: no grade_point
+        {"semester": 1, "course_code": "E 1", "grade_percent": 85, "letter_grade": "B+", "credits": 5},  # old snapshot
+        {"semester": 1, "course_code": "F 1", "grade": "A", "letter_grade": "A", "ects": 5},             # letter only
+        {"semester": 1, "course_code": "G 1", "grade_percent": 72, "letter_grade": "P", "ects": 6},      # pass/fail
     ]
-    assert academics.transcript_gpa(transcript) == round((4.0 * 6 + 2.0 * 4 + 3.33 * 5) / 15, 2)
+    assert academics.transcript_gpa(transcript) == round((4.0 * 6 + 2.0 * 4 + 3.33 * 5 + 4.0 * 5) / 20, 2)
     assert academics.transcript_gpa([]) is None
 
 
