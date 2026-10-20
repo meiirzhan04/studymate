@@ -2902,7 +2902,7 @@ function numberOrNull(value) {
   return value === '' || value == null ? null : Number(value)
 }
 
-function GoalMetric({ label, current, target, pct }) {
+function GoalMetric({ label, current, target, pct, note }) {
   return (
     <Metric
       label={label}
@@ -2911,7 +2911,7 @@ function GoalMetric({ label, current, target, pct }) {
       foot={target != null && pct != null ? (
         <>
           <ProgressBar pct={pct} tone={onTrackTone(pct)} />
-          <span className="muted metric-note">{pct}% on track</span>
+          <span className="muted metric-note">{pct}% on track{note ? ` · ${note}` : ''}</span>
         </>
       ) : <span className="muted">{target != null ? 'No data yet' : 'No target set'}</span>}
     />
@@ -2932,7 +2932,7 @@ function GoalCourseRow({ course, value, onChange }) {
       <div className="course-main">
         <b>{course.course}</b>
         <span>
-          Now {formatScore(course.score)}
+          {course.score != null ? `Now ${formatScore(course.score)}` : 'Not graded yet'}
           {course.on_track === true && <span className="tone-success"> · on target</span>}
           {course.on_track === false && <span className="tone-danger"> · {course.gap}% below target</span>}
         </span>
@@ -2991,14 +2991,18 @@ function GoalsTab({ token }) {
   return (
     <div className="page page-fade">
       <section className="metric-grid">
-        <GoalMetric label="Term GPA" current={gpa.current?.toFixed(2)} target={gpa.target?.toFixed(2)} pct={gpa.on_track_pct} />
+        {/* Until this term is graded, progress is measured by the cumulative GPA, as on the Overview page */}
+        <GoalMetric label={gpa.basis === 'cumulative' ? 'GPA · cumulative' : 'Term GPA'} current={gpa.current?.toFixed(2)}
+          target={gpa.target?.toFixed(2)} pct={gpa.on_track_pct} note={gpa.basis === 'cumulative' ? 'term not graded yet' : null} />
         <GoalMetric label="Attendance" current={attendance.current != null ? `${attendance.current}%` : null}
           target={attendance.target != null ? `${attendance.target}%` : null} pct={attendance.on_track_pct} />
         <Metric
           label="Courses on target"
           value={tracked ? onTarget : '—'}
           unit={tracked ? `/ ${tracked}` : undefined}
-          foot={<span className="muted">{tracked ? 'Current score at or above target' : 'Set a GPA or course target'}</span>}
+          foot={<span className="muted">{tracked ? 'Current score at or above target'
+            : courses.length && (gpa.target != null || Object.keys(data.goal?.course_targets || {}).length) ? 'No grades this term yet'
+            : 'Set a GPA or course target'}</span>}
         />
       </section>
 

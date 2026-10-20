@@ -1,8 +1,9 @@
 """Sprint 4: comparison, strengths, study resources, grade forecast and goals (SCRUM-19..24)."""
 import json
+import secrets
 
 from app import academics
-from test_api import _insights_student, auth, client
+from test_api import _insights_student, auth, client, token
 
 
 def ranked(*scores):
@@ -141,7 +142,7 @@ def test_goal_progress_is_current_over_target_capped_at_100():
 
 def test_goal_progress_without_goal_or_grades_stays_empty():
     progress = academics.goal_progress(None, [], None)
-    assert progress["gpa"] == {"current": None, "target": None, "required_score": None, "on_track_pct": None}
+    assert progress["gpa"] == {"current": None, "basis": None, "target": None, "required_score": None, "on_track_pct": None}
     assert progress["courses_tracked"] == 0
 
 
@@ -200,3 +201,51 @@ def test_goals_still_load_and_save_after_a_targeted_course_disappears():
     body = client.get("/api/student/goals", headers=auth(tok)).json()
     assert [r["course"] for r in body["progress"]["courses"]] == ["Physics"]
     assert client.put("/api/student/goals", headers=auth(tok), json={"target_gpa": 3.0, "course_targets": {}}).status_code == 200
+
+
+# ─── Goals before the term is graded (SDU marks every current course "IP") ──
+def test_transcript_gpa_matches_the_overview_rule():
+    transcript = [
+        {"semester": 1, "course_code": "A 1", "grade_point": 4.0, "ects": 6},
+        {"semester": 1, "course_code": "B 1", "grade_point": 2.0, "ects": 4},
+        {"semester": 2, "course_code": "C 1", "grade_point": None, "letter_grade": "IP", "ects": 5},
+        {"semester": 1, "course_code": "D 1", "grade_point": 3.0, "ects": 0},          # 0 ECTS never counts
+        {"semester": 1, "course_code": "E 1", "grade_percent": 85, "credits": 5},     # old snapshot: no grade_point
+    ]
+    assert academics.transcript_gpa(transcript) == round((4.0 * 6 + 2.0 * 4 + 3.33 * 5) / 15, 2)
+    assert academics.transcript_gpa([]) is None
+
+
+def test_transcript_current_term_only_while_in_progress():
+    ip = [{"semester": 5, "course_code": "INF 451", "course_name": "PM", "letter_grade": "IP", "grade_percent": None, "ects": 5},
+          {"semester": 4, "course_code": "CSS 105", "course_name": "Prog", "letter_grade": "A", "grade_percent": 96, "ects": 6}]
+    assert academics.transcript_current_term(ip) == [{"course": "PM", "code": "INF 451", "credits": 5.0, "score": None}]
+    finished = [{**ip[1], "semester": 5}]
+    assert academics.transcript_current_term(finished) == []
+
+
+def test_goals_show_ungraded_sdu_courses_and_cumulative_gpa():
+    from app.main import repo, ACTIVE_TERM
+    u = repo.create_user("IP Student", f"5{secrets.randbelow(10**8):08d}", "password123")
+    transcript = [
+        {"semester": 1, "course_code": "CSS 105", "course_name": "Programming", "grade_percent": 96, "letter_grade": "A",
+         "grade_point": 4.0, "ects": 6, "passed": True},
+        {"semester": 1, "course_code": "MAT 101", "course_name": "Calculus", "grade_percent": 81, "letter_grade": "B",
+         "grade_point": 3.0, "ects": 6, "passed": True},
+        {"semester": 2, "course_code": "INF 451", "course_name": "Project Management", "grade_percent": None,
+         "letter_grade": "IP", "grade_point": None, "ects": 5, "passed": False},
+    ]
+    grades = [{"lesson": "INF 451", "year": 2026, "term": 1, "grade": None, "letter_grade": "IP", "ects": 5}]
+    repo.sync_sdu_student_data(u["id"], {"student_id": u["student_id"]}, None, grades, None,
+                               transcript=transcript, active_term=ACTIVE_TERM, replace_local_grades=True)
+    tok = token(u["student_id"], "password123")
+
+    res = client.put("/api/student/goals", headers=auth(tok), json={"target_gpa": 3.8, "course_targets": {"INF 451": 90}})
+    assert res.status_code == 200
+    progress = res.json()["progress"]
+    assert progress["gpa"]["current"] == 3.5 and progress["gpa"]["basis"] == "cumulative"
+    assert progress["gpa"]["on_track_pct"] == 92
+    assert progress["courses"] == [{
+        "course": "Project Management", "code": "INF 451", "credits": 5.0, "score": None, "target": 90,
+        "target_source": "course", "gap": None, "on_track": None}]
+    assert progress["courses_tracked"] == 0

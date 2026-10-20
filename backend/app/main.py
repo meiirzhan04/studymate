@@ -1447,10 +1447,20 @@ class GoalRequest(BaseModel):
         return {code.strip(): round(target, 1) for code, target in value.items()}
 
 
+def goal_courses(user: User, semester: str) -> tuple[list[dict], list[dict]]:
+    """This term's graded courses plus the SDU courses still "IP" (not graded yet), and the transcript."""
+    transcript = (repo.get_snapshot(user.id, "transcript") or {}).get("courses") or []
+    graded = [c for c in student_courses(user.student_id, semester) if c["score"] is not None]
+    known = {syllabi.normalize_code(c["code"]) for c in graded}
+    pending = [c for c in academics.transcript_current_term(transcript) if syllabi.normalize_code(c["code"]) not in known]
+    return graded + pending, transcript
+
+
 def goals_payload(user: User, semester: str) -> dict:
     goal = repo.get_goal(user.id)
-    courses = [c for c in student_courses(user.student_id, semester) if c["score"] is not None]
-    progress = academics.goal_progress(goal, courses, repo.attendance.get(user.student_id))
+    courses, transcript = goal_courses(user, semester)
+    progress = academics.goal_progress(goal, courses, repo.attendance.get(user.student_id),
+                                       academics.transcript_gpa(transcript))
     return {"semester": semester, "goal": goal, "progress": progress}
 
 
@@ -1463,7 +1473,7 @@ def get_goals(user: Annotated[User, Depends(require_role("student"))], semester:
 @app.put("/api/student/goals")
 def save_goals(req: GoalRequest, user: Annotated[User, Depends(require_role("student"))],
                semester: str = Query("spring-2026")):
-    known = {c["code"] for c in student_courses(user.student_id, semester)}
+    known = {c["code"] for c in goal_courses(user, semester)[0]}
     unknown = sorted(set(req.course_targets) - known)
     if unknown:
         raise HTTPException(status_code=400, detail=f"Not a course this term: {', '.join(unknown)}")

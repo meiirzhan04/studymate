@@ -42,6 +42,53 @@ def term_gpa(courses: list[dict]) -> Optional[float]:
     return round(sum(grade_point(c["score"]) * c["credits"] for c in graded) / credits, 2)
 
 
+IN_PROGRESS_LETTERS = {"IP", "I"}
+
+
+def _number(value) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _ects(course: dict) -> float:
+    """ECTS first, local credits as fallback; a real 0 stays 0 (matches frontend gpa.js)."""
+    value = course.get("ects") if course.get("ects") is not None else course.get("credits")
+    return _number(value) or 0.0
+
+
+def transcript_gpa(transcript: list[dict]) -> Optional[float]:
+    """Cumulative GPA the way the SDU transcript (and the Overview page) computes it."""
+    points = credits = 0.0
+    for c in transcript or []:
+        gp = _number(c.get("grade_point"))
+        if gp is None:   # snapshots saved before grade_point was kept: derive it from the percent
+            pct = _number(c.get("grade_percent") if c.get("grade_percent") is not None else c.get("grade"))
+            gp = grade_point(pct) if pct is not None else None
+        ects = _ects(c)
+        if gp is None or ects <= 0:
+            continue
+        points += gp * ects
+        credits += ects
+    return round(points / credits, 2) if credits else None
+
+
+def transcript_current_term(transcript: list[dict]) -> list[dict]:
+    """Courses of the latest transcript semester while it is still in progress ("IP"), as goal rows."""
+    semesters = [int(c["semester"]) for c in transcript or [] if _number(c.get("semester")) is not None]
+    if not semesters:
+        return []
+    latest = [c for c in transcript if _number(c.get("semester")) == max(semesters)]
+    in_progress = any(str(c.get("letter_grade") or "").strip().upper() in IN_PROGRESS_LETTERS for c in latest)
+    if not in_progress:
+        return []
+    return [{
+        "course": c.get("course_name") or c.get("course_code"), "code": c.get("course_code"),
+        "credits": _ects(c), "score": _number(c.get("grade_percent")),
+    } for c in latest if c.get("course_code")]
+
+
 # ─── US-14 / US-15: comparison and strengths ─────────────────────────
 def comparison_average(ranked: list[dict]) -> Optional[float]:
     scores = [r["score"] for r in ranked if r.get("score") is not None]
@@ -161,8 +208,12 @@ def _ratio_pct(current: Optional[float], target: Optional[float]) -> Optional[in
     return min(100, round(current / target * 100))
 
 
-def goal_progress(goal: Optional[dict], courses: list[dict], attendance: Optional[float]) -> dict:
-    """US-18 required score per course and US-19 '% on track' (current / target, capped at 100)."""
+def goal_progress(goal: Optional[dict], courses: list[dict], attendance: Optional[float],
+                  cumulative_gpa: Optional[float] = None) -> dict:
+    """US-18 required score per course and US-19 '% on track' (current / target, capped at 100).
+
+    Until this term has grades, the GPA is measured by the cumulative GPA (as on the Overview page).
+    """
     goal = goal or {}
     target_gpa = goal.get("target_gpa")
     target_att = goal.get("target_attendance")
@@ -182,9 +233,12 @@ def goal_progress(goal: Optional[dict], courses: list[dict], attendance: Optiona
         })
 
     current_gpa = term_gpa(courses)
+    basis = "term" if current_gpa is not None else ("cumulative" if cumulative_gpa is not None else None)
+    if current_gpa is None:
+        current_gpa = cumulative_gpa
     tracked = [r for r in rows if r["on_track"] is not None]
     return {
-        "gpa": {"current": current_gpa, "target": target_gpa, "required_score": uniform,
+        "gpa": {"current": current_gpa, "basis": basis, "target": target_gpa, "required_score": uniform,
                 "on_track_pct": _ratio_pct(current_gpa, target_gpa)},
         "attendance": {"current": attendance, "target": target_att, "on_track_pct": _ratio_pct(attendance, target_att)},
         "courses": rows,

@@ -1233,7 +1233,7 @@ class SQLiteRepository:
             # Keep the real transcript (names, semesters, grades) for Insights
             if isinstance(transcript, list) and transcript:
                 compact = [
-                    {k: c.get(k) for k in ("semester", "course_code", "course_name", "grade_percent", "grade", "letter_grade", "credits", "ects", "passed")}
+                    {k: c.get(k) for k in ("semester", "course_code", "course_name", "grade_percent", "grade", "letter_grade", "grade_point", "credits", "ects", "passed")}
                     for c in transcript if isinstance(c, dict)
                 ]
                 self._swap_snapshot(db, user_id, "transcript", {"courses": compact}, datetime.now(timezone.utc).isoformat())
