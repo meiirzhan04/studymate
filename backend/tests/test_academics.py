@@ -251,3 +251,23 @@ def test_goals_show_ungraded_sdu_courses_and_cumulative_gpa():
         "course": "Project Management", "code": "INF 451", "credits": 5.0, "score": None, "target": 90,
         "target_source": "course", "gap": None, "on_track": None}]
     assert progress["courses_tracked"] == 0
+
+
+def test_insights_keep_letter_only_courses_and_skip_pass_fail():
+    from app.main import repo, student_insights
+    import app.main as main_mod
+    u = repo.create_user("Letter Student", f"6{secrets.randbelow(10**8):08d}", "password123")
+    transcript = [
+        {"semester": 4, "course_code": "INF 202", "course_name": "Databases", "grade_percent": 73, "letter_grade": "C+", "ects": 6},
+        {"semester": 4, "course_code": "MDE 116", "course_name": "Kazakh Language 2", "grade_percent": None, "grade": "A",
+         "letter_grade": "A", "grade_point": "4.0", "ects": 5},
+        {"semester": 4, "course_code": "PE 104", "course_name": "Physical Education", "grade_percent": None, "letter_grade": "P", "ects": 2},
+        {"semester": 5, "course_code": "INF 451", "course_name": "Project Management", "grade_percent": None, "letter_grade": "IP", "ects": 5},
+    ]
+    repo.sync_sdu_student_data(u["id"], {"student_id": u["student_id"]}, None, [], None, transcript=transcript,
+                               active_term=main_mod.ACTIVE_TERM, replace_local_grades=True)
+    data = student_insights(u["student_id"], "spring-2026", u["id"])
+    assert data["term_label"] == "Semester 4"
+    assert [(r["course"], r["score"], r["letter"]) for r in data["ranked"]] == [
+        ("Databases", 73.0, None), ("Kazakh Language 2", 95.0, "A")]
+    assert [s["course"] for s in academics.strengths(data["ranked"])] == ["Kazakh Language 2"]

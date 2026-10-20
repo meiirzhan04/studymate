@@ -2692,7 +2692,9 @@ function ComparisonTooltip({ active, payload, average }) {
   return (
     <div className="chart-tip">
       <b>{row.course}</b>
-      <span>{row.score}%{delta != null ? ` · ${delta >= 0 ? '+' : ''}${delta} vs your average` : ''}</span>
+      <span>{row.letter
+        ? `${row.letter} · SDU shows a letter only (${row.score}%+)`
+        : `${row.score}%${delta != null ? ` · ${delta >= 0 ? '+' : ''}${delta} vs your average` : ''}`}</span>
     </div>
   )
 }
@@ -2808,10 +2810,10 @@ function InsightsTab({ token, sduStatus, onConnect }) {
                     <span>
                       {r.topic_gap
                         ? <>Weakest part: {r.topic_gap.name} · {r.topic_gap.score}%</>
-                        : 'No assessment breakdown from SDU'}
+                        : r.letter ? 'Letter grade only from SDU' : 'No assessment breakdown from SDU'}
                     </span>
                   </div>
-                  <span className={`course-score ${r.weak ? 'tone-danger' : ''}`}>{r.score}%</span>
+                  <span className={`course-score ${r.weak ? 'tone-danger' : ''}`}>{r.letter || `${r.score}%`}</span>
                   <span className={`dot dot-${r.weak ? 'danger' : r.score < 75 ? 'warning' : 'success'}`} style={{ justifySelf: 'end' }} />
                 </li>
               ))}

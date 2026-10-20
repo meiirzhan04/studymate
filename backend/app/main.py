@@ -1315,22 +1315,29 @@ def study_task_texts(course: dict) -> list[str]:
 
 def _transcript_insights(courses: list) -> Optional[dict]:
     """Rank the latest semester that has grades (the current term is usually still in progress)."""
-    def score(c):
+    def percent(c):
         for k in ("grade_percent", "grade"):
             try:
                 return float(c.get(k))
             except (TypeError, ValueError):
                 continue
         return None
+
+    def score(c):
+        # Some courses come from SDU with only a letter ("A", no percent): rank them by the letter's floor
+        exact = percent(c)
+        return exact if exact is not None else academics.letter_floor(c.get("letter_grade"))
     graded = [c for c in courses if score(c) is not None and c.get("semester") is not None]
     if not graded:
         return None
     term = max(int(c["semester"]) for c in graded)
     ranked = []
     for rank, c in enumerate(sorted((c for c in graded if int(c["semester"]) == term), key=score), start=1):
+        letter_only = percent(c) is None
         ranked.append({
             "rank": rank, "course": c.get("course_name") or c.get("course_code"), "code": c.get("course_code"),
             "score": score(c), "weak": score(c) < LOW_GRADE_THRESHOLD,
+            "letter": str(c.get("letter_grade")).strip().upper() if letter_only else None,
             "topic_gap": None, "breakdown_available": False,
         })
     weak = [r for r in ranked if r["weak"]]

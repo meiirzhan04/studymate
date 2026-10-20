@@ -44,6 +44,13 @@ def term_gpa(courses: list[dict]) -> Optional[float]:
 
 IN_PROGRESS_LETTERS = {"IP", "I"}
 LETTER_POINTS = {letter: gp for _minimum, letter, gp in SDU_SCALE} | {"F": 0.0}
+# Lowest percent of each letter: ranks a course that SDU reports only as a letter (e.g. "A", no %)
+LETTER_FLOOR = {letter: float(minimum) for minimum, letter, _gp in SDU_SCALE} | {"F": 0.0}
+
+
+def letter_floor(letter) -> Optional[float]:
+    """Percent floor for a graded letter; None for pass/fail ("P") and in-progress ("IP")."""
+    return LETTER_FLOOR.get(str(letter or "").strip().upper())
 
 
 def _number(value) -> Optional[float]:
