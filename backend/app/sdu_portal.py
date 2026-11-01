@@ -29,7 +29,8 @@ EXPIRED = (401, {"detail": "Invalid or expired token"})
 
 
 def portal_enabled() -> bool:
-    return os.getenv("ENABLE_PORTAL_LOGIN") == "1"
+    """On by default (the api-sdu gateway fails at its own 2FA step); ENABLE_PORTAL_LOGIN=0 turns it off."""
+    return os.getenv("ENABLE_PORTAL_LOGIN", "1") != "0"
 
 
 def is_portal_token(access_token: Optional[str]) -> bool:

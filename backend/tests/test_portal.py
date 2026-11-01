@@ -141,8 +141,10 @@ def sign_in(portal):
     return step.json()
 
 
-def test_portal_login_is_off_unless_enabled(monkeypatch):
+def test_portal_login_is_on_by_default_and_can_be_turned_off(monkeypatch):
     monkeypatch.delenv("ENABLE_PORTAL_LOGIN", raising=False)
+    assert client.get("/api/sdu/portal/config").json() == {"enabled": True}
+    monkeypatch.setenv("ENABLE_PORTAL_LOGIN", "0")
     assert client.get("/api/sdu/portal/config").json() == {"enabled": False}
     res = client.post("/api/sdu/portal/login", json={"student_id": "200000001", "password": "x"})
     assert res.status_code == 404
