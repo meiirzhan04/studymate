@@ -50,6 +50,21 @@ TRANSCRIPT_PAGE = """<table>
 <tr><td colspan="8">2025 - 2026. 2</td></tr>
 <tr><td>INF 120</td><td>Databases</td><td>3</td><td>5</td><td>45</td><td>F</td><td>0</td><td>Fail</td></tr>
 </table>"""
+SCHEDULE_PAGE = '<select id="ysem"><option value="1#1">all</option><option value="2026#1" selected>now</option></select>'
+SCHEDULE_DATA = """<table>
+<tr><td>Day/Hour</td><td>Mo</td><td>Tu</td><td>We</td><td>Th</td><td>Fr</td><td>Sa</td></tr>
+<tr><td><span>08:30</span><br><span>09:20</span></td><td></td><td></td><td></td>
+<td><a title="INF 101 Intro to Testing (2+1+0) [3cr / 5ECTS]">INF 101</a><span>Intro to Testing (2+1+0) [3cr / 5ECTS]<br></span>
+<span title="Theory">[01-N]</span><img title="Test Teacher" src="images/stud_icon.png"><span><br>Test Teacher</span><br>
+<img title="Main building - Engineering block: I 310, I 311(I 310, I 311)" src="images/house.gif">:
+<span>Main building - Engineering block: (I 310, I 311)</span><span title="Main building - Engineering block: I 310, I 311(I 310, I 311)">I 310, I 311</span></td>
+<td></td><td></td></tr>
+<tr><td><span>09:30</span><br><span>10:20</span></td>
+<td><a title="MDE 200 Law (2+1+0) [3cr / 5ECTS]">MDE 200</a><span>Law (2+1+0) [3cr / 5ECTS]<br></span>
+<span title="Practice">[05-P]</span><img title="Other Teacher" src="images/stud_icon.png"><span><br>Other Teacher</span><br>
+<img title="Main building: H 01(H 01)" src="images/house.gif">:<span>Main building: (H 01)</span><span title="Main building: H 01(H 01)">H 01</span></td>
+<td></td><td></td><td></td><td></td><td></td></tr>
+</table>"""
 ATTENDANCE_PAGE = """<select><option value="2026#1" selected>2026 - 2027 ( 1 )</option></select><table>
 <tr><td></td><td>Code</td><td>Course name</td><td>Credits</td><td>ECTS</td><td>Hours</td><td>P</td><td>A</td><td>E</td><td>Absence %</td></tr>
 <tr><td>1</td><td>INF 101</td><td>Intro to Testing</td><td>2+1+0</td><td>5</td><td>45</td><td>20</td><td>2</td><td>0</td><td>4%</td></tr>
@@ -91,10 +106,17 @@ class FakePortal:
         if cookies.get("PHPSESSID") != "good":
             return httpx.Response(200, html=LOGIN_PAGE)
         mod = query.get("mod", [""])[0]
-        if request.method == "POST" and query.get("action", [""])[0] == "GetGrades":
-            assert query["yt"] == ["2026#1"]
-            return httpx.Response(200, text=json.dumps({"CODE": 1, "DATA": GRADES_DATA}))
-        pages = {"": HOME_PAGE, "grades": GRADES_PAGE, "transkript": TRANSCRIPT_PAGE, "ejurnal": ATTENDANCE_PAGE}
+        if request.method == "POST" and path == "/index.php":
+            # Like the real portal: AJAX parameters only count in the form body, and CODE is a string
+            form = parse_qs(request.content.decode())
+            action = form.get("action", [""])[0]
+            if action == "GetGrades" and form.get("yt") == ["2026#1"]:
+                return httpx.Response(200, text=json.dumps({"CODE": "1", "DATA": GRADES_DATA}))
+            if action == "showSchedule" and form.get("year") == ["2026"] and form.get("term") == ["1"]:
+                return httpx.Response(200, html=SCHEDULE_DATA)
+            return httpx.Response(200, text="")
+        pages = {"": HOME_PAGE, "grades": GRADES_PAGE, "transkript": TRANSCRIPT_PAGE, "ejurnal": ATTENDANCE_PAGE,
+                 "schedule": SCHEDULE_PAGE}
         return httpx.Response(200, html=pages.get(mod, HOME_PAGE))
 
 
@@ -139,10 +161,10 @@ def test_portal_sign_in_with_emailed_code_creates_an_sdu_user(portal):
 
 def test_wrong_password_and_wrong_code_are_rejected(portal):
     bad = client.post("/api/sdu/portal/login", json={"student_id": "200000002", "password": "nope"})
-    assert bad.status_code == 401 and bad.json()["detail"] == "Wrong password"
+    assert bad.status_code == 400 and bad.json()["detail"] == "Wrong password"
     step = client.post("/api/sdu/portal/login", json={"student_id": "200000002", "password": portal.password})
     wrong = client.post("/api/sdu/portal/verify", json={"pending": step.json()["pending"], "code": "000000"})
-    assert wrong.status_code == 401
+    assert wrong.status_code == 400 and "code" in wrong.json()["detail"]
     tampered = client.post("/api/sdu/portal/verify", json={"pending": "x" * 40, "code": "123456"})
     assert tampered.status_code == 400
 
@@ -170,6 +192,21 @@ def test_portal_data_reaches_the_app_in_api_sdu_shapes(portal):
                                    {"name": "FIN", "weight": 70.0, "score": None, "average": None}]
     assert (second["grade"], second["letter_grade"], second["components"]) == (None, "IP", [])
 
+    # Without a term the current one is read from the page; rows are periods, columns weekdays
+    status, schedule = _run(sdu_portal.fetch("schedule", conn_token))
+    assert status == 200
+    assert schedule["schedule"] == [
+        {"course_code": "INF 101", "course_name": "Intro to Testing", "section": "01", "lesson_type": "Theory",
+         "weekday": "Thursday", "start_time": "08:30:00", "end_time": "09:20:00",
+         "building": "Main building - Engineering block", "room": "I 310, I 311", "teacher": "Test Teacher",
+         "is_online": False, "year": 2026, "term": 1},
+        {"course_code": "MDE 200", "course_name": "Law", "section": "05", "lesson_type": "Practice",
+         "weekday": "Monday", "start_time": "09:30:00", "end_time": "10:20:00",
+         "building": "Main building", "room": "H 01", "teacher": "Other Teacher",
+         "is_online": False, "year": 2026, "term": 1},
+    ]
+    assert client.get("/api/sdu/schedule", headers=auth(tok)).status_code == 200
+
 
 def test_a_trusted_device_skips_the_code_on_the_next_sign_in(portal):
     tok = sign_in(portal)["access_token"]
@@ -183,7 +220,7 @@ def test_expired_portal_session_asks_to_reconnect_and_disconnect_skips_api_sdu(p
     conn = repo.get_sdu_connection(data["user"]["id"])
     expired = sdu_portal.connection_token({"PHPSESSID": "gone"})
     assert _run(sdu_portal.fetch("profile", expired))[0] == 401
-    assert _run(sdu_portal.fetch("schedule", conn["access_token"]))[0] == 404
+    assert _run(sdu_portal.fetch("moodle/deadlines", conn["access_token"]))[0] == 404
 
     from app import sdu_client
     revoked = []

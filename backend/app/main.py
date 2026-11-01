@@ -1012,7 +1012,8 @@ def portal_failure(exc: sdu_portal.PortalError, attempt_key: str, stage: str) ->
         repo.record_attempt(attempt_key)
     else:
         admin.record_sdu_error(stage, exc.status, exc.message)
-    return HTTPException(status_code=exc.status, detail=exc.message)
+    # A wrong password or code is a 400: the frontend treats any 401 as our own session expiring
+    return HTTPException(status_code=400 if exc.status == 401 else exc.status, detail=exc.message)
 
 
 @app.post("/api/sdu/portal/login")
@@ -1164,6 +1165,8 @@ async def fetch_deadlines(conn: dict, student_id: Optional[str]) -> tuple[list, 
     if sdu_mock.is_demo_connection(conn):
         items, _ = deadlines_mod.normalize(sdu_mock.deadlines())
         return items, True, None
+    if sdu_portal.is_portal_token(conn.get("access_token")):
+        return [], False, "Moodle deadlines aren't available when you sign in through the SDU portal."
     if MOODLE_SCOPE not in (conn.get("scope") or "").split():
         return [], False, "Reconnect SDU to allow access to Moodle deadlines."
     status_code, data = await sdu_client.fetch_sdu_data("moodle/deadlines", conn["access_token"])

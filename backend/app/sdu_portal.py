@@ -91,12 +91,12 @@ def _is_verification_page(resp: httpx.Response) -> bool:
 
 
 def _notice(html: str) -> Optional[str]:
-    node = BeautifulSoup(html, "html.parser").select_one(".verify-notice")
+    node = _soup(html).select_one(".verify-notice")
     return node.get_text(" ", strip=True) if node else None
 
 
 def _login_error(html: str) -> str:
-    soup = BeautifulSoup(html, "html.parser")
+    soup = _soup(html)
     for selector in (".error", ".errMsg", "font[color=red]", ".alert"):
         node = soup.select_one(selector)
         if node and node.get_text(strip=True):
@@ -144,6 +144,11 @@ async def verify(pending: str, code: str) -> dict:
 
 # ─── Page parsers ──────────────────────────────────────────────────
 
+def _soup(html: str) -> BeautifulSoup:
+    # lxml, not html.parser: the portal's attendance markup is loose enough that html.parser loses its rows
+    return BeautifulSoup(html, "lxml")
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -163,7 +168,7 @@ def _cells(row) -> list[str]:
 
 def parse_profile(html: str) -> dict:
     fields = {}
-    for row in BeautifulSoup(html, "html.parser").find_all("tr"):
+    for row in _soup(html).find_all("tr"):
         cells = _cells(row)
         if len(cells) == 2 and cells[0].endswith(":"):
             fields[cells[0].rstrip(":").strip().lower()] = cells[1]
@@ -182,7 +187,7 @@ def parse_profile(html: str) -> dict:
 
 def parse_transcript(html: str) -> list[dict]:
     courses, semester = [], 0
-    for row in BeautifulSoup(html, "html.parser").find_all("tr"):
+    for row in _soup(html).find_all("tr"):
         cells = _cells(row)
         if not cells:
             continue
@@ -203,7 +208,7 @@ def parse_transcript(html: str) -> list[dict]:
 
 def parse_attendance(html: str, year: int, term: int) -> list[dict]:
     items = []
-    for row in BeautifulSoup(html, "html.parser").find_all("tr"):
+    for row in _soup(html).find_all("tr"):
         cells = _cells(row)
         if len(cells) >= 10 and COURSE_CODE.match(cells[1]):
             items.append({
@@ -233,7 +238,7 @@ def _assessments(detail_row) -> list[dict]:
 
 def parse_grades(html: str, year: int, term: int) -> list[dict]:
     items = []
-    for row in BeautifulSoup(html, "html.parser").select("tr.csrow"):
+    for row in _soup(html).select("tr.csrow"):
         cells = _cells(row)
         if len(cells) < 8:
             continue
@@ -247,6 +252,52 @@ def parse_grades(html: str, year: int, term: int) -> list[dict]:
             "components": _assessments(detail if detail is not None and "csrow" not in (detail.get("class") or []) else None),
             "updated_at": _now(),
         })
+    return items
+
+
+WEEKDAYS = {"mo": "Monday", "tu": "Tuesday", "we": "Wednesday", "th": "Thursday", "fr": "Friday", "sa": "Saturday", "su": "Sunday"}
+
+
+def _lesson(cell, weekday: str, start: str, end: str, year: int, term: int) -> Optional[dict]:
+    link = cell.find("a")
+    if link is None:
+        return None
+    code = "".join(link.find_all(string=True, recursive=False)).strip() or _text(link).split("(")[0].strip()
+    title = link.get("title", "")
+    name = re.sub(r"\s*\(\d+\+\d+\+\d+\).*$", "", title[len(code):] if title.startswith(code) else title).strip()
+    kind = next((s for s in cell.find_all("span", title=True) if re.match(r"^\[\d+-\w+\]$", _text(s))), None)
+    teacher = next((img.get("title") for img in cell.find_all("img") if "stud_icon" in img.get("src", "")), None)
+    place = next((img.get("title", "") for img in cell.find_all("img") if "house" in img.get("src", "")), "")
+    room_span = cell.find_all("span", title=True)[-1] if cell.find_all("span", title=True) else None
+    room = _text(room_span) if room_span is not None and room_span is not kind else None
+    return {
+        "course_code": code, "course_name": name or code,
+        "section": re.sub(r"^\[(\d+)-.*$", r"\1", _text(kind)) if kind else None,
+        "lesson_type": kind.get("title") if kind else None,
+        "weekday": weekday, "start_time": f"{start}:00", "end_time": f"{end}:00",
+        "building": place.split(":")[0].strip() or None, "room": room, "teacher": teacher,
+        "is_online": "online" in place.lower(), "year": year, "term": term,
+    }
+
+
+def parse_schedule(html: str, year: int, term: int) -> list[dict]:
+    """One item per period: rows are time slots, columns are weekdays (Mo..Sa)."""
+    table = _soup(html).find("table")
+    if table is None:
+        return []
+    rows = table.find_all("tr", recursive=False) or table.find_all("tr")
+    days = [WEEKDAYS.get(_text(c).lower()[:2]) for c in rows[0].find_all(["td", "th"], recursive=False)] if rows else []
+    items = []
+    for row in rows[1:]:
+        cells = row.find_all(["td", "th"], recursive=False)
+        times = re.findall(r"\d{2}:\d{2}", _text(cells[0])) if cells else []
+        if len(times) < 2:
+            continue
+        for index, cell in enumerate(cells[1:], start=1):
+            weekday = days[index] if index < len(days) else None
+            lesson = _lesson(cell, weekday, times[0], times[1], year, term) if weekday else None
+            if lesson:
+                items.append(lesson)
     return items
 
 
@@ -296,31 +347,50 @@ async def fetch(endpoint: str, access_token: str, params: Optional[dict] = None)
                 if not wanted:
                     return 502, {"detail": "invalid_upstream_response", "message": "Could not find the current term on the portal."}
                 year, term = wanted
-                resp = await client.post("/index.php", params={
-                    "ajx": 1, "mod": "grades", "action": "GetGrades", "yt": f"{year}#{term}", "lng": "en"})
+                # The portal reads these from the form body; in the query string it answers with nothing
+                resp = await client.post("/index.php", data={
+                    "mod": "grades", "ajx": "1", "action": "GetGrades", "yt": f"{year}#{term}"})
                 if _is_login_page(resp):
                     return EXPIRED
                 try:
                     payload = resp.json()
                 except ValueError:
                     return 502, {"detail": "invalid_upstream_response", "message": "The portal returned an unexpected grades page."}
-                if payload.get("CODE") != 1:
+                if str(payload.get("CODE")) != "1":
                     return 502, {"detail": "upstream_error", "message": str(payload.get("DATA") or "The portal refused the grades request.")}
                 return 200, {"source": SOURCE, "fetched_at": _now(), "grades": parse_grades(payload.get("DATA") or "", year, term)}
+            if endpoint == "schedule":
+                wanted = _term(params)
+                if not wanted:
+                    page = await client.get("/index.php", params={"mod": "schedule", "lng": "en"})
+                    if _is_login_page(page):
+                        return EXPIRED
+                    wanted = _selected_term(page.text)
+                if not wanted:
+                    return 502, {"detail": "invalid_upstream_response", "message": "Could not find the current term on the portal."}
+                year, term = wanted
+                resp = await client.post("/index.php", data={
+                    "mod": "schedule", "ajx": "1", "action": "showSchedule", "year": str(year), "term": str(term),
+                    "type": "I", "details": "0"})
+                if _is_login_page(resp):
+                    return EXPIRED
+                return 200, {"source": SOURCE, "fetched_at": _now(), "schedule": parse_schedule(resp.text, year, term)}
     except httpx.TimeoutException:
         return 504, {"detail": "upstream_timeout", "message": "SDU portal read timed out."}
     except httpx.HTTPError as exc:
         return 502, {"detail": "upstream_unavailable", "message": f"SDU portal unavailable ({type(exc).__name__})."}
-    # schedule and Moodle deadlines are not read from the portal yet
+    # Moodle deadlines are not on the portal
     return 404, {"detail": "not_supported_by_portal", "message": f"'{endpoint}' is not available from the SDU portal source."}
 
 
 def _selected_term(html: str) -> Optional[tuple[int, int]]:
-    soup = BeautifulSoup(html, "html.parser")
-    for option in soup.select("select option[selected]"):
-        match = re.match(r"^(\d{4})#(\d)$", option.get("value", ""))
-        if match:
-            return int(match.group(1)), int(match.group(2))
+    soup = _soup(html)
+    # The selected term, else the first real one (lists start with placeholders such as "0#0" or "1#1")
+    for selector in ("select option[selected]", "select option"):
+        for option in soup.select(selector):
+            match = re.match(r"^(\d{4})#(\d)$", option.get("value", ""))
+            if match:
+                return int(match.group(1)), int(match.group(2))
     header = soup.find(string=re.compile(r"\d{4}\s*-\s*\d{4}\s*\.?\s*\d\.?\s*term", re.I))
     if header and (m := re.search(r"(\d{4})\s*-\s*\d{4}\s*\.?\s*(\d)", header)):
         return int(m.group(1)), int(m.group(2))

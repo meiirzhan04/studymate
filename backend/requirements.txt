@@ -7,3 +7,4 @@ psycopg[binary]==3.3.6
 psycopg-pool==3.3.3
 beautifulsoup4==4.15.0
 cryptography==50.0.1
+lxml==6.1.3

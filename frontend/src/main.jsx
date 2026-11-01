@@ -743,6 +743,94 @@ function NotificationsDropdown({ token, unread, onUnreadChange, onSelectTab }) {
 }
 
 /* ─── REDESIGNED SIGN IN & CREATE ACCOUNT SCREEN ─────────────────── */
+/* SDU portal sign-in: student number and password (used once, never stored), then the code SDU emails */
+function SduPortalForm({ token, onDone, onCancel }) {
+  const [step, setStep]           = useState('password') // 'password' | 'code'
+  const [studentId, setStudentId] = useState('')
+  const [password, setPassword]   = useState('')
+  const [code, setCode]           = useState('')
+  const [pending, setPending]     = useState(null)
+  const [notice, setNotice]       = useState('')
+  const [error, setError]         = useState('')
+  const [busy, setBusy]           = useState(false)
+
+  const submitPassword = async e => {
+    e.preventDefault(); setError('')
+    if (!studentId.trim() || !password) { setError('Enter your SDU student number and password.'); return }
+    setBusy(true)
+    try {
+      const res = await api('/api/sdu/portal/login', token, { method: 'POST', body: JSON.stringify({ student_id: studentId.trim(), password }) })
+      setPassword('')
+      if (res.verification_required) {
+        setPending(res.pending); setNotice(res.notice || 'SDU emailed you a 6-digit code.'); setStep('code')
+      } else onDone(res)
+    } catch (err) { setError(err.message) } finally { setBusy(false) }
+  }
+
+  const submitCode = async e => {
+    e.preventDefault(); setError('')
+    if (!/^\d{6}$/.test(code)) { setError('Enter the 6-digit code from the email.'); return }
+    setBusy(true)
+    try {
+      onDone(await api('/api/sdu/portal/verify', token, { method: 'POST', body: JSON.stringify({ pending, code }) }))
+    } catch (err) {
+      setError(err.message)
+      if (/expired|sign in again/i.test(err.message)) { setStep('password'); setCode('') }
+    } finally { setBusy(false) }
+  }
+
+  return step === 'password' ? (
+    <form onSubmit={submitPassword} className="login-form">
+      <div className="field-group">
+        <label className="field-label" htmlFor="sduStudentId">SDU student number</label>
+        <div className="input-container">
+          <div className="input-icon-left"><Icons.User size={16} /></div>
+          <input id="sduStudentId" className="input-field" value={studentId} inputMode="numeric" autoComplete="username"
+                 onChange={e => setStudentId(e.target.value)} placeholder="e.g. 240103118" />
+        </div>
+      </div>
+      <div className="field-group">
+        <label className="field-label" htmlFor="sduPassword">SDU portal password</label>
+        <div className="input-container">
+          <div className="input-icon-left"><Icons.Lock size={16} /></div>
+          <input id="sduPassword" className="input-field" type="password" value={password} autoComplete="current-password"
+                 onChange={e => setPassword(e.target.value)} placeholder="Your my.sdu.edu.kz password" />
+        </div>
+        <small className="muted">Sent to my.sdu.edu.kz once to sign you in. StudyMate never stores it.</small>
+      </div>
+      {error && <div className="alert-box alert-danger"><Icons.AlertTriangle size={16} /><span>{error}</span></div>}
+      <button className="btn-submit-primary" disabled={busy}>{busy ? 'Signing in to SDU…' : 'Sign in with SDU →'}</button>
+      {onCancel && <button type="button" className="field-label-link" onClick={onCancel}>Cancel</button>}
+    </form>
+  ) : (
+    <form onSubmit={submitCode} className="login-form">
+      <div className="field-group">
+        <label className="field-label" htmlFor="sduCode">Verification code</label>
+        <div className="input-container">
+          <div className="input-icon-left"><Icons.Mail size={16} /></div>
+          <input id="sduCode" className="input-field" value={code} inputMode="numeric" autoComplete="one-time-code" maxLength={6}
+                 onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="6-digit code" autoFocus />
+        </div>
+        <small className="muted">{notice}</small>
+      </div>
+      {error && <div className="alert-box alert-danger"><Icons.AlertTriangle size={16} /><span>{error}</span></div>}
+      <button className="btn-submit-primary" disabled={busy}>{busy ? 'Checking the code…' : 'Verify and continue →'}</button>
+      <button type="button" className="field-label-link" onClick={() => { setStep('password'); setCode(''); setError('') }}>
+        Back
+      </button>
+    </form>
+  )
+}
+
+/* Whether the backend signs in through the SDU portal directly (instead of the api-sdu gateway) */
+function usePortalLogin() {
+  const [enabled, setEnabled] = useState(false)
+  useEffect(() => {
+    api('/api/sdu/portal/config', null).then(c => setEnabled(!!c?.enabled)).catch(() => {})
+  }, [])
+  return enabled
+}
+
 function Login({ onLogin, theme, toggleTheme }) {
   const [authMode, setAuthMode]     = useState('login') // 'login' | 'register'
   const [identifier, setIdentifier] = useState('')
@@ -782,6 +870,8 @@ function Login({ onLogin, theme, toggleTheme }) {
     return () => clearTimeout(t)
   }, [resendIn])
   const [sduBusy, setSduBusy]       = useState(false)
+  const portalLogin = usePortalLogin()
+  const [showPortal, setShowPortal] = useState(false)
   const [showSupport, setShowSupport] = useState(false)
 
   const handleConnectSdu = async () => {
@@ -974,13 +1064,16 @@ function Login({ onLogin, theme, toggleTheme }) {
             type="button"
             className="sdu-primary-hero-btn"
             disabled={sduBusy || busy}
-            onClick={handleConnectSdu}
+            onClick={portalLogin ? () => { setShowPortal(true); setError('') } : handleConnectSdu}
           >
             <span className="sdu-mark">SDU</span>
             <span>{sduBusy ? 'Connecting…' : 'Continue with SDU'}</span>
             <Icons.ArrowRight size={16} />
           </button>
 
+          {showPortal ? (
+            <SduPortalForm token={null} onDone={onLogin} onCancel={() => setShowPortal(false)} />
+          ) : (<>
           <div className="login-divider">
             <span>or use your password</span>
           </div>
@@ -1192,6 +1285,7 @@ function Login({ onLogin, theme, toggleTheme }) {
               </button>
             </form>
           )}
+          </>)}
 
           <button type="button" className="login-help" onClick={() => setShowSupport(true)}>
             Trouble signing in? Contact support
@@ -3718,7 +3812,24 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
     setTimeout(() => setSduToast(''), ms)
   }
 
+  const portalLogin = usePortalLogin()
+  const [showPortalConnect, setShowPortalConnect] = useState(false)
+
+  const handlePortalConnected = async () => {
+    setShowPortalConnect(false)
+    const status = await checkSduStatus()
+    if (!status?.connected) return
+    await loadSduLiveData()
+    try {
+      const res = await api('/api/sdu/sync?auto=true', token, { method: 'POST' })
+      if (res?.synced) setSyncVersion(v => v + 1)
+      if (res?.new_notifications) refreshUnread()
+    } catch {}
+    showToast('Connected to SDU')
+  }
+
   const handleSduConnect = async () => {
+    if (portalLogin) { setShowPortalConnect(true); return }
     try {
       const callbackUri = getSduCallbackUri()
       const res = await api('/api/sdu/authorize-url', token, {
@@ -3921,6 +4032,21 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
           </button>
         ))}
       </nav>
+
+      {showPortalConnect && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowPortalConnect(false)}>
+          <div className="modal">
+            <div className="modal-head">
+              <div>
+                <h2>Connect your SDU account</h2>
+                <p>Sign in with your my.sdu.edu.kz account.</p>
+              </div>
+              <button type="button" className="icon-btn" onClick={() => setShowPortalConnect(false)} aria-label="Close"><Icons.Close size={18} /></button>
+            </div>
+            <SduPortalForm token={token} onDone={handlePortalConnected} />
+          </div>
+        </div>
+      )}
 
       {sduToast && (
         <div className="toast" role="status">
