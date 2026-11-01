@@ -5,6 +5,8 @@ import secrets
 from typing import Optional
 import httpx
 
+from . import sdu_portal
+
 SDU_ORIGIN = os.getenv("SDU_ORIGIN", "https://api-sdu.javazhan.tech").rstrip("/")
 SDU_CLIENT_ID = os.getenv("SDU_CLIENT_ID", "Lmx-fAIZYvwviEy_ruf4NQ")
 DEFAULT_SCOPES = "profile:read profile:full academic-profile:read schedule:read grades-attendance:read courses:read transcript:read moodle:read"
@@ -153,6 +155,8 @@ async def fetch_sdu_data(endpoint: str, access_token: str, params: Optional[dict
     Direct upstream fetch on each request under 90s budget.
     Returns (status_code, response_data).
     """
+    if sdu_portal.is_portal_token(access_token):
+        return await sdu_portal.fetch(endpoint, access_token, params)
     url = f"{SDU_ORIGIN}/api/integrations/v1/{endpoint.lstrip('/')}"
     headers = {
         "Authorization": f"Bearer {access_token}",

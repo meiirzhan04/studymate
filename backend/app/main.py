@@ -26,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from .repository import LOW_GRADE_THRESHOLD, MIN_ATTENDANCE, SQLiteRepository
-from . import admin, sdu_client, sdu_mock
+from . import admin, sdu_client, sdu_mock, sdu_portal
 from . import deadlines as deadlines_mod
 from . import syllabi
 from . import academics
@@ -36,6 +36,16 @@ from . import db as dbmod
 class SduAuthorizeRequest(BaseModel):
     redirect_uri: Optional[str] = None
     scope: Optional[str] = None
+
+
+class PortalLoginRequest(BaseModel):
+    student_id: str = Field(min_length=3, max_length=32, pattern=r"^[0-9A-Za-z]+$")
+    password: str = Field(min_length=1, max_length=200)
+
+
+class PortalVerifyRequest(BaseModel):
+    pending: str = Field(min_length=10, max_length=8000)
+    code: str = Field(pattern=r"^[0-9]{6}$")
 
 
 class SduCallbackRequest(BaseModel):
@@ -961,6 +971,86 @@ async def sdu_callback(req: SduCallbackRequest):
     }
 
 
+PORTAL_CONNECTION_SECONDS = 7 * 86400  # the portal decides the real lifetime: a 401 from it ends the connection
+
+
+def require_portal_login() -> None:
+    if not sdu_portal.portal_enabled():
+        raise HTTPException(status_code=404, detail="Signing in through the SDU portal is not enabled.")
+
+
+@app.get("/api/sdu/portal/config")
+def sdu_portal_config():
+    return {"enabled": sdu_portal.portal_enabled()}
+
+
+async def finish_portal_login(cookies: dict, user: Optional[User]) -> dict:
+    token = sdu_portal.connection_token(cookies)
+    status_code, profile_data = await sdu_portal.fetch("profile", token)
+    student_id = str((profile_data or {}).get("student_id") or "").strip() if status_code == 200 else ""
+    if not student_id:
+        admin.record_sdu_error("portal/profile", status_code, sdu_short_message(profile_data))
+        raise HTTPException(status_code=502, detail="Signed in to the SDU portal, but could not read your profile. Try again.")
+    fullname, email = profile_data.get("fullname", ""), profile_data.get("email")
+    if user:
+        db_user = repo.get_user_by_id(user.id)
+        if not db_user:
+            raise HTTPException(status_code=404, detail="User not found")
+    else:
+        db_user = repo.find_or_create_sdu_user(student_id=student_id, fullname=fullname, email=email)
+    repo.save_sdu_connection(user_id=db_user["id"], access_token=token,
+                             expires_at=time.time() + PORTAL_CONNECTION_SECONDS, scope="portal")
+    return {
+        "access_token": issue_token(db_user), "token_type": "bearer", "expires_in": 1800, "user": db_user,
+        "sdu_connected": True, "source": "portal",
+        "student_profile": {"student_id": student_id, "fullname": fullname, "email": email},
+    }
+
+
+def portal_failure(exc: sdu_portal.PortalError, attempt_key: str, stage: str) -> HTTPException:
+    if exc.status == 401:
+        repo.record_attempt(attempt_key)
+    else:
+        admin.record_sdu_error(stage, exc.status, exc.message)
+    return HTTPException(status_code=exc.status, detail=exc.message)
+
+
+@app.post("/api/sdu/portal/login")
+async def sdu_portal_login(req: PortalLoginRequest,
+                           user: Annotated[Optional[User], Depends(optional_current_user)] = None):
+    """Step 1: student number and password, used once and never stored."""
+    require_portal_login()
+    attempt_key = f"portal:{req.student_id}"
+    if repo.check_brute_force(attempt_key):
+        raise HTTPException(status_code=429, detail="Too many sign-in attempts. Try again in 15 minutes.")
+    previous = repo.get_sdu_connection(user.id) if user else None
+    known_cookies = (sdu_portal.unseal(previous["access_token"][len(sdu_portal.TOKEN_PREFIX):])
+                     if previous and sdu_portal.is_portal_token(previous["access_token"]) else None)
+    try:
+        result = await sdu_portal.login(req.student_id, req.password, known_cookies)
+    except sdu_portal.PortalError as exc:
+        raise portal_failure(exc, attempt_key, "portal/login")
+    repo.clear_attempts(attempt_key)
+    if result["state"] == "verify":
+        return {"verification_required": True, "pending": result["pending"], "notice": result.get("notice")}
+    return await finish_portal_login(result["cookies"], user)
+
+
+@app.post("/api/sdu/portal/verify")
+async def sdu_portal_verify(req: PortalVerifyRequest,
+                            user: Annotated[Optional[User], Depends(optional_current_user)] = None):
+    """Step 2: the 6-digit code SDU emails to the student."""
+    require_portal_login()
+    attempt_key = "portal-verify:" + hashlib.sha256(req.pending.encode()).hexdigest()[:24]
+    if repo.check_brute_force(attempt_key):
+        raise HTTPException(status_code=429, detail="Too many wrong codes. Sign in again.")
+    try:
+        result = await sdu_portal.verify(req.pending, req.code)
+    except sdu_portal.PortalError as exc:
+        raise portal_failure(exc, attempt_key, "portal/verify")
+    return await finish_portal_login(result["cookies"], user)
+
+
 @app.get("/api/sdu/status")
 def sdu_status(user: Annotated[User, Depends(current_user)]):
     conn = live_connection(user.id)
@@ -1272,7 +1362,8 @@ async def sdu_live_grades(
 async def sdu_disconnect(user: Annotated[User, Depends(current_user)]):
     conn = repo.get_sdu_connection(user.id)
     if conn:
-        if not sdu_mock.is_demo_connection(conn):
+        # Portal connections hold our own encrypted cookies: never send them to the api-sdu gateway
+        if not sdu_mock.is_demo_connection(conn) and not sdu_portal.is_portal_token(conn["access_token"]):
             await sdu_client.revoke_token(conn["access_token"])
         repo.delete_sdu_connection(user.id)
     return {"ok": True, "message": "SDU account disconnected and token revoked successfully."}
