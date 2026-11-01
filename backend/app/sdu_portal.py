@@ -91,9 +91,12 @@ def _is_verification_page(resp: httpx.Response) -> bool:
     return "verification.php" in str(resp.url) or 'name="code"' in resp.text
 
 
-def _notice(html: str) -> Optional[str]:
+def _notice(html: str) -> str:
+    # The portal words this in the session's language (often Kazakh): keep only the masked address
     node = _soup(html).select_one(".verify-notice")
-    return node.get_text(" ", strip=True) if node else None
+    match = re.search(r"\(?([\w.*+-]+@[\w.-]+)\)?", node.get_text(" ", strip=True)) if node else None
+    where = match.group(1) if match else "your email"
+    return f"SDU sent a 6-digit code to {where}. Check Spam if it isn't in your inbox."
 
 
 def _login_error(html: str) -> str:

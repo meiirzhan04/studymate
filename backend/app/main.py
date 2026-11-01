@@ -1025,6 +1025,12 @@ async def sdu_portal_login(req: PortalLoginRequest,
     attempt_key = f"portal:{req.student_id}"
     if repo.check_brute_force(attempt_key):
         raise HTTPException(status_code=429, detail="Too many sign-in attempts. Try again in 15 minutes.")
+    if not user:
+        # One sign-in form for everyone: a student who set a StudyMate password gets in without the portal
+        local = repo.authenticate(req.student_id, req.password)
+        if local:
+            repo.clear_attempts(attempt_key)
+            return {"access_token": issue_token(local), "token_type": "bearer", "expires_in": 1800, "user": local}
     previous = repo.get_sdu_connection(user.id) if user else None
     known_cookies = (sdu_portal.unseal(previous["access_token"][len(sdu_portal.TOKEN_PREFIX):])
                      if previous and sdu_portal.is_portal_token(previous["access_token"]) else None)

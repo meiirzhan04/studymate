@@ -15,7 +15,7 @@ client = TestClient(app)
 
 LOGIN_PAGE = '<form method="post" action="loginAuth.php"><input name="username"><input name="password"></form>'
 VERIFY_PAGE = ('<form method="post" action="https://my.sdu.edu.kz/verification.php"><input name="code">'
-               '<p class="verify-notice"><em>Code sent to t...@mail.test</em></p></form>')
+               '<p class="verify-notice"><em>Кіру коды (t...@mail.test) электрондық поштасына жіберілді.</em></p></form>')
 HOME_PAGE = """<table>
 <tr><td class="clsTd">Student № :</td><td class="clsTd">200000001</td></tr>
 <tr><td class="clsTd">Fullname :</td><td class="clsTd">Test Student</td></tr>
@@ -135,7 +135,7 @@ def sign_in(portal):
     step = client.post("/api/sdu/portal/login", json={"student_id": "200000001", "password": portal.password})
     assert step.status_code == 200, step.text
     if step.json().get("verification_required"):
-        assert step.json()["notice"] == "Code sent to t...@mail.test"
+        assert step.json()["notice"] == "SDU sent a 6-digit code to t...@mail.test. Check Spam if it isn't in your inbox."
         step = client.post("/api/sdu/portal/verify", json={"pending": step.json()["pending"], "code": "123456"})
         assert step.status_code == 200, step.text
     return step.json()
@@ -159,6 +159,13 @@ def test_portal_sign_in_with_emailed_code_creates_an_sdu_user(portal):
     # Only encrypted cookies are stored, never the password
     assert portal.password not in conn["access_token"] and "good" not in conn["access_token"]
     assert sdu_portal.unseal(conn["access_token"][len(sdu_portal.TOKEN_PREFIX):])["PHPSESSID"] == "good"
+
+
+def test_a_studymate_password_signs_in_through_the_same_form_without_the_portal(portal):
+    repo.create_user(name="Local Student", identifier="200000009", password="local-pass-1", role="student")
+    res = client.post("/api/sdu/portal/login", json={"student_id": "200000009", "password": "local-pass-1"})
+    assert res.status_code == 200 and res.json()["user"]["student_id"] == "200000009"
+    assert not any(path == "/loginAuth.php" for _, path, _, _ in portal.requests)
 
 
 def test_wrong_password_and_wrong_code_are_rejected(portal):

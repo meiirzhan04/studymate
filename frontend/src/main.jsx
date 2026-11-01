@@ -796,27 +796,24 @@ function SduPortalForm({ token, onDone, onCancel }) {
           <input id="sduPassword" className="input-field" type="password" value={password} autoComplete="current-password"
                  onChange={e => setPassword(e.target.value)} placeholder="Your my.sdu.edu.kz password" />
         </div>
-        <small className="muted">Sent to my.sdu.edu.kz once to sign you in. StudyMate never stores it.</small>
+        <small className="field-hint">Used once to sign in to my.sdu.edu.kz. StudyMate never stores it.</small>
       </div>
       {error && <div className="alert-box alert-danger"><Icons.AlertTriangle size={16} /><span>{error}</span></div>}
       <button className="btn-submit-primary" disabled={busy}>{busy ? 'Signing in to SDU…' : 'Sign in with SDU →'}</button>
-      {onCancel && <button type="button" className="field-label-link" onClick={onCancel}>Cancel</button>}
+      {onCancel && <button type="button" className="login-back" onClick={onCancel}>Cancel</button>}
     </form>
   ) : (
     <form onSubmit={submitCode} className="login-form">
       <div className="field-group">
         <label className="field-label" htmlFor="sduCode">Verification code</label>
-        <div className="input-container">
-          <div className="input-icon-left"><Icons.Mail size={16} /></div>
-          <input id="sduCode" className="input-field" value={code} inputMode="numeric" autoComplete="one-time-code" maxLength={6}
-                 onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="6-digit code" autoFocus />
-        </div>
-        <small className="muted">{notice}</small>
+        <input id="sduCode" className="input-field code-input" value={code} inputMode="numeric" autoComplete="one-time-code" maxLength={6}
+               onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="000000" autoFocus />
+        <small className="field-hint">{notice}</small>
       </div>
       {error && <div className="alert-box alert-danger"><Icons.AlertTriangle size={16} /><span>{error}</span></div>}
       <button className="btn-submit-primary" disabled={busy}>{busy ? 'Checking the code…' : 'Verify and continue →'}</button>
-      <button type="button" className="field-label-link" onClick={() => { setStep('password'); setCode(''); setError('') }}>
-        Back
+      <button type="button" className="login-back" onClick={() => { setStep('password'); setCode(''); setError('') }}>
+        ← Back
       </button>
     </form>
   )
@@ -871,7 +868,8 @@ function Login({ onLogin, theme, toggleTheme }) {
   }, [resendIn])
   const [sduBusy, setSduBusy]       = useState(false)
   const portalLogin = usePortalLogin()
-  const [showPortal, setShowPortal] = useState(false)
+  const [portalStep, setPortalStep] = useState(null) // { pending, notice } while SDU waits for the emailed code
+  const [code, setCode]             = useState('')
   const [showSupport, setShowSupport] = useState(false)
 
   const handleConnectSdu = async () => {
@@ -894,17 +892,41 @@ function Login({ onLogin, theme, toggleTheme }) {
     }
   }
 
+  // One form for everyone: a student number signs in through the SDU portal, an email with a StudyMate password
+  const isStudentNumber = /^\d{6,12}$/.test(identifier.trim())
+
   const submit = async e => {
     e.preventDefault(); setError('')
     const fe = {}
-    if (!identifier.trim()) fe.identifier = 'Please enter your email or Student ID'
+    if (!identifier.trim()) fe.identifier = portalLogin ? 'Enter your student number or email' : 'Please enter your email or Student ID'
     if (!password) fe.password = 'Please enter your password'
     setFieldErr(fe)
     if (Object.keys(fe).length) return
     setBusy(true)
-    try { onLogin(await api('/api/auth/login', null, { method: 'POST', body: JSON.stringify({ identifier, password }) })) }
+    try {
+      if (portalLogin && isStudentNumber) {
+        const res = await api('/api/sdu/portal/login', null, { method: 'POST', body: JSON.stringify({ student_id: identifier.trim(), password }) })
+        if (res.verification_required) {
+          setPassword(''); setCode(''); setPortalStep({ pending: res.pending, notice: res.notice })
+        } else onLogin(res)
+      } else {
+        onLogin(await api('/api/auth/login', null, { method: 'POST', body: JSON.stringify({ identifier, password }) }))
+      }
+    }
     catch (e) { setError(e.message) }
     finally { setBusy(false) }
+  }
+
+  const submitCode = async e => {
+    e.preventDefault(); setError('')
+    if (!/^\d{6}$/.test(code)) { setError('Enter the 6-digit code from the email.'); return }
+    setBusy(true)
+    try {
+      onLogin(await api('/api/sdu/portal/verify', null, { method: 'POST', body: JSON.stringify({ pending: portalStep.pending, code }) }))
+    } catch (err) {
+      setError(err.message)
+      if (/expired|sign in again/i.test(err.message)) setPortalStep(null)
+    } finally { setBusy(false) }
   }
 
   const handleRegister = async e => {
@@ -1056,27 +1078,42 @@ function Login({ onLogin, theme, toggleTheme }) {
           </div>
 
           <div className="login-header-text">
-            <h2>{authMode === 'login' ? 'Welcome back' : 'Create your account'}</h2>
-            <p>{authMode === 'login' ? 'Sign in to see your grades and schedule.' : 'It takes less than a minute.'}</p>
+            <h2>{portalStep ? 'Check your email' : authMode === 'login' ? 'Welcome back' : 'Create your account'}</h2>
+            <p>{portalStep ? 'Enter the code SDU just sent you.' : authMode === 'login' ? 'Sign in to see your grades and schedule.' : 'It takes less than a minute.'}</p>
           </div>
 
+          {portalStep ? (
+            <form onSubmit={submitCode} className="login-form">
+              <div className="field-group">
+                <label className="field-label" htmlFor="sduCode">Verification code</label>
+                <input id="sduCode" className="input-field code-input" value={code} inputMode="numeric" autoComplete="one-time-code"
+                       maxLength={6} placeholder="000000" autoFocus
+                       onChange={e => { setCode(e.target.value.replace(/\D/g, '').slice(0, 6)); setError('') }} />
+                <small className="field-hint">{portalStep.notice}</small>
+              </div>
+              {error && <div className="alert-box alert-danger"><Icons.AlertTriangle size={16} /><span>{error}</span></div>}
+              <button className="btn-submit-primary" disabled={busy || code.length !== 6}>{busy ? 'Checking the code…' : 'Verify and sign in →'}</button>
+              <button type="button" className="login-back" onClick={() => { setPortalStep(null); setError('') }}>
+                ← Use a different account
+              </button>
+            </form>
+          ) : (<>
+          {!portalLogin && (<>
           <button
             type="button"
             className="sdu-primary-hero-btn"
             disabled={sduBusy || busy}
-            onClick={portalLogin ? () => { setShowPortal(true); setError('') } : handleConnectSdu}
+            onClick={handleConnectSdu}
           >
             <span className="sdu-mark">SDU</span>
             <span>{sduBusy ? 'Connecting…' : 'Continue with SDU'}</span>
             <Icons.ArrowRight size={16} />
           </button>
 
-          {showPortal ? (
-            <SduPortalForm token={null} onDone={onLogin} onCancel={() => setShowPortal(false)} />
-          ) : (<>
           <div className="login-divider">
             <span>or use your password</span>
           </div>
+          </>)}
 
           {/* Segmented Auth Mode Switcher */}
           <div className="segmented-control">
@@ -1099,7 +1136,7 @@ function Login({ onLogin, theme, toggleTheme }) {
           {authMode === 'login' ? (
             <form onSubmit={submit} className="login-form">
               <div className="field-group">
-                <label className="field-label" htmlFor="identifier">University Email or Student ID</label>
+                <label className="field-label" htmlFor="identifier">{portalLogin ? 'Student number or email' : 'University Email or Student ID'}</label>
                 <div className="input-container">
                   <div className="input-icon-left"><Icons.User size={16} /></div>
                   <input
@@ -1107,7 +1144,7 @@ function Login({ onLogin, theme, toggleTheme }) {
                     className="input-field"
                     value={identifier}
                     onChange={e => { setIdentifier(e.target.value); setFieldErr(f => ({ ...f, identifier: '' })) }}
-                    placeholder="e.g. 240103118 or student@univ.edu"
+                    placeholder={portalLogin ? 'e.g. 240103118' : 'e.g. 240103118 or student@univ.edu'}
                     autoComplete="username"
                     style={fieldErr.identifier ? { borderColor: '#ef4444' } : undefined}
                   />
@@ -1130,7 +1167,7 @@ function Login({ onLogin, theme, toggleTheme }) {
                     type={showPw ? 'text' : 'password'}
                     value={password}
                     onChange={e => { setPassword(e.target.value); setFieldErr(f => ({ ...f, password: '' })) }}
-                    placeholder="Enter your password"
+                    placeholder={portalLogin && isStudentNumber ? 'Your my.sdu.edu.kz password' : 'Enter your password'}
                     autoComplete="current-password"
                     style={{ paddingRight: 44, ...(fieldErr.password ? { borderColor: '#ef4444' } : {}) }}
                   />
@@ -1144,7 +1181,9 @@ function Login({ onLogin, theme, toggleTheme }) {
                     {showPw ? <Icons.EyeOff size={16} /> : <Icons.Eye size={16} />}
                   </button>
                 </div>
-                {fieldErr.password && <div style={{ color: '#ef4444', fontSize: 13, marginTop: 6 }}>{fieldErr.password}</div>}
+                {fieldErr.password
+                  ? <div style={{ color: '#ef4444', fontSize: 13, marginTop: 6 }}>{fieldErr.password}</div>
+                  : portalLogin && <small className="field-hint">Students: your SDU portal password. StudyMate never stores it.</small>}
               </div>
 
               {error && (
@@ -1155,7 +1194,7 @@ function Login({ onLogin, theme, toggleTheme }) {
               )}
 
               <button className="btn-submit-primary" disabled={busy}>
-                {busy ? 'Signing in…' : 'Sign in →'}
+                {busy ? (portalLogin && isStudentNumber ? 'Signing in to SDU…' : 'Signing in…') : 'Sign in →'}
               </button>
             </form>
           ) : (
@@ -2001,7 +2040,7 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token
               options={[...semesters].reverse().map(n => ({ value: n, label: `Semester ${n}`, hint: n === currentSemester ? 'current' : null }))}
             />
             <button type="button" className="link-btn" onClick={() => onOpenCourses(selected)}>
-              {semCourses.length} courses <Icons.ArrowRight size={14} />
+              {semCourses.length} {semCourses.length === 1 ? 'course' : 'courses'} <Icons.ArrowRight size={14} />
             </button>
           </div>
         )}
@@ -2629,7 +2668,7 @@ function AttendanceTab({ sduData, sduLoading, sduStatus, onConnect }) {
                 ? `${near} course${near > 1 ? 's' : ''} close to the limit`
                 : 'All courses within the limit'}
           </Status>
-          <span className="muted">{list.length} courses tracked this term</span>
+          <span className="muted">{list.length} {list.length === 1 ? 'course' : 'courses'} tracked this term</span>
         </div>
       </section>
 
@@ -3884,7 +3923,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
   const pageTitles = {
     dashboard:  [`Good ${timeOfDay()}, ${firstName}`, fmtDate()],
     schedule:   ['Schedule', connected && classCount ? `${classCount} classes a week` : null],
-    transcript: ['Grades', connected && courseCount ? `${courseCount} courses on your transcript` : null],
+    transcript: ['Grades', connected && courseCount ? `${courseCount} ${courseCount === 1 ? 'course' : 'courses'} on your transcript` : null],
     attendance: ['Attendance', connected ? 'How much of each course you have attended' : null],
     insights:   ['Insights', connected ? 'What to focus on this term' : null],
     goals:      ['Goals', 'Your targets for this term'],
