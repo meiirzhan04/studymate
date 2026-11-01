@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Annotated, Literal, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status, Request
+import httpx
 import logging
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -258,6 +259,19 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 @app.get("/health")
 def health(): return {"status": "ok", "db": dbmod.BACKEND, "time": datetime.now(timezone.utc).isoformat()}
+
+
+@app.get("/health/portal")
+async def health_portal():
+    """Can this server reach the SDU student portal directly? Loads only the public login page."""
+    started = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await client.get("https://my.sdu.edu.kz/index.php", params={"lng": "en"})
+        return {"reachable": True, "status": resp.status_code, "login_form": "loginAuth.php" in resp.text,
+                "ms": round((time.monotonic() - started) * 1000)}
+    except httpx.HTTPError as exc:
+        return {"reachable": False, "error": type(exc).__name__, "ms": round((time.monotonic() - started) * 1000)}
 
 
 @app.post("/api/auth/login")
