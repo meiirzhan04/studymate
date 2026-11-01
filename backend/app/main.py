@@ -268,7 +268,8 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 @app.get("/health")
-def health(): return {"status": "ok", "db": dbmod.BACKEND, "time": datetime.now(timezone.utc).isoformat()}
+def health(): return {"status": "ok", "db": dbmod.BACKEND, "time": datetime.now(timezone.utc).isoformat(),
+                      "commit": os.getenv("RENDER_GIT_COMMIT", "")[:7] or None}
 
 
 @app.get("/health/portal")
