@@ -930,25 +930,9 @@ async def sdu_callback(req: SduCallbackRequest):
         scope=granted_scope
     )
 
-    # Initial snapshot sync
-    try:
-        _, _, schedule_items = await fetch_schedule(access_token, student_id)
-        _, att_data = await sdu_client.fetch_sdu_data("attendance", access_token, params=dict(ACTIVE_TERM))
-        _, grades_data = await sdu_client.fetch_sdu_data("grades", access_token, params=dict(ACTIVE_TERM))
-        _, trans_data = await sdu_client.fetch_sdu_data("transcript", access_token)
-        repo.sync_sdu_student_data(
-            user["id"],
-            profile=profile_data,
-            schedule=schedule_items or None,
-            grades=grades_data.get("grades") if isinstance(grades_data, dict) else None,
-            attendance=att_data.get("attendance") if isinstance(att_data, dict) else None,
-            transcript=extract_transcript(trans_data),
-            active_term=ACTIVE_TERM,
-            replace_local_grades=True,
-        )
-    except Exception:
-        pass
-
+    # No snapshot sync here: it kept sign-in waiting on up to eight sequential SDU reads. The app
+    # loads live data right after sign-in and then runs /api/sdu/sync, which is not throttled for
+    # a fresh connection (save_sdu_connection clears the 'synced' marker).
     return {
         "access_token": issue_token(user),
         "token_type": "bearer",
@@ -989,8 +973,10 @@ async def sdu_sync(user: Annotated[User, Depends(current_user)], auto: bool = Qu
         repo.delete_sdu_connection(user.id)
         raise HTTPException(status_code=409, detail="SDU token has expired. Please reconnect.")
 
-    # Automatic sync on app open is throttled; the manual sync button always runs.
-    if auto and seconds_since(conn.get("updated_at")) < AUTO_SYNC_INTERVAL_SECONDS:
+    # Automatic sync on app open is throttled; the manual sync button always runs, and so does
+    # the first sync of a new connection, which sign-in relies on.
+    first_sync = repo.get_snapshot(user.id, "synced") is None
+    if auto and not first_sync and seconds_since(conn.get("updated_at")) < AUTO_SYNC_INTERVAL_SECONDS:
         return {"ok": True, "connected": True, "synced": False, "skipped": True, "updated_at": conn.get("updated_at")}
 
     if sdu_mock.is_demo_connection(conn):
@@ -1002,6 +988,7 @@ async def sdu_sync(user: Annotated[User, Depends(current_user)], auto: bool = Qu
             attendance=sdu_mock.attendance().get("attendance"),
             deadlines=deadlines_mod.normalize(sdu_mock.deadlines())[0],
         )
+        repo.save_snapshot(user.id, "synced", {})
         return {"ok": True, "connected": True, "synced": True, "demo_mode": True, "updated_at": res.get("updated_at"),
                 "new_notifications": res.get("new_notifications", 0)}
 
@@ -1042,6 +1029,7 @@ async def sdu_sync(user: Annotated[User, Depends(current_user)], auto: bool = Qu
         active_term=ACTIVE_TERM,
         replace_local_grades=True,
     )
+    repo.save_snapshot(user.id, "synced", {})
     return {"ok": True, "connected": True, "synced": True, "updated_at": res.get("updated_at"), "new_notifications": res.get("new_notifications", 0)}
 
 

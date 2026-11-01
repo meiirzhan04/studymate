@@ -253,7 +253,10 @@ def test_sdu_successful_callback_and_data_sync(monkeypatch):
             "scope": "profile:read schedule:read grades-attendance:read"
         }
 
+    called_endpoints = []
+
     async def mock_fetch(endpoint, access_token, params=None, client=None):
+        called_endpoints.append(endpoint)
         if endpoint == "profile":
             return 200, {
                 "student_id": "240999001",
@@ -304,9 +307,18 @@ def test_sdu_successful_callback_and_data_sync(monkeypatch):
     assert cb_data["user"]["student_id"] == "240999001"
     assert cb_data["user"]["name"] == "Aisulu Kairat"
     assert "access_token" in cb_data
+    # Sign-in waits only for the token and profile; the data sync happens after it
+    assert called_endpoints == ["profile"]
 
-    # 3. Verify student can access dashboard with the new token
+    # 3. The first automatic sync of a new connection is not throttled
     user_tok = cb_data["access_token"]
+    sync_res = client.post("/api/sdu/sync?auto=true", headers=auth(user_tok))
+    assert sync_res.status_code == 200
+    assert sync_res.json()["synced"] is True
+    again = client.post("/api/sdu/sync?auto=true", headers=auth(user_tok))
+    assert again.json().get("skipped") is True
+
+    # Verify student can access dashboard with the new token
     dash_res = client.get("/api/student/dashboard", headers=auth(user_tok))
     assert dash_res.status_code == 200
     dash_data = dash_res.json()

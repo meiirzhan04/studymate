@@ -1055,8 +1055,8 @@ class SQLiteRepository:
                     (user_id, access_token, expires_at, scope, now)
                 )
             # A new connection (e.g. demo -> real SDU) is a new data source: start a fresh
-            # baseline so existing grades aren't announced as "new"
-            db.execute("DELETE FROM sdu_snapshots WHERE user_id = ? AND kind = 'grades'", (user_id,))
+            # baseline so existing grades aren't announced as "new", and mark it as never synced
+            db.execute("DELETE FROM sdu_snapshots WHERE user_id = ? AND kind IN ('grades', 'synced')", (user_id,))
             db.commit()
 
     def get_sdu_connection(self, user_id: str) -> dict | None:

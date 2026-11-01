@@ -1824,7 +1824,7 @@ function AttentionCard({ items, onSelect }) {
   )
 }
 
-function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token, onOpenCourses }) {
+function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token, onOpenCourses, syncVersion }) {
   const [recommendations, setRecommendations] = useState([])
   const [semester, setSemester] = useState(null)
   const connected = !!sduStatus?.connected
@@ -1838,7 +1838,7 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token
     api('/api/student/dashboard?semester=spring-2026', token)
       .then(d => setRecommendations(d?.recommendations || []))
       .catch(() => {})
-  }, [token, connected])
+  }, [token, connected, syncVersion])
 
   if (!connected) return <SduOnboardCard onConnect={onConnect} />
   if (sduLoading && !sduData.transcript && !sduData.schedule) return <SkeletonDashboard />
@@ -3614,6 +3614,8 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
   // SDU status & live data state
   const [sduStatus, setSduStatus] = useState(null)
   const [sduLoading, setSduLoading] = useState(false)
+  // Bumped after each completed sync so stored-data views (recommendations) reload
+  const [syncVersion, setSyncVersion] = useState(0)
   const [sduToast, setSduToast] = useState('')
   const [sduData, setSduData] = useState({
     profile: null,
@@ -3702,6 +3704,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
       // Background sync (server throttles to every 10 min) turns SDU changes into notifications
       try {
         const res = await api('/api/sdu/sync?auto=true', token, { method: 'POST' })
+        if (!cancelled && res?.synced) setSyncVersion(v => v + 1)
         if (!cancelled && res?.new_notifications) refreshUnread()
       } catch (e) {
         if (!cancelled && /reconnect|expired/i.test(e.message || '')) setSduStatus({ connected: false })
@@ -3737,6 +3740,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
       const res = await api('/api/sdu/sync', token, { method: 'POST' })
       setSduStatus(prev => ({ ...prev, connected: true, demo_mode: res.demo_mode ?? prev.demo_mode, updated_at: res.updated_at }))
       await loadSduLiveData()
+      setSyncVersion(v => v + 1)
       refreshUnread()
       showToast(res.new_notifications ? `Synced · ${res.new_notifications} new update${res.new_notifications > 1 ? 's' : ''}` : (res.demo_mode ? 'Demo data updated' : 'Synced with SDU'))
     } catch (e) {
@@ -3890,7 +3894,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
         </header>
 
         <main className="content">
-          {tab === 'dashboard'  && <DashboardTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} setTab={setTab} token={token}
+          {tab === 'dashboard'  && <DashboardTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} setTab={setTab} token={token} syncVersion={syncVersion}
                                        onOpenCourses={sem => { setGradesSemester(sem); setTab('transcript') }} />}
           {tab === 'schedule'   && <ScheduleTab  sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRetry={loadSduLiveData} />}
           {tab === 'transcript' && <TranscriptTab key={gradesSemester ?? 'all'} sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} token={token} initialSemester={gradesSemester} />}
@@ -4334,7 +4338,7 @@ function SduCallback({ onLogin }) {
       <div className="sdu-callback-card">
         <div className="spinner spinner-lg" />
         <h2>Connecting to SDU…</h2>
-        <p>Syncing your grades, schedule and attendance.</p>
+        <p>Checking your SDU account. Grades and schedule load right after.</p>
       </div>
     </div>
   )
