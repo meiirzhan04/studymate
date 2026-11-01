@@ -257,7 +257,7 @@
       <div class="card">
         <div class="card-head"><h2>SDU connections</h2></div>
         <div class="table-wrap"><table>
-          <thead><tr><th>User</th><th>Status</th><th>Updated</th><th>Expires</th><th></th></tr></thead>
+          <thead><tr><th>User</th><th>Source</th><th>Status</th><th>Updated</th><th>Expires</th><th></th></tr></thead>
           <tbody id="sdu"></tbody>
         </table></div>
       </div>
@@ -398,11 +398,12 @@
   $('refresh').addEventListener('click', refreshView)
   document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)))
 
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
   async function loadOverview() {
     const d = await api('/api/admin/overview')
     const s = d.stats
     $('stats').innerHTML = [
-      ['Users', s.users, 'users', `${s.students} students · ${s.teachers} teachers`],
+      ['Users', s.users, 'users', `${plural(s.students, 'student')} · ${plural(s.teachers, 'teacher')}`],
       ['Waiting for reply', d.open_support_tickets, 'support', 'Open support inbox →'],
       ['Recent SDU errors', d.recent_sdu_errors, 'errors', 'Review connection issues →'],
     ].map(([k, v, tab, hint]) => `<button type="button" class="card stat ${tab !== 'users' && v > 0 ? 'attention' : ''}" data-shortcut="${tab}"><span>${k}</span><b>${esc(v)}</b><small>${esc(hint)}</small></button>`).join('')
@@ -413,9 +414,10 @@
       : ''
     $('system').innerHTML = [
       ['SDU connections', s.sdu_connections],
+      ['SDU sign-in', y.portal_login ? 'Directly through my.sdu.edu.kz' : 'api-sdu gateway (OAuth)'],
       ['Database path', y.database_path],
-      ['SDU origin', y.sdu_origin],
-      ['SDU client ID', y.sdu_client_id],
+      ['api-sdu gateway', y.sdu_origin],
+      ['api-sdu client ID', y.sdu_client_id],
       ['AUTH_SECRET set', y.auth_secret_from_env ? 'Yes' : 'No (development secret)'],
       ['ADMIN_PASSWORD set', y.admin_password_from_env ? 'Yes' : 'No'],
       ['MAILER_SECRET_KEY set', y.mailer_secret_from_env ? 'Yes' : 'No — support replies are not emailed (set it on Render and Vercel)'],
@@ -599,18 +601,20 @@
     } catch (err) { toast(err.message) }
   })
 
+  const SOURCE_LABEL = { portal: 'SDU portal', 'api-sdu': 'api-sdu', demo: 'Demo' }
   async function loadSdu() {
     const d = await api('/api/admin/sdu-connections')
     $('sdu').innerHTML = d.items.length ? d.items.map(c => {
       const status = c.expired ? 'expired' : c.demo ? 'demo' : 'live'
       return `<tr>
         <td>${esc(c.name || c.user_id)}<small>${esc(c.student_id || c.user_id)}</small></td>
+        <td>${esc(SOURCE_LABEL[c.source] || c.source || '—')}</td>
         <td><span class="pill ${status}">${status}</span></td>
         <td>${fmtTime(c.updated_at)}</td>
         <td>${fmtTime(c.expires_at)}</td>
         <td><div class="actions"><button class="btn btn-sm btn-danger" data-disc="${esc(c.user_id)}">Disconnect</button></div></td>
       </tr>`
-    }).join('') : '<tr><td colspan="5" class="empty">No SDU connections</td></tr>'
+    }).join('') : '<tr><td colspan="6" class="empty">No SDU connections</td></tr>'
   }
   $('sdu').addEventListener('click', async e => {
     const id = e.target.dataset.disc
@@ -625,7 +629,7 @@
     const d = await api('/api/admin/sdu-errors')
     $('errors').innerHTML = d.items.length ? d.items.map(x => `
       <tr>
-        <td>${esc(x.at)}</td>
+        <td>${esc(String(x.at || '').replace('T', ' ').replace('Z', ''))}</td>
         <td>${esc(x.stage)}</td>
         <td><span class="pill bad">${esc(x.status ?? '—')}</span></td>
         <td>${esc(x.message || '—')}${x.student_id ? `<small>${esc(x.student_id)}</small>` : ''}</td>

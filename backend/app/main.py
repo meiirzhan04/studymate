@@ -1011,7 +1011,8 @@ async def finish_portal_login(cookies: dict, user: Optional[User]) -> dict:
 def portal_failure(exc: sdu_portal.PortalError, attempt_key: str, stage: str) -> HTTPException:
     if exc.status == 401:
         repo.record_attempt(attempt_key)
-    else:
+    elif exc.status >= 500:
+        # Only portal outages belong in the admin's SDU errors, not a student's expired sign-in step
         admin.record_sdu_error(stage, exc.status, exc.message)
     # A wrong password or code is a 400: the frontend treats any 401 as our own session expiring
     return HTTPException(status_code=400 if exc.status == 401 else exc.status, detail=exc.message)

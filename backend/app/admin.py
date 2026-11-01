@@ -20,6 +20,7 @@ from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
+from . import sdu_portal
 from .repository import SQLiteRepository
 
 logger = logging.getLogger("studymate.admin")
@@ -135,6 +136,7 @@ def create_admin_router(repo: SQLiteRepository, sign: Callable[[str], str], sdu_
             "system": {
                 "database_path": db_path,
                 "database_ephemeral": not db_path.startswith("postgres") and (db_path.startswith("/tmp") or bool(os.getenv("RENDER"))),
+                "portal_login": sdu_portal.portal_enabled(),
                 "sdu_origin": sdu_origin,
                 "sdu_client_id": sdu_client_id,
                 "admin_password_from_env": bool(os.getenv("ADMIN_PASSWORD")),

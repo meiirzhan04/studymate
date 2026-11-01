@@ -1128,6 +1128,7 @@ class SQLiteRepository:
             "user_id": r["user_id"], "name": r["name"], "student_id": r["student_id"],
             "scope": r["scope"], "updated_at": r["updated_at"], "expires_at": r["expires_at"],
             "demo": bool(r["demo"]), "expired": r["expires_at"] < now,
+            "source": "demo" if r["demo"] else "portal" if r["scope"] == "portal" else "api-sdu",
         } for r in rows]
 
     def admin_delete_user(self, user_id: str) -> bool:
