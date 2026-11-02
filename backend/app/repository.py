@@ -13,7 +13,9 @@ from . import db as dbmod, deadlines as deadlines_mod, sdu_mock
 
 # Alert thresholds (US-05)
 LOW_GRADE_THRESHOLD = 60
-MIN_ATTENDANCE = 75.0
+ABSENCE_LIMIT = 30.0  # per course, as on my.sdu.edu.kz
+ABSENCE_WARN = 25.0
+MIN_ATTENDANCE = 100.0 - ABSENCE_LIMIT
 
 
 def hash_password(password: str, salt: str) -> str:
@@ -1304,7 +1306,7 @@ class SQLiteRepository:
             return {"synced": True, "updated_at": now, "new_notifications": created}
 
     # ─── Change detection between SDU syncs ────────────────────────
-    ABSENCE_THRESHOLDS = (20.0, 15.0)
+    ABSENCE_THRESHOLDS = (ABSENCE_LIMIT, ABSENCE_WARN)
 
     def _swap_snapshot(self, db, user_id: str, kind: str, data: dict, now: str) -> dict | None:
         row = db.execute("SELECT data_json FROM sdu_snapshots WHERE user_id = ? AND kind = ?", (user_id, kind)).fetchone()
@@ -1390,10 +1392,10 @@ class SQLiteRepository:
             for limit in self.ABSENCE_THRESHOLDS:
                 # Alert once when a course crosses a threshold (also on the first sync if it is already over)
                 if absence >= limit and (old is None or old < limit):
-                    if limit >= 20:
+                    if limit >= ABSENCE_LIMIT:
                         title, detail = "Absence limit exceeded", f"{lesson}: {absence}% absent. Over {int(limit)}% puts the course at risk of an FX grade."
                     else:
-                        title, detail = "Absence warning", f"{lesson}: {absence}% absent, close to the 20% limit."
+                        title, detail = "Absence warning", f"{lesson}: {absence}% absent, close to the {int(ABSENCE_LIMIT)}% limit."
                     created += self._add_notification(db, sid, "low_attendance", title, detail, lesson, now)
                     break
 

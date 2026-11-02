@@ -880,10 +880,10 @@ def test_sdu_sync_notifies_only_about_real_changes():
     repo.sync_sdu_student_data(u["id"], profile, None, grades, attendance)
     assert len(_notifications_for(sid)) == baseline
 
-    # One grade changes, one course crosses the 20% absence limit, two new grades appear (one below 60%)
+    # One grade changes, one course crosses the 30% absence limit, two new grades appear (one below 60%)
     grades2 = [{"lesson": "Databases", "grade": 85}, {"lesson": "Networks", "grade": 70},
                {"lesson": "Algorithms", "grade": 75}, {"lesson": "Security", "grade": 52}]
-    attendance2 = [{"lesson": "Databases", "absence_percent": 5}, {"lesson": "Networks", "absence_percent": 21}]
+    attendance2 = [{"lesson": "Databases", "absence_percent": 5}, {"lesson": "Networks", "absence_percent": 31}]
     res = repo.sync_sdu_student_data(u["id"], profile, None, grades2, attendance2)
     assert res["new_notifications"] == 4
     new = _notifications_for(sid)[:4]
@@ -915,18 +915,18 @@ def test_auto_sync_is_throttled():
     assert client.post("/api/sdu/sync", params={"auto": "true"}, headers=headers).json()["skipped"] is True
 
 
-def test_overall_attendance_alert_fires_once_below_75():
+def test_overall_attendance_alert_fires_once_below_70():
     from app.main import repo
 
     u = repo.create_user("Attendance Student", f"8{secrets.randbelow(10**8):08d}", "password123")
     sid = u["student_id"]
     ok = [{"lesson": "A", "absence_percent": 10}, {"lesson": "B", "absence_percent": 12}]
-    low = [{"lesson": "A", "absence_percent": 26}, {"lesson": "B", "absence_percent": 26}]
+    low = [{"lesson": "A", "absence_percent": 31}, {"lesson": "B", "absence_percent": 31}]
     repo.sync_sdu_student_data(u["id"], {"student_id": sid}, None, None, ok)
     repo.sync_sdu_student_data(u["id"], {"student_id": sid}, None, None, low)
     alerts = [n for n in _notifications_for(sid) if n["title"] == "Attendance Alert"]
     assert len(alerts) == 1
-    assert "fallen below the 75% requirement" in alerts[0]["detail"]
+    assert "fallen below the 70% requirement" in alerts[0]["detail"]
 
     repo.sync_sdu_student_data(u["id"], {"student_id": sid}, None, None, low)
     assert len([n for n in _notifications_for(sid) if n["title"] == "Attendance Alert"]) == 1

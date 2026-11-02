@@ -392,8 +392,9 @@ function getPasswordStrength(pw) {
 }
 
 /* ─── ACADEMIC STATUS HELPERS ────────────────────────────────────── */
-const ABSENCE_WARN = 15
-const ABSENCE_LIMIT = 20
+// Same per-course absence limit as my.sdu.edu.kz
+const ABSENCE_WARN = 25
+const ABSENCE_LIMIT = 30
 const LOW_GRADE_THRESHOLD = 60
 
 const absenceOf = a => Number(a.absence_percent ?? a.absence ?? 0) || 0
@@ -424,7 +425,7 @@ function gpaStanding(gpa) {
 
 function attendanceStanding(pct) {
   if (pct >= 90) return { tone: 'success', label: 'On track' }
-  if (pct >= 75) return { tone: 'warning', label: 'Watch absences' }
+  if (pct >= 70) return { tone: 'warning', label: 'Watch absences' }
   return { tone: 'danger', label: 'At risk' }
 }
 
@@ -2651,7 +2652,7 @@ function AttendanceTab({ sduData, sduLoading, sduStatus, onConnect }) {
   const over = list.filter(a => absenceOf(a) >= ABSENCE_LIMIT).length
   const near = list.filter(a => absenceOf(a) >= ABSENCE_WARN && absenceOf(a) < ABSENCE_LIMIT).length
   const overallStanding = attendanceStanding(overall)
-  const meterMax = 30
+  const meterMax = 40
 
   return (
     <div className="page page-fade">
