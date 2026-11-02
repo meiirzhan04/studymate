@@ -340,7 +340,14 @@ async def fetch(endpoint: str, access_token: str, params: Optional[dict] = None)
                 if wanted and current and wanted != current:
                     return 404, {"detail": "past_term_not_supported", "message": "The portal source shows the current term only."}
                 year, term = current or wanted or (0, 0)
-                return 200, {"source": SOURCE, "fetched_at": _now(), "attendance": parse_attendance(resp.text, year, term)}
+                items = parse_attendance(resp.text, year, term)
+                if not items and current:
+                    # The live journal page can come back without course rows; the grades list has absence per course too
+                    status, grades = await _grades(client, current)
+                    if status != 200:
+                        return status, grades
+                    items = attendance_from_grades(grades["grades"])
+                return 200, {"source": SOURCE, "fetched_at": _now(), "attendance": items}
             if endpoint == "grades":
                 wanted = _term(params)
                 if not wanted:
@@ -350,19 +357,7 @@ async def fetch(endpoint: str, access_token: str, params: Optional[dict] = None)
                     wanted = _selected_term(page.text)
                 if not wanted:
                     return 502, {"detail": "invalid_upstream_response", "message": "Could not find the current term on the portal."}
-                year, term = wanted
-                # The portal reads these from the form body; in the query string it answers with nothing
-                resp = await client.post("/index.php", data={
-                    "mod": "grades", "ajx": "1", "action": "GetGrades", "yt": f"{year}#{term}"})
-                if _is_login_page(resp):
-                    return EXPIRED
-                try:
-                    payload = resp.json()
-                except ValueError:
-                    return 502, {"detail": "invalid_upstream_response", "message": "The portal returned an unexpected grades page."}
-                if str(payload.get("CODE")) != "1":
-                    return 502, {"detail": "upstream_error", "message": str(payload.get("DATA") or "The portal refused the grades request.")}
-                return 200, {"source": SOURCE, "fetched_at": _now(), "grades": parse_grades(payload.get("DATA") or "", year, term)}
+                return await _grades(client, wanted)
             if endpoint == "schedule":
                 wanted = _term(params)
                 if not wanted:
@@ -385,6 +380,31 @@ async def fetch(endpoint: str, access_token: str, params: Optional[dict] = None)
         return 502, {"detail": "upstream_unavailable", "message": f"SDU portal unavailable ({type(exc).__name__})."}
     # Moodle deadlines are not on the portal
     return 404, {"detail": "not_supported_by_portal", "message": f"'{endpoint}' is not available from the SDU portal source."}
+
+
+async def _grades(client: httpx.AsyncClient, wanted: tuple[int, int]) -> tuple[int, dict]:
+    year, term = wanted
+    # The portal reads these from the form body; in the query string it answers with nothing
+    resp = await client.post("/index.php", data={
+        "mod": "grades", "ajx": "1", "action": "GetGrades", "yt": f"{year}#{term}"})
+    if _is_login_page(resp):
+        return EXPIRED
+    try:
+        payload = resp.json()
+    except ValueError:
+        return 502, {"detail": "invalid_upstream_response", "message": "The portal returned an unexpected grades page."}
+    if str(payload.get("CODE")) != "1":
+        return 502, {"detail": "upstream_error", "message": str(payload.get("DATA") or "The portal refused the grades request.")}
+    return 200, {"source": SOURCE, "fetched_at": _now(), "grades": parse_grades(payload.get("DATA") or "", year, term)}
+
+
+def attendance_from_grades(grades: list[dict]) -> list[dict]:
+    """Attendance rows in the parse_attendance shape; the grades list has no hour counts."""
+    return [{
+        "lesson": g["lesson"], "course_code": g["course_code"], "year": g["year"], "term": g["term"],
+        "absence_percent": g["absence_percent"], "hours": None, "present": None, "absent": None, "permitted": None,
+        "updated_at": g["updated_at"],
+    } for g in grades]
 
 
 def _selected_term(html: str) -> Optional[tuple[int, int]]:

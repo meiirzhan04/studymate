@@ -79,6 +79,7 @@ class FakePortal:
         self.password = "right-password"
         self.require_code = True
         self.requests = []
+        self.journal = ATTENDANCE_PAGE
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         cookies = dict(item.split("=", 1) for item in request.headers.get("cookie", "").split("; ") if "=" in item)
@@ -115,7 +116,7 @@ class FakePortal:
             if action == "showSchedule" and form.get("year") == ["2026"] and form.get("term") == ["1"]:
                 return httpx.Response(200, html=SCHEDULE_DATA)
             return httpx.Response(200, text="")
-        pages = {"": HOME_PAGE, "grades": GRADES_PAGE, "transkript": TRANSCRIPT_PAGE, "ejurnal": ATTENDANCE_PAGE,
+        pages = {"": HOME_PAGE, "grades": GRADES_PAGE, "transkript": TRANSCRIPT_PAGE, "ejurnal": self.journal,
                  "schedule": SCHEDULE_PAGE}
         return httpx.Response(200, html=pages.get(mod, HOME_PAGE))
 
@@ -215,6 +216,15 @@ def test_portal_data_reaches_the_app_in_api_sdu_shapes(portal):
          "is_online": False, "year": 2026, "term": 1},
     ]
     assert client.get("/api/sdu/schedule", headers=auth(tok)).status_code == 200
+
+
+def test_attendance_falls_back_to_grades_when_the_journal_page_has_no_rows(portal):
+    # Seen live: the journal page answers without course rows while GetGrades still lists absence per course
+    portal.journal = '<select><option value="2026#1" selected>2026 - 2027 ( 1 )</option></select><table></table>'
+    tok = sign_in(portal)["access_token"]
+    attendance = client.get("/api/sdu/attendance?year=2026&term=1", headers=auth(tok)).json()
+    assert [(r["course_code"], r["lesson"], r["absence_percent"], r["year"], r["term"]) for r in attendance["attendance"]] == [
+        ("INF 101", "Intro to Testing", 4.0, 2026, 1), ("MDE 200", "Law", 0.0, 2026, 1)]
 
 
 def test_a_trusted_device_skips_the_code_on_the_next_sign_in(portal):
