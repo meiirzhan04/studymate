@@ -820,13 +820,9 @@ function SduPortalForm({ token, onDone, onCancel }) {
   )
 }
 
-/* Whether the backend signs in through the SDU portal directly (instead of the api-sdu gateway) */
+/* SDU sign-in uses the portal directly. */
 function usePortalLogin() {
-  const [enabled, setEnabled] = useState(false)
-  useEffect(() => {
-    api('/api/sdu/portal/config', null).then(c => setEnabled(!!c?.enabled)).catch(() => {})
-  }, [])
-  return enabled
+  return true
 }
 
 function Login({ onLogin, theme, toggleTheme }) {
@@ -867,31 +863,11 @@ function Login({ onLogin, theme, toggleTheme }) {
     const t = setTimeout(() => setResendIn(v => v - 1), 1000)
     return () => clearTimeout(t)
   }, [resendIn])
-  const [sduBusy, setSduBusy]       = useState(false)
   const portalLogin = usePortalLogin()
+  const [showPortalConnect, setShowPortalConnect] = useState(false)
   const [portalStep, setPortalStep] = useState(null) // { pending, notice } while SDU waits for the emailed code
   const [code, setCode]             = useState('')
   const [showSupport, setShowSupport] = useState(false)
-
-  const handleConnectSdu = async () => {
-    setSduBusy(true)
-    setError('')
-    try {
-      const callbackUri = getSduCallbackUri()
-      const res = await api('/api/sdu/authorize-url', null, {
-        method: 'POST',
-        body: JSON.stringify({ redirect_uri: callbackUri })
-      })
-      if (res && res.url) {
-        window.location.href = res.url
-      } else {
-        throw new Error('Failed to obtain authorization URL')
-      }
-    } catch (err) {
-      setError(err.message || 'Failed to initiate SDU authorization')
-      setSduBusy(false)
-    }
-  }
 
   // One form for everyone: a student number signs in through the SDU portal, an email with a StudyMate password
   const isStudentNumber = /^\d{6,12}$/.test(identifier.trim())
@@ -1079,8 +1055,8 @@ function Login({ onLogin, theme, toggleTheme }) {
           </div>
 
           <div className="login-header-text">
-            <h2>{portalStep ? 'Check your email' : authMode === 'login' ? 'Welcome back' : 'Create your account'}</h2>
-            <p>{portalStep ? 'Enter the code SDU just sent you.' : authMode === 'login' ? 'Sign in to see your grades and schedule.' : 'It takes less than a minute.'}</p>
+            <h2>{portalStep ? 'Check your email' : showPortalConnect ? 'Connect with SDU Portal' : authMode === 'login' ? 'Welcome back' : 'Create your account'}</h2>
+            <p>{portalStep ? 'Enter the code SDU just sent you.' : showPortalConnect ? 'Sign in with your my.sdu.edu.kz account.' : authMode === 'login' ? 'Sign in to see your grades and schedule.' : 'It takes less than a minute.'}</p>
           </div>
 
           {portalStep ? (
@@ -1098,23 +1074,14 @@ function Login({ onLogin, theme, toggleTheme }) {
                 ← Use a different account
               </button>
             </form>
+          ) : showPortalConnect ? (
+            <SduPortalForm onDone={onLogin} onCancel={() => setShowPortalConnect(false)} />
           ) : (<>
-          {!portalLogin && (<>
-          <button
-            type="button"
-            className="sdu-primary-hero-btn"
-            disabled={sduBusy || busy}
-            onClick={handleConnectSdu}
-          >
+          <button type="button" className="sdu-primary-hero-btn" onClick={() => setShowPortalConnect(true)}>
             <span className="sdu-mark">SDU</span>
-            <span>{sduBusy ? 'Connecting…' : 'Continue with SDU'}</span>
+            <span>Connect with SDU Portal</span>
             <Icons.ArrowRight size={16} />
           </button>
-
-          <div className="login-divider">
-            <span>or use your password</span>
-          </div>
-          </>)}
 
           {/* Segmented Auth Mode Switcher */}
           <div className="segmented-control">
@@ -1826,19 +1793,20 @@ function dueLabel(iso) {
   const now = new Date()
   const startOfDay = d => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
   const days = Math.round((startOfDay(due) - startOfDay(now)) / 86400000)
-  if (days <= 0) return 'Today'
-  if (days === 1) return 'Tomorrow'
-  return due.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
+  const day = days <= 0 ? 'Today' : days === 1 ? 'Tomorrow' : due.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
+  return `${day}, ${due.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`
 }
 
 function useDeadlines(token, connected) {
   const [data, setData] = useState(null)
   const [err, setErr] = useState('')
+  const [version, setVersion] = useState(0)
   useEffect(() => {
     if (!connected) return
+    setErr('')
     api('/api/sdu/deadlines?days=7', token).then(setData).catch(e => setErr(e.message))
-  }, [token, connected])
-  return { data, err }
+  }, [token, connected, version])
+  return { data, err, refresh: () => setVersion(v => v + 1) }
 }
 
 // US-09: SDU attendance for an earlier semester (termsBack = 1 is the previous one)
@@ -1856,10 +1824,27 @@ function usePastAttendance(token, connected, termsBack) {
   return state.termsBack === termsBack ? state : { termsBack, list: [], loading: termsBack > 0, failed: false }
 }
 
-function ComingUpCard({ nextInfo, scheduleFailed, deadlines, onOpenSchedule }) {
+function ComingUpCard({ nextInfo, scheduleFailed, deadlines, onOpenSchedule, token }) {
   const [showAll, setShowAll] = useState(false)
+  const [showMoodleConnect, setShowMoodleConnect] = useState(false)
+  const [calendarUrl, setCalendarUrl] = useState('')
+  const [moodleError, setMoodleError] = useState('')
+  const [moodleBusy, setMoodleBusy] = useState(false)
   const c = nextInfo?.course
-  const { data, err } = deadlines
+  const { data, err, refresh } = deadlines
+
+  const connectMoodle = async e => {
+    e.preventDefault()
+    setMoodleError('')
+    setMoodleBusy(true)
+    try {
+      await api('/api/sdu/moodle/connect', token, { method: 'POST', body: JSON.stringify({ calendar_url: calendarUrl.trim() }) })
+      setCalendarUrl('')
+      setShowMoodleConnect(false)
+      refresh()
+    } catch (error) { setMoodleError(error.message) }
+    finally { setMoodleBusy(false) }
+  }
   const upcoming = data?.upcoming || []
   const visible = showAll ? upcoming : upcoming.slice(0, 3)
 
@@ -1890,14 +1875,19 @@ function ComingUpCard({ nextInfo, scheduleFailed, deadlines, onOpenSchedule }) {
       <div className="up-section">
         <span className="up-label">Deadlines this week</span>
         {err || (data && !data.available) ? (
-          <p className="muted up-empty">
+          <div className="muted up-empty">
             {err || data.reason}
+            {!err && (
+              <button type="button" className="link-btn up-action" onClick={() => setShowMoodleConnect(v => !v)}>
+                {data.moodle_connected ? 'Reconnect Moodle calendar' : 'Connect Moodle calendar'} <Icons.ArrowRight size={14} />
+              </button>
+            )}
             {!err && data.action_url && (
               <a className="link-btn up-action" href={data.action_url} target="_blank" rel="noopener noreferrer">
                 Open SDU Platform → Moodle <Icons.ArrowRight size={14} />
               </a>
             )}
-          </p>
+          </div>
         ) : !data ? (
           <div className="skeleton" style={{ height: 40, marginTop: 8 }} />
         ) : !upcoming.length ? (
@@ -1915,6 +1905,14 @@ function ComingUpCard({ nextInfo, scheduleFailed, deadlines, onOpenSchedule }) {
               </li>
             ))}
           </ul>
+        )}
+        {showMoodleConnect && (
+          <form onSubmit={connectMoodle} className="login-form">
+            <small>In <a href="https://moodle.sdu.edu.kz/calendar/export.php" target="_blank" rel="noopener noreferrer">Moodle Calendar</a>, choose Export calendar → Events related to courses → Recent and next 60 days → Get calendar URL. Paste the private URL here.</small>
+            <input className="input-field" type="url" value={calendarUrl} onChange={e => setCalendarUrl(e.target.value)} placeholder="https://moodle.sdu.edu.kz/calendar/export_execute.php?..." required />
+            {moodleError && <small role="alert">{moodleError}</small>}
+            <button className="btn-primary" disabled={moodleBusy}>{moodleBusy ? 'Connecting…' : 'Connect Moodle'}</button>
+          </form>
         )}
         {upcoming.length > 3 && (
           <button type="button" className="link-btn up-more" onClick={() => setShowAll(v => !v)}>
@@ -2074,7 +2072,7 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token
       </section>
 
       <section className="split split-even">
-        <ComingUpCard nextInfo={findNextClass(sduData.schedule || [])} scheduleFailed={!!sduData.scheduleIssue && !sduData.schedule?.length} deadlines={deadlines} onOpenSchedule={() => setTab('schedule')} />
+        <ComingUpCard nextInfo={findNextClass(sduData.schedule || [])} scheduleFailed={!!sduData.scheduleIssue && !sduData.schedule?.length} deadlines={deadlines} onOpenSchedule={() => setTab('schedule')} token={token} />
         <AttentionCard items={attention} onSelect={setTab} />
       </section>
     </div>
@@ -3852,7 +3850,6 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
     setTimeout(() => setSduToast(''), ms)
   }
 
-  const portalLogin = usePortalLogin()
   const [showPortalConnect, setShowPortalConnect] = useState(false)
 
   const handlePortalConnected = async () => {
@@ -3869,19 +3866,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
   }
 
   const handleSduConnect = async () => {
-    if (portalLogin) { setShowPortalConnect(true); return }
-    try {
-      const callbackUri = getSduCallbackUri()
-      const res = await api('/api/sdu/authorize-url', token, {
-        method: 'POST',
-        body: JSON.stringify({ redirect_uri: callbackUri })
-      })
-      if (res && res.url) {
-        window.location.href = res.url
-      }
-    } catch (e) {
-      alert(e.message)
-    }
+    setShowPortalConnect(true)
   }
 
   const handleSduSync = async () => {

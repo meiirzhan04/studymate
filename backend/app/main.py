@@ -26,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from .repository import LOW_GRADE_THRESHOLD, MIN_ATTENDANCE, SQLiteRepository
-from . import admin, sdu_client, sdu_mock, sdu_portal
+from . import admin, sdu_client, sdu_mock, sdu_portal, moodle_calendar
 from . import deadlines as deadlines_mod
 from . import syllabi
 from . import academics
@@ -46,6 +46,10 @@ class PortalLoginRequest(BaseModel):
 class PortalVerifyRequest(BaseModel):
     pending: str = Field(min_length=10, max_length=8000)
     code: str = Field(pattern=r"^[0-9]{6}$")
+
+
+class MoodleCalendarRequest(BaseModel):
+    calendar_url: str = Field(min_length=20, max_length=4096)
 
 
 class SduCallbackRequest(BaseModel):
@@ -1130,7 +1134,7 @@ async def sdu_sync(user: Annotated[User, Depends(current_user)], auto: bool = Qu
     _, att_data = await sdu_client.fetch_sdu_data("attendance", access_token, params=active_term_params)
     _, grades_data = await sdu_client.fetch_sdu_data("grades", access_token, params=active_term_params)
 
-    deadline_items, deadlines_ok, _ = await fetch_deadlines(conn, user.student_id)
+    deadline_items, deadlines_ok, _ = await fetch_deadlines(conn, user.student_id, user.id)
     res = repo.sync_sdu_student_data(
         user.id,
         profile=profile_data if isinstance(profile_data, dict) else {},
@@ -1168,13 +1172,22 @@ MOODLE_NOT_LINKED = ("SDU Platform asks to connect or reconnect Moodle before ot
                      "Open SDU Platform → Moodle, check the connection, then refresh StudyMate.")
 
 
-async def fetch_deadlines(conn: dict, student_id: Optional[str]) -> tuple[list, bool, Optional[str]]:
+async def fetch_deadlines(conn: dict, student_id: Optional[str], user_id: Optional[str] = None) -> tuple[list, bool, Optional[str]]:
     """(items, available, reason). Moodle problems never disconnect SDU."""
     if sdu_mock.is_demo_connection(conn):
         items, _ = deadlines_mod.normalize(sdu_mock.deadlines())
         return items, True, None
+    sealed = repo.get_moodle_calendar(user_id) if user_id else None
+    if sealed:
+        stored = sdu_portal.unseal(sealed)
+        if not stored or not moodle_calendar.valid_export_url(stored.get("url", "")):
+            return [], False, "Reconnect your Moodle calendar."
+        try:
+            return await moodle_calendar.fetch_calendar(stored["url"]), True, None
+        except (ValueError, httpx.HTTPError):
+            return [], False, "Moodle calendar could not be loaded. Check your export link."
     if sdu_portal.is_portal_token(conn.get("access_token")):
-        return [], False, "Moodle deadlines aren't available when you sign in through the SDU portal."
+        return [], False, "Connect your Moodle calendar to see deadlines."
     if MOODLE_SCOPE not in (conn.get("scope") or "").split():
         return [], False, "Reconnect SDU to allow access to Moodle deadlines."
     status_code, data = await sdu_client.fetch_sdu_data("moodle/deadlines", conn["access_token"])
@@ -1197,16 +1210,37 @@ async def fetch_deadlines(conn: dict, student_id: Optional[str]) -> tuple[list, 
 @app.get("/api/sdu/deadlines")
 async def sdu_deadlines(user: Annotated[User, Depends(current_user)], days: int = Query(7, ge=1, le=60)):
     conn = require_sdu_connection(user.id)
-    items, available, reason = await fetch_deadlines(conn, user.student_id)
+    items, available, reason = await fetch_deadlines(conn, user.student_id, user.id)
     return {
         "available": available,
         "reason": reason,
+        "moodle_connected": bool(repo.get_moodle_calendar(user.id)),
         "action_url": SDU_PLATFORM_MOODLE_URL if reason == MOODLE_NOT_LINKED else None,
         "days": days,
         "upcoming": deadlines_mod.upcoming(items, days),
         "overdue": deadlines_mod.missed(items),
         "total": len(items),
     }
+
+
+@app.post("/api/sdu/moodle/connect")
+async def connect_moodle_calendar(req: MoodleCalendarRequest, user: Annotated[User, Depends(current_user)]):
+    require_sdu_connection(user.id)
+    url = req.calendar_url.strip()
+    if not moodle_calendar.valid_export_url(url):
+        raise HTTPException(status_code=400, detail="Paste the private calendar export URL from moodle.sdu.edu.kz.")
+    try:
+        items = await moodle_calendar.fetch_calendar(url)
+    except (ValueError, httpx.HTTPError) as exc:
+        raise HTTPException(status_code=400, detail="Could not read the Moodle calendar. Check the export link.") from exc
+    repo.save_moodle_calendar(user.id, sdu_portal.seal({"url": url}))
+    return {"connected": True, "total": len(items)}
+
+
+@app.delete("/api/sdu/moodle/connect")
+def disconnect_moodle_calendar(user: Annotated[User, Depends(current_user)]):
+    repo.delete_moodle_calendar(user.id)
+    return {"connected": False}
 
 
 def live_connection(user_id: str) -> Optional[dict]:

@@ -25,6 +25,7 @@ UPSERT_KEYS: dict[str, tuple[str, ...]] = {
     "academic_goals": ("user_id",),
     "deleted_accounts": ("user_id",),
     "sdu_connections": ("user_id",),
+    "moodle_calendars": ("user_id",),
     "sdu_oauth_attempts": ("state",),
     "sdu_snapshots": ("user_id", "kind"),
     "students": ("id",),
