@@ -1147,6 +1147,16 @@ button.avatar:hover { box-shadow: 0 0 0 3px var(--accent-ring); }
 }
 .modal-body .whatif-hint b { font-weight: 600; color: var(--text-secondary); }
 .up-action { display: flex; width: fit-content; align-items: center; gap: 4px; margin-top: 6px; }
+.moodle-connect-state { display: flex; gap: 12px; margin-top: 10px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
+.moodle-connect-icon { display: grid; place-items: center; flex: none; width: 36px; height: 36px; border-radius: 10px; background: var(--accent-soft); color: var(--accent-text); }
+.moodle-connect-copy { min-width: 0; }
+.moodle-connect-copy b { font-size: 13.5px; font-weight: 600; }
+.moodle-connect-copy p { margin-top: 3px; font-size: 12.5px; line-height: 1.45; color: var(--text-muted); }
+.moodle-connect-copy .btn-primary { margin-top: 12px; }
+.moodle-field { display: flex; flex-direction: column; gap: 7px; }
+.moodle-field label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
+.moodle-privacy-note { display: flex; align-items: center; gap: 7px; font-size: 12px !important; color: var(--text-muted) !important; }
+.moodle-privacy-note svg { flex: none; }
 
 /* ─── Sprint 4: comparison, resources, goals ───────────────── */
 .tag-success { background: var(--success-soft); color: var(--success); }

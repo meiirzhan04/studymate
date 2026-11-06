@@ -1836,10 +1836,26 @@ function ComingUpCard({ nextInfo, scheduleFailed, deadlines, onOpenSchedule, tok
   const [showMoodleConnect, setShowMoodleConnect] = useState(false)
   const [moodleUsername, setMoodleUsername] = useState('')
   const [moodlePassword, setMoodlePassword] = useState('')
+  const [showMoodlePassword, setShowMoodlePassword] = useState(false)
   const [moodleError, setMoodleError] = useState('')
   const [moodleBusy, setMoodleBusy] = useState(false)
   const c = nextInfo?.course
   const { data, err, refresh } = deadlines
+
+  const closeMoodleConnect = () => {
+    setShowMoodleConnect(false)
+    setMoodlePassword('')
+    setMoodleError('')
+  }
+
+  useEffect(() => {
+    if (!showMoodleConnect) return
+    const onKeyDown = e => {
+      if (e.key === 'Escape' && !moodleBusy) closeMoodleConnect()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [showMoodleConnect, moodleBusy])
 
   const connectMoodle = async e => {
     e.preventDefault()
@@ -1847,8 +1863,7 @@ function ComingUpCard({ nextInfo, scheduleFailed, deadlines, onOpenSchedule, tok
     setMoodleBusy(true)
     try {
       await api('/api/sdu/moodle/connect', token, { method: 'POST', body: JSON.stringify({ username: moodleUsername.trim(), password: moodlePassword }) })
-      setMoodlePassword('')
-      setShowMoodleConnect(false)
+      closeMoodleConnect()
       refresh()
     } catch (error) { setMoodlePassword(''); setMoodleError(error.message) }
     finally { setMoodleBusy(false) }
@@ -1883,13 +1898,15 @@ function ComingUpCard({ nextInfo, scheduleFailed, deadlines, onOpenSchedule, tok
       <div className="up-section">
         <span className="up-label">Deadlines this week</span>
         {err || (data && !data.available) ? (
-          <div className="muted up-empty">
-            {err || data.reason}
-            {!err && (
-              <button type="button" className="link-btn up-action" onClick={() => setShowMoodleConnect(v => !v)}>
-                {data.moodle_connected ? 'Reconnect Moodle' : 'Connect Moodle'} <Icons.ArrowRight size={14} />
+          <div className="moodle-connect-state">
+            <span className="moodle-connect-icon"><Icons.Book size={20} /></span>
+            <div className="moodle-connect-copy">
+              <b>{data?.moodle_connected ? 'Reconnect Moodle' : 'Your Moodle deadlines, here'}</b>
+              <p>{err || (data?.moodle_connected ? data.reason : 'Connect your Moodle account to see assignments and due times.')}</p>
+              <button type="button" className="btn-primary btn-sm" onClick={() => setShowMoodleConnect(true)}>
+                {data?.moodle_connected ? 'Reconnect' : 'Connect Moodle'} <Icons.ArrowRight size={14} />
               </button>
-            )}
+            </div>
           </div>
         ) : !data ? (
           <div className="skeleton" style={{ height: 40, marginTop: 8 }} />
@@ -1909,15 +1926,6 @@ function ComingUpCard({ nextInfo, scheduleFailed, deadlines, onOpenSchedule, tok
             ))}
           </ul>
         )}
-        {showMoodleConnect && (
-          <form onSubmit={connectMoodle} className="login-form">
-            <small>Sign in with your <a href="https://moodle.sdu.edu.kz/login/index.php" target="_blank" rel="noopener noreferrer">Moodle SDU</a> account. Your password is used once and is not saved.</small>
-            <input className="input-field" value={moodleUsername} onChange={e => setMoodleUsername(e.target.value)} placeholder="Moodle username" autoComplete="username" required />
-            <input className="input-field" type="password" value={moodlePassword} onChange={e => setMoodlePassword(e.target.value)} placeholder="Moodle password" autoComplete="current-password" required />
-            {moodleError && <small role="alert">{moodleError}</small>}
-            <button className="btn-primary" disabled={moodleBusy}>{moodleBusy ? 'Signing in…' : 'Sign in to Moodle'}</button>
-          </form>
-        )}
         {upcoming.length > 3 && (
           <button type="button" className="link-btn up-more" onClick={() => setShowAll(v => !v)}>
             {showAll ? 'Show less' : `Show all ${upcoming.length}`}
@@ -1927,6 +1935,46 @@ function ComingUpCard({ nextInfo, scheduleFailed, deadlines, onOpenSchedule, tok
           <p className="up-overdue"><Status tone="danger">{data.overdue.length} overdue, not submitted</Status></p>
         )}
       </div>
+      {showMoodleConnect && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && closeMoodleConnect()}>
+          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="moodle-connect-title">
+            <div className="modal-head">
+              <div>
+                <h2 id="moodle-connect-title">Connect Moodle</h2>
+                <p>Use your Moodle SDU username and password.</p>
+              </div>
+              <button type="button" className="icon-btn" onClick={closeMoodleConnect} aria-label="Close"><Icons.Close size={18} /></button>
+            </div>
+            <form onSubmit={connectMoodle}>
+              <div className="modal-body">
+                <div className="moodle-field">
+                  <label htmlFor="moodle-username">Moodle username</label>
+                  <span className="input-container">
+                    <span className="input-icon-left"><Icons.User size={16} /></span>
+                    <input id="moodle-username" className="input-field" value={moodleUsername} onChange={e => setMoodleUsername(e.target.value)} autoComplete="username" required autoFocus />
+                  </span>
+                </div>
+                <div className="moodle-field">
+                  <label htmlFor="moodle-password">Password</label>
+                  <span className="input-container">
+                    <span className="input-icon-left"><Icons.Lock size={16} /></span>
+                    <input id="moodle-password" className="input-field" type={showMoodlePassword ? 'text' : 'password'} value={moodlePassword} onChange={e => setMoodlePassword(e.target.value)} autoComplete="current-password" style={{ paddingRight: 44 }} required />
+                    <button type="button" className="input-btn-right" onClick={() => setShowMoodlePassword(v => !v)} aria-label={showMoodlePassword ? 'Hide password' : 'Show password'}>
+                      {showMoodlePassword ? <Icons.EyeOff size={16} /> : <Icons.Eye size={16} />}
+                    </button>
+                  </span>
+                </div>
+                {moodleError && <div className="alert-box alert-danger" role="alert"><Icons.AlertTriangle size={16} /><span>{moodleError}</span></div>}
+                <p className="moodle-privacy-note"><Icons.Shield size={15} /> Password is used to sign in and is never saved.</p>
+              </div>
+              <div className="modal-foot">
+                <button type="button" className="btn-ghost" onClick={closeMoodleConnect}>Cancel</button>
+                <button className="btn-primary" disabled={moodleBusy}>{moodleBusy ? 'Connecting…' : 'Connect Moodle'}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </article>
   )
 }
