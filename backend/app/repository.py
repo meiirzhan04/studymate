@@ -205,6 +205,10 @@ class SQLiteRepository:
                     scope TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS moodle_sessions (
+                    user_id TEXT PRIMARY KEY REFERENCES users(id),
+                    sealed_cookies TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS moodle_calendars (
                     user_id TEXT PRIMARY KEY REFERENCES users(id),
                     export_url TEXT NOT NULL
@@ -1072,20 +1076,21 @@ class SQLiteRepository:
                 return None
             return dict(row)
 
-    def save_moodle_calendar(self, user_id: str, sealed_url: str):
+    def save_moodle_session(self, user_id: str, sealed_cookies: str):
         with self.connect() as db:
-            db.execute("INSERT OR REPLACE INTO moodle_calendars (user_id, export_url) VALUES (?, ?)",
-                       (user_id, sealed_url))
+            db.execute("INSERT OR REPLACE INTO moodle_sessions (user_id, sealed_cookies) VALUES (?, ?)",
+                       (user_id, sealed_cookies))
+            db.execute("DELETE FROM moodle_calendars WHERE user_id = ?", (user_id,))
             db.commit()
 
-    def get_moodle_calendar(self, user_id: str) -> str | None:
+    def get_moodle_session(self, user_id: str) -> str | None:
         with self.connect() as db:
-            row = db.execute("SELECT export_url FROM moodle_calendars WHERE user_id = ?", (user_id,)).fetchone()
+            row = db.execute("SELECT sealed_cookies FROM moodle_sessions WHERE user_id = ?", (user_id,)).fetchone()
             return row[0] if row else None
 
-    def delete_moodle_calendar(self, user_id: str):
+    def delete_moodle_session(self, user_id: str):
         with self.connect() as db:
-            db.execute("DELETE FROM moodle_calendars WHERE user_id = ?", (user_id,))
+            db.execute("DELETE FROM moodle_sessions WHERE user_id = ?", (user_id,))
             db.commit()
 
     def delete_sdu_connection(self, user_id: str) -> bool:
@@ -1158,7 +1163,7 @@ class SQLiteRepository:
             if not db.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone():
                 return False
             db.execute("UPDATE support_tickets SET user_id = NULL WHERE user_id = ?", (user_id,))
-            for table in ("sdu_connections", "moodle_calendars", "sdu_snapshots", "academic_goals", "password_reset_tokens", "sdu_oauth_attempts", "login_identifiers"):
+            for table in ("sdu_connections", "moodle_sessions", "moodle_calendars", "sdu_snapshots", "academic_goals", "password_reset_tokens", "sdu_oauth_attempts", "login_identifiers"):
                 db.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
             db.execute("DELETE FROM users WHERE id = ?", (user_id,))
             db.execute(

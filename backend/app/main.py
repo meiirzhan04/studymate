@@ -48,8 +48,9 @@ class PortalVerifyRequest(BaseModel):
     code: str = Field(pattern=r"^[0-9]{6}$")
 
 
-class MoodleCalendarRequest(BaseModel):
-    calendar_url: str = Field(min_length=20, max_length=4096)
+class MoodleLoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=1, max_length=200)
 
 
 class SduCallbackRequest(BaseModel):
@@ -1165,46 +1166,21 @@ def seconds_since(iso_time: Optional[str]) -> float:
         return float("inf")
 
 
-MOODLE_SCOPE = "moodle:read"
-# Each student links Moodle on SDU Platform itself; without that link SDU answers 409 moodle_reconnect_required
-SDU_PLATFORM_MOODLE_URL = os.getenv("SDU_PLATFORM_MOODLE_URL", "https://sdu.javazhan.tech/moodle")
-MOODLE_NOT_LINKED = ("SDU Platform asks to connect or reconnect Moodle before other apps can read deadlines. "
-                     "Open SDU Platform → Moodle, check the connection, then refresh StudyMate.")
-
-
 async def fetch_deadlines(conn: dict, student_id: Optional[str], user_id: Optional[str] = None) -> tuple[list, bool, Optional[str]]:
     """(items, available, reason). Moodle problems never disconnect SDU."""
     if sdu_mock.is_demo_connection(conn):
         items, _ = deadlines_mod.normalize(sdu_mock.deadlines())
         return items, True, None
-    sealed = repo.get_moodle_calendar(user_id) if user_id else None
+    sealed = repo.get_moodle_session(user_id) if user_id else None
     if sealed:
-        stored = sdu_portal.unseal(sealed)
-        if not stored or not moodle_calendar.valid_export_url(stored.get("url", "")):
-            return [], False, "Reconnect your Moodle calendar."
+        cookies = sdu_portal.unseal(sealed)
+        if not cookies:
+            return [], False, "Reconnect your Moodle account."
         try:
-            return await moodle_calendar.fetch_calendar(stored["url"]), True, None
-        except (ValueError, httpx.HTTPError):
-            return [], False, "Moodle calendar could not be loaded. Check your export link."
-    if sdu_portal.is_portal_token(conn.get("access_token")):
-        return [], False, "Connect your Moodle calendar to see deadlines."
-    if MOODLE_SCOPE not in (conn.get("scope") or "").split():
-        return [], False, "Reconnect SDU to allow access to Moodle deadlines."
-    status_code, data = await sdu_client.fetch_sdu_data("moodle/deadlines", conn["access_token"])
-    if status_code != 200:
-        reason = sdu_short_message(data)
-        admin.record_sdu_error("moodle/deadlines", status_code, reason or "request failed", student_id)
-        if status_code == 409:
-            if "moodle" in (reason or "").lower():
-                return [], False, MOODLE_NOT_LINKED
-            return [], False, f"SDU needs an action before Moodle deadlines can load: {reason or 'link your Moodle account or sign in again on the SDU portal'}."
-        return [], False, f"Moodle deadlines are unavailable right now ({status_code})."
-    items, problem = deadlines_mod.normalize(data)
-    if problem:
-        # Key names only, never values
-        admin.record_sdu_error("moodle/deadlines", status_code, problem, student_id)
-        return [], False, "Moodle returned deadlines in an unexpected format."
-    return items, True, None
+            return await moodle_calendar.fetch_deadlines(cookies), True, None
+        except (moodle_calendar.MoodleError, httpx.HTTPError) as exc:
+            return [], False, str(exc) if isinstance(exc, moodle_calendar.MoodleError) else "Moodle is unavailable right now."
+    return [], False, "Connect your Moodle account to see deadlines."
 
 
 @app.get("/api/sdu/deadlines")
@@ -1214,8 +1190,8 @@ async def sdu_deadlines(user: Annotated[User, Depends(current_user)], days: int 
     return {
         "available": available,
         "reason": reason,
-        "moodle_connected": bool(repo.get_moodle_calendar(user.id)),
-        "action_url": SDU_PLATFORM_MOODLE_URL if reason == MOODLE_NOT_LINKED else None,
+        "moodle_connected": bool(repo.get_moodle_session(user.id)),
+        "action_url": None,
         "days": days,
         "upcoming": deadlines_mod.upcoming(items, days),
         "overdue": deadlines_mod.missed(items),
@@ -1224,22 +1200,25 @@ async def sdu_deadlines(user: Annotated[User, Depends(current_user)], days: int 
 
 
 @app.post("/api/sdu/moodle/connect")
-async def connect_moodle_calendar(req: MoodleCalendarRequest, user: Annotated[User, Depends(current_user)]):
+async def connect_moodle_calendar(req: MoodleLoginRequest, user: Annotated[User, Depends(current_user)]):
     require_sdu_connection(user.id)
-    url = req.calendar_url.strip()
-    if not moodle_calendar.valid_export_url(url):
-        raise HTTPException(status_code=400, detail="Paste the private calendar export URL from moodle.sdu.edu.kz.")
+    attempt_key = f"moodle:{req.username.strip().lower()}"
+    if repo.check_brute_force(attempt_key):
+        raise HTTPException(status_code=429, detail="Too many Moodle sign-in attempts. Try again later.")
     try:
-        items = await moodle_calendar.fetch_calendar(url)
-    except (ValueError, httpx.HTTPError) as exc:
-        raise HTTPException(status_code=400, detail="Could not read the Moodle calendar. Check the export link.") from exc
-    repo.save_moodle_calendar(user.id, sdu_portal.seal({"url": url}))
+        cookies, items = await moodle_calendar.login(req.username.strip(), req.password)
+    except (moodle_calendar.MoodleError, httpx.HTTPError) as exc:
+        repo.record_attempt(attempt_key)
+        detail = str(exc) if isinstance(exc, moodle_calendar.MoodleError) else "Moodle is unavailable right now."
+        raise HTTPException(status_code=400, detail=detail) from exc
+    repo.clear_attempts(attempt_key)
+    repo.save_moodle_session(user.id, sdu_portal.seal(cookies))
     return {"connected": True, "total": len(items)}
 
 
 @app.delete("/api/sdu/moodle/connect")
 def disconnect_moodle_calendar(user: Annotated[User, Depends(current_user)]):
-    repo.delete_moodle_calendar(user.id)
+    repo.delete_moodle_session(user.id)
     return {"connected": False}
 
 

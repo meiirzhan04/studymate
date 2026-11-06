@@ -1139,18 +1139,18 @@ def test_moodle_errors_do_not_disconnect_sdu(monkeypatch):
     tok = token(u["student_id"], "password123")
     repo.save_sdu_connection(u["id"], "live_token_md", time.time() + 3600, "profile:read moodle:read")
 
-    async def moodle_401(endpoint, access_token, params=None, client=None):
-        return 401, {"detail": "moodle not linked"}
-    monkeypatch.setattr(sdu_mod, "fetch_sdu_data", moodle_401)
+    async def gateway_must_not_be_called(endpoint, access_token, params=None, client=None):
+        raise AssertionError("Moodle must not use the SDU gateway")
+    monkeypatch.setattr(sdu_mod, "fetch_sdu_data", gateway_must_not_be_called)
 
     res = client.get("/api/sdu/deadlines", headers=auth(tok)).json()
     assert res["available"] is False
     assert repo.get_sdu_connection(u["id"]) is not None
 
-    # Without the moodle scope the API isn't even called
+    # The SDU OAuth scope no longer affects Moodle's separate connection.
     repo.save_sdu_connection(u["id"], "live_token_md", time.time() + 3600, "profile:read")
     res = client.get("/api/sdu/deadlines", headers=auth(tok)).json()
-    assert res["available"] is False and "Reconnect" in res["reason"]
+    assert res["available"] is False and "Connect your Moodle" in res["reason"]
 
 
 def test_demo_deadlines_next_7_days_and_missed_alert_once():
@@ -1423,19 +1423,21 @@ def test_restart_keeps_sdu_data_even_without_seeded_css105_grades():
     assert restarted.authenticate(u["student_id"], "password123")["id"] == u["id"]
 
 
-def test_moodle_not_linked_on_sdu_platform_points_the_student_to_fix_it(monkeypatch):
-    import app.sdu_client as sdu_mod
+def test_expired_moodle_session_points_the_student_to_reconnect(monkeypatch):
+    from app import moodle_calendar, sdu_portal
     from app.main import repo
     u = repo.create_user("Moodle Unlinked", f"stu_ml_{secrets.token_hex(4)}", "password123")
     tok = token(u["student_id"], "password123")
     repo.save_sdu_connection(u["id"], "live_token_ml", time.time() + 3600, "profile:read moodle:read")
 
-    async def moodle_409(endpoint, access_token, params=None, client=None):
-        return 409, {"detail": {"code": "moodle_reconnect_required", "message": "Connect or reconnect Moodle in SDU Platform"}}
-    monkeypatch.setattr(sdu_mod, "fetch_sdu_data", moodle_409)
+    repo.save_moodle_session(u["id"], sdu_portal.seal({"MoodleSession": "expired"}))
+
+    async def expired_session(cookies):
+        raise moodle_calendar.MoodleError("Moodle session expired. Reconnect your account.")
+    monkeypatch.setattr(moodle_calendar, "fetch_deadlines", expired_session)
 
     res = client.get("/api/sdu/deadlines", headers=auth(tok)).json()
     assert res["available"] is False
-    assert "Moodle" in res["reason"] and "SDU Platform" in res["reason"]
-    assert res["action_url"] == "https://sdu.javazhan.tech/moodle"
+    assert "Moodle session expired" in res["reason"]
+    assert res["action_url"] is None
     assert repo.get_sdu_connection(u["id"]) is not None      # SDU itself stays connected

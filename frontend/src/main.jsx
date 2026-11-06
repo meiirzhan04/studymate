@@ -1803,8 +1803,15 @@ function useDeadlines(token, connected) {
   const [version, setVersion] = useState(0)
   useEffect(() => {
     if (!connected) return
-    setErr('')
-    api('/api/sdu/deadlines?days=7', token).then(setData).catch(e => setErr(e.message))
+    let active = true
+    const load = () => api('/api/sdu/deadlines?days=7', token)
+      .then(result => { if (active) { setData(result); setErr('') } })
+      .catch(e => { if (active) setErr(e.message) })
+    load()
+    const timer = setInterval(load, 30000)
+    const onVisible = () => { if (!document.hidden) load() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { active = false; clearInterval(timer); document.removeEventListener('visibilitychange', onVisible) }
   }, [token, connected, version])
   return { data, err, refresh: () => setVersion(v => v + 1) }
 }
@@ -1827,7 +1834,8 @@ function usePastAttendance(token, connected, termsBack) {
 function ComingUpCard({ nextInfo, scheduleFailed, deadlines, onOpenSchedule, token }) {
   const [showAll, setShowAll] = useState(false)
   const [showMoodleConnect, setShowMoodleConnect] = useState(false)
-  const [calendarUrl, setCalendarUrl] = useState('')
+  const [moodleUsername, setMoodleUsername] = useState('')
+  const [moodlePassword, setMoodlePassword] = useState('')
   const [moodleError, setMoodleError] = useState('')
   const [moodleBusy, setMoodleBusy] = useState(false)
   const c = nextInfo?.course
@@ -1838,11 +1846,11 @@ function ComingUpCard({ nextInfo, scheduleFailed, deadlines, onOpenSchedule, tok
     setMoodleError('')
     setMoodleBusy(true)
     try {
-      await api('/api/sdu/moodle/connect', token, { method: 'POST', body: JSON.stringify({ calendar_url: calendarUrl.trim() }) })
-      setCalendarUrl('')
+      await api('/api/sdu/moodle/connect', token, { method: 'POST', body: JSON.stringify({ username: moodleUsername.trim(), password: moodlePassword }) })
+      setMoodlePassword('')
       setShowMoodleConnect(false)
       refresh()
-    } catch (error) { setMoodleError(error.message) }
+    } catch (error) { setMoodlePassword(''); setMoodleError(error.message) }
     finally { setMoodleBusy(false) }
   }
   const upcoming = data?.upcoming || []
@@ -1879,13 +1887,8 @@ function ComingUpCard({ nextInfo, scheduleFailed, deadlines, onOpenSchedule, tok
             {err || data.reason}
             {!err && (
               <button type="button" className="link-btn up-action" onClick={() => setShowMoodleConnect(v => !v)}>
-                {data.moodle_connected ? 'Reconnect Moodle calendar' : 'Connect Moodle calendar'} <Icons.ArrowRight size={14} />
+                {data.moodle_connected ? 'Reconnect Moodle' : 'Connect Moodle'} <Icons.ArrowRight size={14} />
               </button>
-            )}
-            {!err && data.action_url && (
-              <a className="link-btn up-action" href={data.action_url} target="_blank" rel="noopener noreferrer">
-                Open SDU Platform → Moodle <Icons.ArrowRight size={14} />
-              </a>
             )}
           </div>
         ) : !data ? (
@@ -1908,10 +1911,11 @@ function ComingUpCard({ nextInfo, scheduleFailed, deadlines, onOpenSchedule, tok
         )}
         {showMoodleConnect && (
           <form onSubmit={connectMoodle} className="login-form">
-            <small>In <a href="https://moodle.sdu.edu.kz/calendar/export.php" target="_blank" rel="noopener noreferrer">Moodle Calendar</a>, choose Export calendar → Events related to courses → Recent and next 60 days → Get calendar URL. Paste the private URL here.</small>
-            <input className="input-field" type="url" value={calendarUrl} onChange={e => setCalendarUrl(e.target.value)} placeholder="https://moodle.sdu.edu.kz/calendar/export_execute.php?..." required />
+            <small>Sign in with your <a href="https://moodle.sdu.edu.kz/login/index.php" target="_blank" rel="noopener noreferrer">Moodle SDU</a> account. Your password is used once and is not saved.</small>
+            <input className="input-field" value={moodleUsername} onChange={e => setMoodleUsername(e.target.value)} placeholder="Moodle username" autoComplete="username" required />
+            <input className="input-field" type="password" value={moodlePassword} onChange={e => setMoodlePassword(e.target.value)} placeholder="Moodle password" autoComplete="current-password" required />
             {moodleError && <small role="alert">{moodleError}</small>}
-            <button className="btn-primary" disabled={moodleBusy}>{moodleBusy ? 'Connecting…' : 'Connect Moodle'}</button>
+            <button className="btn-primary" disabled={moodleBusy}>{moodleBusy ? 'Signing in…' : 'Sign in to Moodle'}</button>
           </form>
         )}
         {upcoming.length > 3 && (

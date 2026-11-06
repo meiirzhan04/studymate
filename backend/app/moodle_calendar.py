@@ -1,85 +1,128 @@
-"""Read a student's private Moodle calendar export without storing a password."""
+"""Moodle browser login and the student's live action deadlines."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from urllib.parse import parse_qs, urlsplit
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+import re
+import time
+from urllib.parse import urlsplit
 
 import httpx
+from bs4 import BeautifulSoup
 
-MOODLE_HOST = "moodle.sdu.edu.kz"
+from . import deadlines
 
-
-def valid_export_url(value: str) -> bool:
-    try:
-        url = urlsplit(value)
-        query = parse_qs(url.query)
-        return (url.scheme == "https" and url.hostname == MOODLE_HOST and url.port is None
-                and url.path == "/calendar/export_execute.php" and bool(query.get("authtoken"))
-                and bool(query.get("username")) and not url.username and not url.password
-                and not url.fragment and len(value) <= 4096)
-    except ValueError:
-        return False
+ORIGIN = "https://moodle.sdu.edu.kz"
+HOST = "moodle.sdu.edu.kz"
+TIMEOUT = httpx.Timeout(20, connect=8)
+SESSION_COOKIE = "MoodleSession"
+SESSKEY = re.compile(r'"sesskey"\s*:\s*"([A-Za-z0-9]+)"')
 
 
-def _unescape(value: str) -> str:
-    return value.replace("\\n", "\n").replace("\\N", "\n").replace("\\,", ",").replace("\\;", ";").replace("\\\\", "\\")
+class MoodleError(Exception):
+    pass
 
 
-def _date(value: str, key: str) -> str | None:
-    try:
-        if len(value) == 8:
-            parsed = datetime.strptime(value, "%Y%m%d").replace(tzinfo=timezone.utc)
-        else:
-            parsed = datetime.strptime(value.rstrip("Z"), "%Y%m%dT%H%M%S")
-            if value.endswith("Z"):
-                parsed = parsed.replace(tzinfo=timezone.utc)
-            else:
-                tzid = next((part[5:] for part in key.split(";") if part.startswith("TZID=")), "Asia/Almaty")
-                parsed = parsed.replace(tzinfo=ZoneInfo(tzid))
-        return parsed.isoformat()
-    except (ValueError, ZoneInfoNotFoundError):
-        return None
+def _on_moodle(url: str) -> bool:
+    parsed = urlsplit(url)
+    return parsed.scheme == "https" and parsed.hostname == HOST and parsed.port is None
 
 
-def parse_calendar(body: str) -> list[dict]:
-    if "BEGIN:VCALENDAR" not in body:
-        raise ValueError("Moodle did not return a calendar. Check the export link.")
-    lines = []
-    for line in body.splitlines():
-        if line.startswith((" ", "\t")) and lines:
-            lines[-1] += line[1:]
-        else:
-            lines.append(line)
-    events = []
-    event = None
-    for line in lines:
-        if line == "BEGIN:VEVENT":
-            event = {}
-        elif line == "END:VEVENT" and event is not None:
-            due_key = next((key for key in event if key.startswith("DTSTART")), None)
-            end_key = next((key for key in event if key.startswith("DTEND")), None)
-            due = _date(event[due_key], due_key) if due_key else None
-            end = _date(event[end_key], end_key) if end_key else None
-            title = _unescape(event.get("SUMMARY", "")).strip()
-            if due and title and (not end or end == due):
-                events.append({"id": event.get("UID", f"{title}|{due}"), "title": title,
-                               "course": _unescape(event.get("CATEGORIES", "")).strip() or None,
-                               "type": "moodle", "due_at": due, "submitted": None,
-                               "url": None})
-            event = None
-        elif event is not None and ":" in line:
-            key, value = line.split(":", 1)
-            event[key] = value
-    events.sort(key=lambda item: item["due_at"])
-    return events
+def _session_key(html: str) -> str | None:
+    match = SESSKEY.search(html)
+    if match:
+        return match.group(1)
+    field = BeautifulSoup(html, "html.parser").select_one('input[name="sesskey"]')
+    return field.get("value") if field else None
 
 
-async def fetch_calendar(url: str) -> list[dict]:
-    if not valid_export_url(url):
-        raise ValueError("Paste the private calendar export URL from moodle.sdu.edu.kz.")
-    async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
-        response = await client.get(url)
-    if response.status_code != 200 or len(response.content) > 2_000_000:
-        raise ValueError("Moodle calendar is unavailable. Check the export link and try again.")
-    return parse_calendar(response.text)
+async def _dashboard(client: httpx.AsyncClient) -> str:
+    response = await client.get(f"{ORIGIN}/my/")
+    if not _on_moodle(str(response.url)) or "/login/" in response.url.path or response.status_code != 200:
+        raise MoodleError("Moodle session expired. Reconnect your account.")
+    sesskey = _session_key(response.text)
+    if not sesskey:
+        raise MoodleError("Moodle did not provide a session key. Reconnect your account.")
+    return sesskey
+
+
+def _normalise(events: list[dict]) -> list[dict]:
+    mapped = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        action = event.get("action") if isinstance(event.get("action"), dict) else {}
+        url = action.get("url") or event.get("viewurl")
+        mapped.append({"id": event.get("id"), "name": event.get("name"),
+                       "course": event.get("course"), "due_at": event.get("timesort") or event.get("timestart"),
+                       "type": event.get("modulename") or "assignment",
+                       "submitted": False, "url": url if isinstance(url, str) and _on_moodle(url) else None})
+    items, problem = deadlines.normalize({"events": mapped})
+    if problem:
+        raise MoodleError("Moodle returned deadlines in an unexpected format.")
+    return items
+
+
+async def _deadlines(client: httpx.AsyncClient, sesskey: str) -> list[dict]:
+    now = int(time.time())
+    items = []
+    after = 0
+    for _ in range(5):
+        request = [{"index": 0, "methodname": "core_calendar_get_action_events_by_timesort",
+                    "args": {"timesortfrom": now, "timesortto": now + 60 * 86400,
+                             "aftereventid": after, "limitnum": 50}}]
+        response = await client.post(f"{ORIGIN}/lib/ajax/service.php",
+                                     params={"sesskey": sesskey, "info": "core_calendar_get_action_events_by_timesort"},
+                                     json=request)
+        if response.status_code != 200 or not _on_moodle(str(response.url)):
+            raise MoodleError("Could not load Moodle deadlines right now.")
+        try:
+            result = response.json()[0]
+            if result.get("error"):
+                raise MoodleError("Could not load Moodle deadlines. Reconnect your account.")
+            data = result["data"]
+            page = data["events"]
+            if not isinstance(page, list):
+                raise ValueError("invalid events")
+        except (IndexError, KeyError, TypeError, ValueError) as exc:
+            raise MoodleError("Moodle returned deadlines in an unexpected format.") from exc
+        items.extend(page)
+        last = data.get("lastid")
+        if len(page) < 50 or not last or last == after:
+            break
+        after = int(last)
+    return _normalise(items)
+
+
+async def login(username: str, password: str) -> tuple[dict, list[dict]]:
+    """Use the password once; persist only Moodle's encrypted session cookie."""
+    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
+        page = await client.get(f"{ORIGIN}/login/index.php")
+        if page.status_code != 200 or not _on_moodle(str(page.url)):
+            raise MoodleError("Moodle login page is unavailable.")
+        form = BeautifulSoup(page.text, "html.parser").select_one('form#login')
+        token = form.select_one('input[name="logintoken"]') if form else None
+        if not token or not token.get("value"):
+            raise MoodleError("Moodle login form is unavailable.")
+        response = await client.post(f"{ORIGIN}/login/index.php",
+                                     data={"username": username, "password": password,
+                                           "logintoken": token["value"], "anchor": ""})
+        if not _on_moodle(str(response.url)):
+            raise MoodleError("Moodle requires another sign-in step. Finish it on Moodle, then try again.")
+        if "/login/" in response.url.path:
+            raise MoodleError("Moodle username or password is incorrect.")
+        try:
+            sesskey = await _dashboard(client)
+        except MoodleError as exc:
+            raise MoodleError("Moodle username or password is incorrect, or another sign-in step is required.") from exc
+        cookies = {cookie.name: cookie.value for cookie in client.cookies.jar
+                   if cookie.domain.lstrip(".") == HOST and cookie.name == SESSION_COOKIE}
+        if SESSION_COOKIE not in cookies:
+            raise MoodleError("Moodle did not create a session. Try again.")
+        return cookies, await _deadlines(client, sesskey)
+
+
+async def fetch_deadlines(cookies: dict) -> list[dict]:
+    if not isinstance(cookies, dict) or not cookies.get(SESSION_COOKIE):
+        raise MoodleError("Moodle session expired. Reconnect your account.")
+    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True,
+                                 cookies={SESSION_COOKIE: cookies[SESSION_COOKIE]}) as client:
+        return await _deadlines(client, await _dashboard(client))
