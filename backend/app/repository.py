@@ -173,6 +173,12 @@ class SQLiteRepository:
                     course_targets_json TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS goal_settings (
+                    user_id TEXT PRIMARY KEY,
+                    gpa_basis TEXT NOT NULL DEFAULT 'semester',
+                    semester TEXT,
+                    updated_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS support_tickets (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id TEXT,
@@ -553,19 +559,36 @@ class SQLiteRepository:
                 "SELECT target_gpa, target_attendance, course_targets_json, updated_at FROM academic_goals WHERE user_id = ?",
                 (user_id,)
             ).fetchone()
+            settings = db.execute("SELECT gpa_basis, semester FROM goal_settings WHERE user_id = ?", (user_id,)).fetchone()
         if not row:
             return None
+        # Goals saved before the GPA basis existed were term goals ("every course at X%")
         return {"target_gpa": row["target_gpa"], "target_attendance": row["target_attendance"],
-                "course_targets": json.loads(row["course_targets_json"]), "updated_at": row["updated_at"]}
+                "course_targets": json.loads(row["course_targets_json"]), "updated_at": row["updated_at"],
+                "gpa_basis": settings["gpa_basis"] if settings else "semester",
+                "semester": settings["semester"] if settings else None}
 
     def save_goal(self, user_id: str, target_gpa: float | None, target_attendance: float | None,
-                  course_targets: dict[str, float]) -> None:
+                  course_targets: dict[str, float], gpa_basis: str | None = None, semester: str | None = None) -> None:
+        now = datetime.now(timezone.utc).isoformat()
         with self.connect() as db:
             db.execute(
                 "INSERT OR REPLACE INTO academic_goals (user_id, target_gpa, target_attendance, course_targets_json, updated_at) "
                 "VALUES (?, ?, ?, ?, ?)",
-                (user_id, target_gpa, target_attendance, json.dumps(course_targets), datetime.now(timezone.utc).isoformat())
+                (user_id, target_gpa, target_attendance, json.dumps(course_targets), now)
             )
+            if gpa_basis or semester:
+                previous = db.execute("SELECT gpa_basis, semester FROM goal_settings WHERE user_id = ?", (user_id,)).fetchone()
+                db.execute(
+                    "INSERT OR REPLACE INTO goal_settings (user_id, gpa_basis, semester, updated_at) VALUES (?, ?, ?, ?)",
+                    (user_id, gpa_basis or (previous["gpa_basis"] if previous else "semester"),
+                     semester or (previous["semester"] if previous else None), now)
+                )
+            db.commit()
+
+    def add_notification(self, student_id: str, ntype: str, title: str, detail: str, course: str | None = None) -> None:
+        with self.connect() as db:
+            self._add_notification(db, student_id, ntype, title, detail, course, datetime.now(timezone.utc).isoformat())
             db.commit()
 
     def get_notifications(self, student_id: str):
@@ -1163,7 +1186,7 @@ class SQLiteRepository:
             if not db.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone():
                 return False
             db.execute("UPDATE support_tickets SET user_id = NULL WHERE user_id = ?", (user_id,))
-            for table in ("sdu_connections", "moodle_sessions", "moodle_calendars", "sdu_snapshots", "academic_goals", "password_reset_tokens", "sdu_oauth_attempts", "login_identifiers"):
+            for table in ("sdu_connections", "moodle_sessions", "moodle_calendars", "sdu_snapshots", "academic_goals", "goal_settings", "password_reset_tokens", "sdu_oauth_attempts", "login_identifiers"):
                 db.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
             db.execute("DELETE FROM users WHERE id = ?", (user_id,))
             db.execute(
@@ -1317,6 +1340,29 @@ class SQLiteRepository:
                             "INSERT INTO grades (student_id, semester, course, code, credits, components_json) VALUES (?, 'spring-2026', ?, ?, ?, ?)",
                             (sid, course_name, code_val, credits_val, json.dumps(comps))
                         )
+
+            # US-18/19: keep what goal feasibility needs and the single "Final Grade" row drops:
+            # SDU's assessment breakdown per course and the journal's class-hour counts
+            now_iso = datetime.now(timezone.utc).isoformat()
+            if isinstance(grades, list):
+                breakdowns = {}
+                for g in grades:
+                    if not isinstance(g, dict) or not g.get("lesson") or not isinstance(g.get("components"), list):
+                        continue
+                    if active_term and g.get("year") is not None and g.get("term") is not None and \
+                            (int(g["year"]), int(g["term"])) != (int(active_term["year"]), int(active_term["term"])):
+                        continue
+                    parts = [{"name": c.get("name"), "weight": c.get("weight"), "score": c.get("score")}
+                             for c in g["components"] if isinstance(c, dict)]
+                    if parts:
+                        breakdowns[str(g.get("course_code") or g["lesson"]).strip()] = {
+                            "course": g["lesson"], "code": g.get("course_code"), "components": parts}
+                if breakdowns or replace_local_grades:
+                    self._swap_snapshot(db, user_id, "grade_components", {"courses": breakdowns}, now_iso)
+            if isinstance(attendance, list) and attendance:
+                rows = [{k: a.get(k) for k in ("lesson", "course_code", "hours", "present", "absent", "permitted", "absence_percent")}
+                        for a in attendance if isinstance(a, dict) and a.get("lesson")]
+                self._swap_snapshot(db, user_id, "attendance_detail", {"rows": rows}, now_iso)
 
             # Notify only about real changes since the previous sync
             now = datetime.now(timezone.utc).isoformat()

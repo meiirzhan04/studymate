@@ -24,6 +24,7 @@ BACKEND = "postgres" if DATABASE_URL else "sqlite"
 UPSERT_KEYS: dict[str, tuple[str, ...]] = {
     "academic_goals": ("user_id",),
     "deleted_accounts": ("user_id",),
+    "goal_settings": ("user_id",),
     "sdu_connections": ("user_id",),
     "moodle_sessions": ("user_id",),
     "moodle_calendars": ("user_id",),

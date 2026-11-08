@@ -154,15 +154,20 @@ def test_goals_are_saved_and_tracked_per_student():
     empty = client.get("/api/student/goals", headers=auth(tok)).json()
     assert empty["goal"] is None and empty["progress"]["gpa"]["current"] == 3.5
 
+    # Both courses are fully graded, so 3.50 is the final term GPA: an achievable target is saved
+    # (attendance cannot be verified without SDU class-hour counts, so it is saved with a warning)
     res = client.put("/api/student/goals", headers=auth(tok),
-                     json={"target_gpa": 3.8, "target_attendance": 90, "course_targets": {"CAL 101": 85}})
+                     json={"target_gpa": 3.5, "target_attendance": 90, "course_targets": {"CAL 101": 80}})
     assert res.status_code == 200
     body = client.get("/api/student/goals", headers=auth(tok)).json()
-    assert body["goal"]["target_gpa"] == 3.8 and body["goal"]["course_targets"] == {"CAL 101": 85}
+    assert body["goal"]["target_gpa"] == 3.5 and body["goal"]["course_targets"] == {"CAL 101": 80}
+    assert body["goal"]["target_attendance"] == 90
     rows = {r["course"]: r for r in body["progress"]["courses"]}
-    assert rows["Physics"]["target"] == 95.0 and rows["Physics"]["on_track"] is True
-    assert rows["Calculus"]["target"] == 85 and rows["Calculus"]["gap"] == 4.0
-    assert body["progress"]["gpa"]["on_track_pct"] == 92
+    assert rows["Physics"]["target"] == 90.0 and rows["Physics"]["on_track"] is True
+    assert rows["Calculus"]["target"] == 80 and rows["Calculus"]["gap"] == -1.0
+    assert body["progress"]["gpa"]["on_track_pct"] == 100
+    assert body["tracking"]["gpa"]["status"] == "achieved"
+    assert body["tracking"]["attendance"]["status"] == "insufficient_data"
 
 
 def test_goal_input_is_validated():
@@ -194,7 +199,7 @@ def test_goals_still_load_and_save_after_a_targeted_course_disappears():
         "Physics": [{"name": "Final", "score": 90, "weight": 1.0}],
         "Calculus": [{"name": "Final", "score": 70, "weight": 1.0}],
     })
-    assert client.put("/api/student/goals", headers=auth(tok), json={"course_targets": {"CAL 101": 80}}).status_code == 200
+    assert client.put("/api/student/goals", headers=auth(tok), json={"course_targets": {"CAL 101": 65}}).status_code == 200
     with repo.connect() as db:     # e.g. a re-sync renamed the course code
         db.execute("DELETE FROM grades WHERE student_id = ? AND course = 'Calculus'", (u["student_id"],))
         db.commit()

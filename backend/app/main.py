@@ -30,6 +30,7 @@ from . import admin, sdu_client, sdu_mock, sdu_portal, moodle_calendar
 from . import deadlines as deadlines_mod
 from . import syllabi
 from . import academics
+from . import goals as goals_mod
 from . import db as dbmod
 
 
@@ -1107,6 +1108,7 @@ async def sdu_sync(user: Annotated[User, Depends(current_user)], auto: bool = Qu
             deadlines=deadlines_mod.normalize(sdu_mock.deadlines())[0],
         )
         repo.save_snapshot(user.id, "synced", {})
+        refresh_goal_alerts(user)
         return {"ok": True, "connected": True, "synced": True, "demo_mode": True, "updated_at": res.get("updated_at"),
                 "new_notifications": res.get("new_notifications", 0)}
 
@@ -1148,6 +1150,7 @@ async def sdu_sync(user: Annotated[User, Depends(current_user)], auto: bool = Qu
         replace_local_grades=True,
     )
     repo.save_snapshot(user.id, "synced", {})
+    refresh_goal_alerts(user)
     return {"ok": True, "connected": True, "synced": True, "updated_at": res.get("updated_at"), "new_notifications": res.get("new_notifications", 0)}
 
 
@@ -1559,6 +1562,8 @@ class GoalRequest(BaseModel):
     target_gpa: Optional[float] = Field(default=None, ge=1.0, le=4.0)
     target_attendance: Optional[float] = Field(default=None, ge=50, le=100)
     course_targets: dict[str, float] = Field(default_factory=dict, max_length=30)
+    # "semester": this term's GPA; "cumulative": the transcript GPA after this term. Never interchangeable.
+    gpa_basis: Optional[Literal["semester", "cumulative"]] = None
 
     @field_validator("course_targets")
     @classmethod
@@ -1571,38 +1576,201 @@ class GoalRequest(BaseModel):
         return {code.strip(): round(target, 1) for code, target in value.items()}
 
 
+SDU_PLACEHOLDER_COMPONENT = "Final Grade"   # the SDU sync's one-line course total, not an assessment
+
+
 def goal_courses(user: User, semester: str) -> tuple[list[dict], list[dict]]:
-    """This term's graded courses plus the SDU courses still "IP" (not graded yet), and the transcript."""
+    """This term's courses with a grade or an assessment breakdown, the SDU courses still "IP", and the transcript."""
     transcript = (repo.get_snapshot(user.id, "transcript") or {}).get("courses") or []
-    graded = [c for c in student_courses(user.student_id, semester) if c["score"] is not None]
+    graded = [c for c in student_courses(user.student_id, semester)
+              if c["score"] is not None or any(comp.get("weight") for comp in c.get("components") or [])]
     known = {syllabi.normalize_code(c["code"]) for c in graded}
     pending = [c for c in academics.transcript_current_term(transcript) if syllabi.normalize_code(c["code"]) not in known]
     return graded + pending, transcript
 
 
-def goals_payload(user: User, semester: str) -> dict:
-    goal = repo.get_goal(user.id)
+def _course_key(code: Optional[str], name: Optional[str]) -> set[str]:
+    keys = set()
+    if code:
+        keys.add("code:" + syllabi.normalize_code(code))
+    if name:
+        keys.add("name:" + " ".join(str(name).lower().split()))
+    return keys
+
+
+def course_breakdown(course: dict, official: dict) -> tuple[Optional[list[dict]], Optional[str]]:
+    """Assessment breakdown of a course from official records only: SDU's grades page, then stored grades.
+
+    A student's what-if breakdown holds hypothetical scores, and a syllabus preset has no scores,
+    so neither is used to decide whether a goal is possible.
+    """
+    for key in _course_key(course.get("code"), course.get("course")):
+        if key in official:
+            parts = official[key]["components"]
+            # The SDU grades page writes weights out of 100
+            return [{"name": p.get("name"), "weight": (p["weight"] / 100.0) if (p.get("weight") or 0) > 1 else p.get("weight"),
+                     "score": p.get("score")} for p in parts if p.get("weight") is not None], "sdu"
+    comps = course.get("components") or []
+    if comps and not (len(comps) == 1 and comps[0].get("name") == SDU_PLACEHOLDER_COMPONENT):
+        return [{"name": c.get("name"), "weight": c.get("weight"), "score": c.get("score")} for c in comps], "grades"
+    return None, None
+
+
+def goal_context(user: User, semester: str) -> dict:
+    """Every academic record goal feasibility needs, loaded once."""
     courses, transcript = goal_courses(user, semester)
-    progress = academics.goal_progress(goal, courses, repo.attendance.get(user.student_id),
-                                       academics.transcript_gpa(transcript))
-    return {"semester": semester, "goal": goal, "progress": progress}
+    official = {}
+    for item in ((repo.get_snapshot(user.id, "grade_components") or {}).get("courses") or {}).values():
+        for key in _course_key(item.get("code"), item.get("course")):
+            official[key] = item
+    for c in courses:
+        c["breakdown"], c["breakdown_source"] = course_breakdown(c, official)
+    # Same rows as the official attendance figure: courses SDU reports an absence percentage for
+    attendance_rows = [r for r in (repo.get_snapshot(user.id, "attendance_detail") or {}).get("rows") or []
+                       if r.get("absence_percent") is not None]
+    current_codes = {syllabi.normalize_code(c["code"]) for c in courses if c.get("code")}
+    has_transcript = any(isinstance(r, dict) for r in transcript)
+    return {
+        "courses": courses, "transcript": transcript, "attendance_rows": attendance_rows,
+        "official_attendance": repo.attendance.get(user.student_id),
+        "past": academics.transcript_points(transcript, current_codes) if has_transcript else None,
+        "cumulative_gpa": academics.transcript_gpa(transcript),
+    }
+
+
+def goal_tracking(goal: Optional[dict], ctx: dict) -> dict:
+    """US-18/19: feasibility, maximum achievable results, status, required scores, alerts and next steps."""
+    goal = goal or {}
+    targets = goal.get("course_targets") or {}
+    basis = goal.get("gpa_basis") or "semester"
+    courses = []
+    for c in ctx["courses"]:
+        target = targets.get(c["code"])
+        evaluation = goals_mod.evaluate_course(c["breakdown"], target)
+        evaluation["source"] = c["breakdown_source"]
+        courses.append({"course": c["course"], "code": c["code"], "credits": c.get("credits"), "score": c.get("score"),
+                        "target": target, "evaluation": evaluation})
+
+    gpa_courses = [{"course": c["course"], "code": c["code"], "credits": c.get("credits"),
+                    "evaluation": goals_mod.evaluate_course(c["breakdown"], None)} for c in ctx["courses"]]
+    gpa_options = {b: goals_mod.evaluate_gpa(None, b, gpa_courses, ctx["past"], ctx["cumulative_gpa"])
+                   for b in ("semester", "cumulative")}
+    gpa = goals_mod.evaluate_gpa(goal.get("target_gpa"), basis, gpa_courses, ctx["past"], ctx["cumulative_gpa"])
+
+    rows = []
+    by_key = {}
+    for c in courses:
+        for key in _course_key(c["code"], c["course"]):
+            by_key[key] = c
+    for r in ctx["attendance_rows"]:
+        match = next((by_key[k] for k in _course_key(r.get("course_code"), r.get("lesson")) if k in by_key), None)
+        rows.append({**r, "course": match["course"] if match else r.get("lesson"),
+                     "code": match["code"] if match else r.get("course_code")})
+    attendance = goals_mod.evaluate_attendance_overall(rows, goal.get("target_attendance"))
+    attendance["official"] = ctx["official_attendance"]
+
+    tracking = {"gpa": gpa, "gpa_options": {b: {k: v.get(k) for k in ("known", "maximum", "max_exact", "minimum", "current",
+                                                                     "bound_only", "missing")}
+                                            for b, v in gpa_options.items()},
+                "attendance": attendance, "courses": courses}
+    tracking["alerts"] = goals_mod.alerts(tracking)
+    tracking["recommendations"] = goals_mod.recommendations(tracking)
+    tracking["status_labels"] = goals_mod.STATUS_LABELS
+    return tracking
+
+
+def notify_goal_alerts(user: User, tracking: dict) -> int:
+    """Turn new goal alerts into notifications, once each; an alert that clears and returns is sent again."""
+    sent = set((repo.get_snapshot(user.id, "goal_alerts") or {}).get("keys") or [])
+    current = {a["key"]: a for a in tracking.get("alerts") or []}
+    created = 0
+    for key, alert in current.items():
+        if key not in sent:
+            repo.add_notification(user.student_id, "goal", alert["title"], alert["detail"], alert.get("course"))
+            created += 1
+    if set(current) != sent:
+        repo.save_snapshot(user.id, "goal_alerts", {"keys": sorted(current)})
+    return created
+
+
+def refresh_goal_alerts(user: User) -> None:
+    """New grades or attendance can change what is still reachable: re-check saved goals after a sync."""
+    if user.role != "student" or not repo.get_goal(user.id):
+        return
+    try:
+        goals_payload(user, (repo.get_goal(user.id) or {}).get("semester") or "spring-2026")
+    except Exception:   # a goal check must never fail the sync itself
+        logging.getLogger(__name__).exception("Goal re-check after sync failed")
+
+
+def goals_payload(user: User, semester: str, ctx: Optional[dict] = None) -> dict:
+    goal = repo.get_goal(user.id)
+    ctx = ctx or goal_context(user, semester)
+    courses, transcript = ctx["courses"], ctx["transcript"]
+    progress = academics.goal_progress(goal, [{k: c.get(k) for k in ("course", "code", "credits", "score")} for c in courses],
+                                       repo.attendance.get(user.student_id), academics.transcript_gpa(transcript))
+    tracking = goal_tracking(goal, ctx)
+    if goal:
+        notify_goal_alerts(user, tracking)
+    return {"semester": semester, "goal": goal, "progress": progress, "tracking": tracking}
 
 
 @app.get("/api/student/goals")
 def get_goals(user: Annotated[User, Depends(require_role("student"))], semester: str = Query("spring-2026")):
-    """US-18/19: saved targets with the score each course needs and how far along the student is."""
+    """US-18/19: saved targets, what is still reachable, and how far along the student is."""
     return goals_payload(user, semester)
+
+
+def validate_goal_targets(req: GoalRequest, ctx: dict, basis: str) -> dict:
+    """Field errors for targets the records prove impossible; unverifiable targets are allowed, with a warning."""
+    probe = goal_tracking({"target_gpa": req.target_gpa, "target_attendance": req.target_attendance,
+                           "course_targets": req.course_targets, "gpa_basis": basis}, ctx)
+    errors: dict = {}
+    if req.target_gpa is not None and probe["gpa"].get("status") == goals_mod.UNACHIEVABLE:
+        errors["target_gpa"] = {k: probe["gpa"].get(k) for k in ("message", "maximum", "suggested")}
+    if req.target_attendance is not None and probe["attendance"].get("status") == goals_mod.UNACHIEVABLE:
+        errors["target_attendance"] = {k: probe["attendance"].get(k) for k in ("message", "maximum", "suggested")}
+    course_errors = {c["code"]: {k: c["evaluation"].get(k) for k in ("message", "maximum", "suggested")}
+                     for c in probe["courses"] if c["target"] is not None and c["evaluation"].get("status") == goals_mod.UNACHIEVABLE}
+    if course_errors:
+        errors["course_targets"] = course_errors
+    return errors
 
 
 @app.put("/api/student/goals")
 def save_goals(req: GoalRequest, user: Annotated[User, Depends(require_role("student"))],
                semester: str = Query("spring-2026")):
-    known = {c["code"] for c in goal_courses(user, semester)[0]}
+    ctx = goal_context(user, semester)
+    known = {c["code"] for c in ctx["courses"]}
     unknown = sorted(set(req.course_targets) - known)
     if unknown:
         raise HTTPException(status_code=400, detail=f"Not a course this term: {', '.join(unknown)}")
-    repo.save_goal(user.id, req.target_gpa, req.target_attendance, req.course_targets)
-    return goals_payload(user, semester)
+    previous = repo.get_goal(user.id) or {}
+    basis = req.gpa_basis or previous.get("gpa_basis") or "semester"
+    errors = validate_goal_targets(req, ctx, basis)
+
+    # Valid targets are saved; a rejected one keeps its previously saved value instead of being overwritten
+    keep_courses = errors.get("course_targets") or {}
+    course_targets = {code: value for code, value in req.course_targets.items() if code not in keep_courses}
+    for code in keep_courses:
+        if code in (previous.get("course_targets") or {}):
+            course_targets[code] = previous["course_targets"][code]
+    repo.save_goal(
+        user.id,
+        previous.get("target_gpa") if "target_gpa" in errors else req.target_gpa,
+        previous.get("target_attendance") if "target_attendance" in errors else req.target_attendance,
+        course_targets,
+        gpa_basis=previous.get("gpa_basis", "semester") if "target_gpa" in errors else basis,
+        semester=semester,
+    )
+    payload = goals_payload(user, semester, ctx)
+    if errors:
+        count = len([k for k in errors if k != "course_targets"]) + len(keep_courses)
+        raise HTTPException(status_code=422, detail={
+            "message": f"{count} target{'s are' if count > 1 else ' is'} not achievable and {'were' if count > 1 else 'was'} not saved. "
+                       "Your other targets were saved.",
+            "errors": errors, "goals": payload})
+    return payload
 
 
 class StudyTaskUpdate(BaseModel):

@@ -83,6 +83,23 @@ def transcript_gpa(transcript: list[dict]) -> Optional[float]:
     return round(points / credits, 2) if credits else None
 
 
+def transcript_points(transcript: list[dict], exclude_codes: set[str] | frozenset = frozenset()) -> dict:
+    """Grade points and ECTS of graded transcript courses (same rule as transcript_gpa), minus some codes."""
+    points = credits = 0.0
+    for c in transcript or []:
+        if str(c.get("course_code") or "").strip().upper().replace(" ", "") in exclude_codes:
+            continue
+        gp = _number(c.get("grade_point"))
+        if gp is None:
+            gp = LETTER_POINTS.get(str(c.get("letter_grade") or "").strip().upper())
+        ects = _ects(c)
+        if gp is None or ects <= 0:
+            continue
+        points += gp * ects
+        credits += ects
+    return {"points": points, "credits": credits}
+
+
 def transcript_current_term(transcript: list[dict]) -> list[dict]:
     """Courses of the latest transcript semester while it is still in progress ("IP"), as goal rows."""
     semesters = [int(c["semester"]) for c in transcript or [] if _number(c.get("semester")) is not None]
