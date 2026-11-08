@@ -31,6 +31,7 @@ from . import deadlines as deadlines_mod
 from . import syllabi
 from . import academics
 from . import goals as goals_mod
+from . import summaries as summaries_mod
 from . import db as dbmod
 
 
@@ -1699,13 +1700,90 @@ def notify_goal_alerts(user: User, tracking: dict) -> int:
 
 
 def refresh_goal_alerts(user: User) -> None:
-    """New grades or attendance can change what is still reachable: re-check saved goals after a sync."""
-    if user.role != "student" or not repo.get_goal(user.id):
+    """After a sync: keep today's progress point (US-20/21) and re-check saved goals (US-19)."""
+    if user.role != "student":
         return
     try:
-        goals_payload(user, (repo.get_goal(user.id) or {}).get("semester") or "spring-2026")
-    except Exception:   # a goal check must never fail the sync itself
-        logging.getLogger(__name__).exception("Goal re-check after sync failed")
+        record_progress(user)
+        if repo.get_goal(user.id):
+            goals_payload(user, (repo.get_goal(user.id) or {}).get("semester") or "spring-2026")
+    except Exception:   # summaries and goal checks must never fail the sync itself
+        logging.getLogger(__name__).exception("Progress update after sync failed")
+
+
+def progress_point(ctx: dict, tracking: dict) -> dict:
+    """What a summary compares over time: attendance hours, assessment results, GPA."""
+    courses = {}
+    for r in ctx["attendance_rows"]:
+        key = syllabi.normalize_code(r.get("course_code") or "") or " ".join(str(r.get("lesson") or "").lower().split())
+        courses[key] = {"course": r.get("lesson"), **{k: r.get(k) for k in ("hours", "present", "absent", "permitted", "absence_percent")}}
+    grades = {}
+    for c in ctx["courses"]:
+        if c.get("breakdown"):
+            grades[syllabi.normalize_code(c["code"])] = {
+                "course": c["course"],
+                "assessments": [{"name": a.get("name"), "weight": a.get("weight"), "score": a.get("score")} for a in c["breakdown"]]}
+    att = tracking.get("attendance") or {}
+    return {"at": datetime.now(timezone.utc).isoformat(),
+            "attendance": att.get("current") if att.get("known") else ctx["official_attendance"],
+            "gpa": ctx["cumulative_gpa"], "courses": courses, "grades": grades}
+
+
+def record_progress(user: User, semester: str = "spring-2026") -> tuple[dict, dict]:
+    ctx = goal_context(user, semester)
+    tracking = goal_tracking(repo.get_goal(user.id), ctx)
+    history = (repo.get_snapshot(user.id, "progress_history") or {}).get("points") or []
+    repo.save_snapshot(user.id, "progress_history", {"points": summaries_mod.add_point(history, progress_point(ctx, tracking))})
+    return ctx, tracking
+
+
+async def build_progress_summary(user: User, period: str) -> dict:
+    _ctx, tracking = record_progress(user)
+    conn = live_connection(user.id)
+    if conn:
+        items, available, reason = await fetch_deadlines(conn, user.student_id, user.id)
+        deadlines = {"available": available, "reason": reason, "upcoming": deadlines_mod.upcoming(items, 7),
+                     "overdue": deadlines_mod.missed(items)}
+    else:
+        deadlines = {"available": False, "reason": "Connect SDU and Moodle to see deadlines."}
+    history = (repo.get_snapshot(user.id, "progress_history") or {}).get("points") or []
+    return summaries_mod.build_summary(period, history, repo.get_notifications(user.student_id), deadlines,
+                                       tracking, min_attendance=MIN_ATTENDANCE)
+
+
+@app.get("/api/student/summary")
+async def progress_summary(user: Annotated[User, Depends(require_role("student"))],
+                           period: Literal["week", "month"] = Query("week"),
+                           month: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}$")):
+    """US-20 weekly and US-21 monthly summary; past monthly summaries come from the archive."""
+    archive = (repo.get_snapshot(user.id, "monthly_archive") or {}).get("months") or {}
+    this_month = datetime.now(timezone.utc).strftime("%Y-%m")
+    if period == "month" and month and month != this_month:
+        if month not in archive:
+            raise HTTPException(status_code=404, detail="No summary was kept for that month.")
+        return {**archive[month], "archived": True, "archive": sorted(archive, reverse=True)}
+    summary = await build_progress_summary(user, period)
+    if period == "month":
+        archive[this_month] = summary
+        repo.save_snapshot(user.id, "monthly_archive", {"months": dict(sorted(archive.items())[-24:])})
+    summary["month"] = this_month
+    summary["archive"] = sorted(set(archive) | ({this_month} if period == "month" else set()), reverse=True)
+    return summary
+
+
+@app.post("/api/student/summary/email")
+async def email_progress_summary(user: Annotated[User, Depends(require_role("student"))],
+                                 period: Literal["week", "month"] = Query("week")):
+    """Send the summary as an email digest to the student's own address."""
+    to = repo.get_email_for_user(user.id)
+    if not to:
+        raise HTTPException(status_code=400, detail="Add an email address to your account to receive summaries.")
+    summary = await build_progress_summary(user, period)
+    label = "Monthly" if period == "month" else "Weekly"
+    sent, detail = send_email(to, f"StudyMate {label.lower()} summary: {summary['headline']}", summaries_mod.as_text(summary, user.name))
+    if not sent:
+        raise HTTPException(status_code=502, detail=f"Could not send the email: {detail}")
+    return {"ok": True, "to": to}
 
 
 def goals_payload(user: User, semester: str, ctx: Optional[dict] = None) -> dict:

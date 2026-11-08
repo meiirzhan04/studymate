@@ -2133,6 +2133,7 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token
         <ComingUpCard nextInfo={findNextClass(sduData.schedule || [])} scheduleFailed={!!sduData.scheduleIssue && !sduData.schedule?.length} deadlines={deadlines} onOpenSchedule={() => setTab('schedule')} token={token} />
         <AttentionCard items={attention} onSelect={setTab} />
       </section>
+      <WeeklySummaryCard token={token} onOpen={() => setTab('summary')} />
     </div>
   )
 }
@@ -3483,6 +3484,206 @@ function GoalsTab({ token }) {
   )
 }
 
+/* ─── PROGRESS SUMMARY (US-20 weekly, US-21 monthly) ─────────────── */
+const SUMMARY_PERIODS = [{ id: 'week', label: 'This week' }, { id: 'month', label: 'This month' }]
+
+function fmtDay(iso) {
+  return iso ? new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : ''
+}
+
+function fmtMonth(key) {
+  const [y, m] = key.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+}
+
+function DeltaBadge({ value, unit = '', decimals = 1, good = 'up' }) {
+  if (value == null) return null
+  if (value === 0) return <span className="delta delta-flat">no change</span>
+  const up = value > 0
+  const tone = (up && good === 'up') || (!up && good === 'down') ? 'delta-good' : 'delta-bad'
+  return <span className={`delta ${tone}`}>{up ? '+' : '−'}{Math.abs(value).toFixed(decimals).replace(/\.0+$/, '')}{unit}</span>
+}
+
+function attendanceFoot(a, period) {
+  const t = a.this_period || {}
+  if (t.status === 'ok') {
+    return <span className="metric-note goal-metric-note">
+      <span className="muted">{fmtNum(t.attended, 0)} of {fmtNum(t.attended + t.missed, 0)} class hours</span>
+      {a.period_change != null && <> <DeltaBadge value={a.period_change} unit=" pts" /><span className="muted"> vs last {period}</span></>}
+    </span>
+  }
+  if (t.status === 'no_classes') return <span className="muted">No classes recorded this {period}</span>
+  if (t.status === 'no_hours') return <span className="muted">SDU sent no class-hour counts</span>
+  return <span className="muted">Changes show after a full {period} of syncs</span>
+}
+
+function SummaryList({ title, empty, children, count }) {
+  return (
+    <section className="card summary-section">
+      <header className="card-head"><h2>{title}</h2>{count != null && <span className="muted">{count}</span>}</header>
+      {count ? <ul className="summary-list">{children}</ul> : <p className="muted">{empty}</p>}
+    </section>
+  )
+}
+
+function SummaryTab({ token, userName }) {
+  const [period, setPeriod] = useState('week')
+  const [month, setMonth] = useState(null)
+  const [data, setData] = useState(null)
+  const [err, setErr] = useState('')
+  const [mail, setMail] = useState({ busy: false, note: '', tone: 'success' })
+
+  useEffect(() => {
+    let cancelled = false
+    setData(null); setErr('')
+    const q = period === 'month' && month ? `&month=${month}` : ''
+    api(`/api/student/summary?period=${period}${q}`, token)
+      .then(d => { if (!cancelled) setData(d) })
+      .catch(e => { if (!cancelled) setErr(e.message) })
+    return () => { cancelled = true }
+  }, [token, period, month])
+
+  const emailMe = async () => {
+    setMail({ busy: true, note: '', tone: 'success' })
+    try {
+      const r = await api(`/api/student/summary/email?period=${period}`, token, { method: 'POST' })
+      setMail({ busy: false, note: `Sent to ${r.to}`, tone: 'success' })
+    } catch (e) {
+      setMail({ busy: false, note: e.message, tone: 'danger' })
+    }
+  }
+
+  const periodWord = period === 'month' ? 'month' : 'week'
+  const toolbar = (
+    <div className="summary-toolbar no-print">
+      <Segmented options={SUMMARY_PERIODS} value={period} onChange={v => { setPeriod(v); setMonth(null) }} label="Summary period" />
+      {period === 'month' && data?.archive?.length > 1 && (
+        <select className="select summary-month" value={month || data.month || data.archive[0]} aria-label="Month"
+          onChange={e => setMonth(e.target.value === data.archive[0] ? null : e.target.value)}>
+          {data.archive.map(m => <option key={m} value={m}>{fmtMonth(m)}</option>)}
+        </select>
+      )}
+      <div className="summary-actions">
+        {mail.note && <span className={`tone-${mail.tone} summary-mail-note`}>{mail.note}</span>}
+        <button type="button" className="btn-ghost" onClick={emailMe} disabled={mail.busy || !data}>
+          <Icons.Mail size={15} /> {mail.busy ? 'Sending…' : 'Email me'}
+        </button>
+        {period === 'month' && (
+          <button type="button" className="btn-primary" onClick={() => window.print()} disabled={!data}>
+            <Icons.Download size={15} /> Download PDF
+          </button>
+        )}
+      </div>
+    </div>
+  )
+
+  if (err) return <div className="page page-fade">{toolbar}<div className="alert-box alert-danger">{err}</div></div>
+  if (!data) return <div className="page page-fade">{toolbar}<PageLoader label="Putting your summary together…" /></div>
+
+  const a = data.attendance
+  const t = a.this_period || {}
+  const marksCount = data.new_marks.length || data.grade_updates.length
+  const deadlines = data.deadlines
+
+  return (
+    <div className="page page-fade summary-page">
+      {toolbar}
+      <header className="print-only print-head">
+        <h1>StudyMate monthly academic report</h1>
+        <p>{userName} · {fmtDay(data.from)} – {fmtDay(data.to)} {new Date(data.to).getFullYear()}</p>
+      </header>
+
+      <p className="summary-headline">
+        {data.headline}
+        <span className="muted"> {fmtDay(data.from)} – {fmtDay(data.to)}{data.archived ? ' · archived' : ''}</span>
+      </p>
+      {!data.has_baseline && (
+        <p className="muted summary-note">
+          Changes are measured from your SDU syncs; StudyMate started keeping them on {fmtDay(data.tracked_since)}, so this {periodWord}'s
+          comparison fills in as more syncs arrive.
+        </p>
+      )}
+      {a.below_requirement && (
+        <div className="alert-box alert-warning">
+          <Icons.AlertTriangle size={16} />
+          <span>Attendance is below the {fmtNum(a.requirement)}% SDU requirement{t.status === 'ok' ? ` (${fmtNum(t.pct)}% this ${periodWord})` : ''}. Attend every remaining class to stay eligible for exams.</span>
+        </div>
+      )}
+
+      <section className="metric-grid">
+        <Metric label={`Attendance this ${periodWord}`} value={t.status === 'ok' ? `${fmtNum(t.pct)}%` : '—'} foot={attendanceFoot(a, periodWord)} />
+        <Metric label="Overall attendance" value={a.current != null ? `${fmtNum(a.current)}%` : '—'}
+          foot={a.change != null ? <span className="metric-note goal-metric-note"><DeltaBadge value={a.change} unit=" pts" /><span className="muted"> this {periodWord}</span></span>
+            : <span className="muted">SDU requirement {fmtNum(a.requirement)}%</span>} />
+        <Metric label="Cumulative GPA" value={data.gpa.current != null ? Number(data.gpa.current).toFixed(2) : '—'}
+          foot={data.gpa.change != null ? <span className="metric-note goal-metric-note"><DeltaBadge value={data.gpa.change} decimals={2} /><span className="muted"> this {periodWord}</span></span>
+            : <span className="muted">{marksCount} new {marksCount === 1 ? 'mark' : 'marks'}</span>} />
+      </section>
+
+      <div className="split split-even summary-grid">
+        <SummaryList title="New marks" count={marksCount} empty={`No new marks this ${periodWord}.`}>
+          {data.new_marks.length ? data.new_marks.map((m, i) => (
+            <li key={i}><span>{m.course}<small className="muted"> · {m.name}{m.weight ? ` (${fmtNum(m.weight * (m.weight <= 1 ? 100 : 1))}%)` : ''}</small></span><b>{fmtNum(m.score)}</b></li>
+          )) : data.grade_updates.map((g, i) => (
+            <li key={i}><span>{g.detail}</span><small className="muted">{fmtDay(g.at)}</small></li>
+          ))}
+        </SummaryList>
+
+        <SummaryList title={period === 'month' ? 'Deadlines' : 'Coming up · next 7 days'}
+          count={deadlines.available ? deadlines.upcoming.length + (period === 'month' ? deadlines.missed.length : 0) : 0}
+          empty={deadlines.available ? 'Nothing due in the next 7 days.' : (deadlines.reason || 'Deadlines are not connected.')}>
+          {deadlines.upcoming.map(d => (
+            <li key={`u${d.id}`}><span>{d.title}<small className="muted"> · {d.course || 'Course'}</small></span>
+              <small className="muted">{new Date(d.due_at).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</small></li>
+          ))}
+          {period === 'month' && deadlines.missed.map(d => (
+            <li key={`m${d.id}`}><span>{d.title}<small className="muted"> · {d.course || 'Course'}</small></span><span className="tone-danger">missed</span></li>
+          ))}
+        </SummaryList>
+
+        <SummaryList title={`Attendance by course · this ${periodWord}`} count={t.courses?.length || 0}
+          empty={t.status === 'no_classes' ? `No classes were recorded this ${periodWord}.` : t.status === 'ok' ? 'No changes.' : `Course hours appear once two syncs are a ${periodWord} apart.`}>
+          {(t.courses || []).map(c => (
+            <li key={c.course}><span>{c.course}<small className="muted"> · {fmtNum(c.attended, 0)} attended, {fmtNum(c.missed, 0)} missed</small></span>
+              <b className={c.pct < a.requirement ? 'tone-danger' : undefined}>{fmtNum(c.pct)}%</b></li>
+          ))}
+        </SummaryList>
+
+        <SummaryList title="Goals" count={data.goals.items.length} empty="No goals set. Add them on the Goals page.">
+          {data.goals.items.map(g => (
+            <li key={g.goal}><span>{g.goal}</span><GoalStatus status={g.status || 'insufficient_data'} /></li>
+          ))}
+        </SummaryList>
+      </div>
+
+      {period === 'month' && (
+        <SummaryList title="Milestones this month" count={(data.milestones || []).length + data.goals.events.length}
+          empty="No milestones recorded this month yet.">
+          {(data.milestones || []).map((m, i) => <li key={`m${i}`}><span>{m}</span></li>)}
+          {data.goals.events.map((g, i) => <li key={`g${i}`}><span><b>{g.title}.</b> {g.detail}</span><small className="muted">{fmtDay(g.at)}</small></li>)}
+        </SummaryList>
+      )}
+    </div>
+  )
+}
+
+function WeeklySummaryCard({ token, onOpen }) {
+  const [data, setData] = useState(null)
+  useEffect(() => {
+    api('/api/student/summary?period=week', token).then(setData).catch(() => setData(null))
+  }, [token])
+  if (!data) return null
+  return (
+    <section className="card weekly-card">
+      <div>
+        <span className="metric-label">Weekly progress summary</span>
+        <p>{data.headline}</p>
+      </div>
+      <button type="button" className="link-btn" onClick={onOpen}>Open summary <Icons.ArrowRight size={14} /></button>
+    </section>
+  )
+}
+
 /* ─── HELP & SUPPORT ─────────────────────────────────────────────── */
 const SUPPORT_CATEGORIES = [
   { id: 'bug', label: 'Something is broken' },
@@ -4216,6 +4417,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
     attendance: ['Attendance', connected ? 'How much of each course you have attended' : null],
     insights:   ['Insights', connected ? 'What to focus on this term' : null],
     goals:      ['Goals', 'Your targets for this term'],
+    summary:    ['Progress summary', 'Your week and month at a glance'],
     support:    ['Help & support', 'Tell us about a problem or ask a question'],
     profile:    ['Profile', null],
     alerts:     ['Notifications', null],
@@ -4251,6 +4453,14 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
           <button type="button" className="side-link" onClick={() => setShowWhatIf(true)}>
             <Icons.Sliders size={18} />
             <span>What-if planner</span>
+          </button>
+          <button
+            type="button"
+            className={`side-link ${tab === 'summary' ? 'active' : ''}`}
+            onClick={() => setTab('summary')}
+          >
+            <Icons.TrendingUp size={18} />
+            <span>Progress summary</span>
           </button>
           <button
             type="button"
@@ -4340,6 +4550,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
           {tab === 'support'    && <SupportTab token={token} defaultEmail={sduData.profile?.email || ''} page="student" />}
           {tab === 'insights'   && <InsightsTab token={token} sduStatus={sduStatus} onConnect={handleSduConnect} />}
           {tab === 'goals'      && <GoalsTab token={token} />}
+          {tab === 'summary'    && <SummaryTab token={token} userName={user?.name || sduData.profile?.fullname || ''} />}
           {tab === 'attendance' && <AttendanceTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} />}
           {tab === 'profile'    && <SduProfileTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onDisconnect={handleSduDisconnect} onRefresh={loadSduLiveData} user={user} token={token} />}
           {tab === 'alerts'     && <AlertsTab    token={token} onUnreadChange={setUnread} onSelectTab={setTab} />}

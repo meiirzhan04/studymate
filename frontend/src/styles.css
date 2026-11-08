@@ -1239,3 +1239,45 @@ button.avatar:hover { box-shadow: 0 0 0 3px var(--accent-ring); }
   .bottom-nav { padding-left: 4px; padding-right: 4px; }
   .bottom-link { font-size: 10.5px; }
 }
+
+/* ─── Progress summary (US-20 weekly, US-21 monthly) ──────────── */
+.summary-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.summary-month { width: auto; }
+.summary-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.summary-mail-note { font-size: 12.5px; }
+.summary-headline { font-size: 15px; font-weight: 500; color: var(--text-primary); }
+.summary-note { font-size: 12.5px; margin-top: -12px; }
+.summary-grid { align-items: start; }
+.summary-section .card-head { margin-bottom: 10px; }
+.summary-section > p { font-size: 13px; }
+.summary-list li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 8px 0; font-size: 13.5px; }
+.summary-list li + li { border-top: 1px solid var(--border); }
+.summary-list li > span:first-child { min-width: 0; }
+.summary-list b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.summary-list small { font-size: 12.5px; white-space: nowrap; }
+.summary-list .status { font-size: 12.5px; flex-shrink: 0; }
+.delta { display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border-radius: 6px; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.delta-good { background: var(--success-soft); color: var(--success); }
+.delta-bad { background: var(--danger-soft); color: var(--danger); }
+.delta-flat { background: var(--neutral-soft); color: var(--text-secondary); }
+.weekly-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.weekly-card p { margin-top: 4px; font-size: 14px; color: var(--text-primary); }
+.print-only { display: none; }
+@media (max-width: 640px) {
+  .summary-actions { margin-left: 0; }
+}
+
+/* Monthly report as a printable PDF: the page alone, no app chrome */
+@media print {
+  @page { size: A4; margin: 16mm; }
+  html, body { background: #fff !important; }
+  .sidebar, .bottom-nav, .topbar, .no-print, .modal-overlay { display: none !important; }
+  .shell, .main, .content { display: block !important; padding: 0 !important; margin: 0 !important; }
+  .print-only { display: block; }
+  .print-head { margin-bottom: 8px; }
+  .print-head h1 { font-size: 20px; }
+  .print-head p { font-size: 12px; color: #4E5566; }
+  .card { box-shadow: none !important; break-inside: avoid; }
+  .page { max-width: none; gap: 12px; }
+  .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+}
