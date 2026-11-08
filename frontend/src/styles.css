@@ -1172,7 +1172,6 @@ button.avatar:hover { box-shadow: 0 0 0 3px var(--accent-ring); }
 .goal-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
 .goal-field { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .goal-field > label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
-.goal-field .segmented { align-self: flex-start; }
 .goal-hint { margin-top: 2px; font-size: 12.5px; }
 .goal-courses { margin: 18px -24px 0; border-top: 1px solid var(--border); }
 .goal-courses > li:last-child { border-bottom: 1px solid var(--border); }
@@ -1205,6 +1204,12 @@ button.avatar:hover { box-shadow: 0 0 0 3px var(--accent-ring); }
 .goal-recovery-side { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; text-align: right; flex-shrink: 0; }
 .goal-recovery-side .status { font-size: 12px; }
 .goal-footnote { margin-top: 8px; }
+.goal-plan { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: var(--radius); background: var(--surface-2); font-size: 12.5px; color: var(--text-secondary); }
+.goal-plan-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.goal-plan-head b { color: var(--text-primary); font-weight: 600; }
+.goal-plan-head .link-btn { font-size: 12.5px; }
+.goal-plan .goal-math-list b { color: var(--text-primary); }
+.goal-plan .goal-math-list small { font-weight: 400; }
 .goal-metric-note { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; }
 .goal-next .card-head { margin-bottom: 12px; }
 .goal-alerts { display: flex; flex-direction: column; gap: 8px; }

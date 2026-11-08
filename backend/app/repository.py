@@ -175,7 +175,7 @@ class SQLiteRepository:
                 );
                 CREATE TABLE IF NOT EXISTS goal_settings (
                     user_id TEXT PRIMARY KEY,
-                    gpa_basis TEXT NOT NULL DEFAULT 'semester',
+                    gpa_basis TEXT NOT NULL DEFAULT 'cumulative',
                     semester TEXT,
                     updated_at TEXT NOT NULL
                 );
@@ -562,10 +562,9 @@ class SQLiteRepository:
             settings = db.execute("SELECT gpa_basis, semester FROM goal_settings WHERE user_id = ?", (user_id,)).fetchone()
         if not row:
             return None
-        # Goals saved before the GPA basis existed were term goals ("every course at X%")
         return {"target_gpa": row["target_gpa"], "target_attendance": row["target_attendance"],
                 "course_targets": json.loads(row["course_targets_json"]), "updated_at": row["updated_at"],
-                "gpa_basis": settings["gpa_basis"] if settings else "semester",
+                "gpa_basis": "cumulative",
                 "semester": settings["semester"] if settings else None}
 
     def save_goal(self, user_id: str, target_gpa: float | None, target_attendance: float | None,
@@ -578,10 +577,10 @@ class SQLiteRepository:
                 (user_id, target_gpa, target_attendance, json.dumps(course_targets), now)
             )
             if gpa_basis or semester:
-                previous = db.execute("SELECT gpa_basis, semester FROM goal_settings WHERE user_id = ?", (user_id,)).fetchone()
+                previous = db.execute("SELECT semester FROM goal_settings WHERE user_id = ?", (user_id,)).fetchone()
                 db.execute(
                     "INSERT OR REPLACE INTO goal_settings (user_id, gpa_basis, semester, updated_at) VALUES (?, ?, ?, ?)",
-                    (user_id, gpa_basis or (previous["gpa_basis"] if previous else "semester"),
+                    (user_id, "cumulative",
                      semester or (previous["semester"] if previous else None), now)
                 )
             db.commit()

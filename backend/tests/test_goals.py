@@ -48,14 +48,28 @@ def test_zero_remaining_classes_is_the_final_result():
     assert late["status"] == UNACHIEVABLE and "All classes are over" in late["message"]
 
 
-def test_unknown_class_counts_never_claim_impossible():
+def test_unknown_class_counts_never_invent_remaining_classes():
     # Only a percentage (the official SDU API): total and remaining classes are unknown
-    out = goals.evaluate_attendance_course({"lesson": "DevOps", "absence_percent": 25.0}, 99)
-    assert out["status"] == INSUFFICIENT and out.get("verdict") is None
+    row = {"lesson": "DevOps", "absence_percent": 25.0}
+    out = goals.evaluate_attendance_course(row, 70)
+    assert out["status"] == INSUFFICIENT and out.get("verdict") is None and "remaining" not in out
     assert "total scheduled class hours" in out["message"]
-    overall = goals.evaluate_attendance_overall([{"lesson": "DevOps", "absence_percent": 25.0}], 99)
+    overall = goals.evaluate_attendance_overall([row], 70)
     assert overall["status"] == INSUFFICIENT and overall["known"] is False
     assert goals.evaluate_attendance_overall([], 90)["status"] == INSUFFICIENT
+
+
+def test_recorded_absences_alone_prove_a_target_impossible():
+    # Absence never decreases: 25% missed caps attendance at 75% (75.5% allowing for SDU's rounding)
+    row = {"lesson": "DevOps", "absence_percent": 25.0}
+    out = goals.evaluate_attendance_course(row, 99)
+    assert out["status"] == UNACHIEVABLE and out["maximum"] == 75.5 and out["suggested"] == 75.0
+    assert goals.evaluate_attendance_course(row, 75.5)["status"] == INSUFFICIENT   # inside the rounding margin
+    rows = [{"lesson": "A", "absence_percent": 2.0}, {"lesson": "B", "absence_percent": 3.2}]
+    overall = goals.evaluate_attendance_overall(rows, 99)
+    assert overall["status"] == UNACHIEVABLE and overall["bound_only"] is True
+    assert overall["maximum"] == 97.6   # mean(98.5, 96.85)
+    assert goals.evaluate_attendance_overall(rows, 97)["status"] == INSUFFICIENT
 
 
 def test_inconsistent_counts_are_not_trusted():
@@ -200,11 +214,11 @@ def breakdown_student():
 def test_valid_goals_are_saved_and_survive_a_new_login():
     u, tok = breakdown_student()
     res = client.put("/api/student/goals", headers=auth(tok),
-                     json={"target_gpa": 3.0, "gpa_basis": "semester", "course_targets": {"PHY 101": 80}})
+                     json={"target_gpa": 3.0, "course_targets": {"PHY 101": 80}})
     assert res.status_code == 200
     fresh = token(u["student_id"], "password123")
     body = client.get("/api/student/goals", headers=auth(fresh)).json()
-    assert body["goal"]["target_gpa"] == 3.0 and body["goal"]["gpa_basis"] == "semester"
+    assert body["goal"]["target_gpa"] == 3.0 and body["goal"]["gpa_basis"] == "cumulative"
     assert body["goal"]["course_targets"] == {"PHY 101": 80} and body["goal"]["semester"] == "spring-2026"
     row = next(c for c in body["tracking"]["courses"] if c["code"] == "PHY 101")
     assert row["evaluation"]["required_average"] == 87.5 and row["evaluation"]["maximum"] == 85.0
@@ -225,17 +239,30 @@ def test_impossible_course_target_is_rejected_and_valid_ones_still_save():
 
 
 def test_impossible_gpa_target_is_rejected_on_the_backend():
-    _u, tok = breakdown_student()
-    res = client.put("/api/student/goals", headers=auth(tok), json={"target_gpa": 3.9, "gpa_basis": "semester"})
+    from app.main import repo
+    u, tok = breakdown_student()
+    # 60 earlier ECTS at 3.0, then Physics at most 85 (B+ 3.33) and Calculus final 81 (B 3.0), 5 ECTS each
+    repo.save_snapshot(u["id"], "transcript", {"courses": [
+        {"semester": 1, "course_code": "OLD 100", "course_name": "Earlier terms", "grade_point": 3.0, "ects": 60}]})
+    res = client.put("/api/student/goals", headers=auth(tok), json={"target_gpa": 3.5})
     assert res.status_code == 422
     err = res.json()["detail"]["errors"]["target_gpa"]
-    assert err["maximum"] == 3.16   # Physics at most 85 (B+ 3.33), Calculus final 81 (B 3.0), 5 ECTS each
+    assert err["maximum"] == 3.02 and "cumulative GPA" in err["message"]   # (180 + 16.65 + 15) / 70
     assert client.get("/api/student/goals", headers=auth(tok)).json()["goal"]["target_gpa"] is None
+    ok = client.put("/api/student/goals", headers=auth(tok), json={"target_gpa": 3.0})
+    assert ok.status_code == 200 and ok.json()["tracking"]["gpa"]["verdict"] == "achievable"
+
+
+def test_gpa_goal_is_always_the_cumulative_gpa():
+    _u, tok = breakdown_student()
+    assert client.put("/api/student/goals", headers=auth(tok), json={"target_gpa": 3.0, "gpa_basis": "semester"}).status_code == 422
+    body = client.get("/api/student/goals", headers=auth(tok)).json()
+    assert list(body["tracking"]["gpa_options"]) == ["cumulative"] and body["tracking"]["gpa"]["basis"] == "cumulative"
 
 
 def test_unverifiable_targets_are_saved_with_a_warning():
     _u, tok = breakdown_student()
-    res = client.put("/api/student/goals", headers=auth(tok), json={"target_attendance": 99, "gpa_basis": "cumulative", "target_gpa": 3.9})
+    res = client.put("/api/student/goals", headers=auth(tok), json={"target_attendance": 99, "target_gpa": 3.9})
     assert res.status_code == 200
     tracking = res.json()["tracking"]
     assert tracking["attendance"]["status"] == INSUFFICIENT and tracking["gpa"]["status"] == INSUFFICIENT
@@ -314,3 +341,77 @@ def test_goals_are_private_to_the_student():
     _u2, tok2 = breakdown_student()
     client.put("/api/student/goals", headers=auth(tok1), json={"target_gpa": 2.5})
     assert client.get("/api/student/goals", headers=auth(tok2)).json()["goal"] is None
+
+
+def test_gpa_advice_uses_the_students_own_course_targets():
+    # 3.24 over 120 ECTS, five open 6-ECTS courses with nothing graded, 90% (A-, 3.67) targeted in each
+    open_course = comps(("MT", 0.3, None), ("FIN", 0.7, None))
+    term = [{"course": f"C{i}", "code": f"C{i}", "credits": 6, "evaluation": goals.evaluate_course(open_course, None)}
+            for i in range(5)]
+    past = {"points": 3.24 * 120, "credits": 120.0}
+    targets = {f"C{i}": 90 for i in range(5)}
+    short = goals.evaluate_gpa(3.36, "cumulative", term, past, 3.24, targets)
+    assert short["required_gp"] == 3.84 and short["targets_gpa"] == 3.32 and short["targets_enough"] is False
+    tip = goals.recommendations({"gpa": short, "attendance": {}, "courses": []})
+    assert tip == ["Your course targets add up to a cumulative GPA of 3.32, below your 3.36 goal: "
+                   "your open courses need an average grade point of 3.84 (A- = 3.67, A = 4.00)."]
+    enough = goals.evaluate_gpa(3.3, "cumulative", term, past, 3.24, targets)
+    assert goals.recommendations({"gpa": enough, "attendance": {}, "courses": []}) == [
+        "Reaching your course targets gives a cumulative GPA of 3.32, enough for your 3.30 goal."]
+
+
+def test_no_high_score_alert_when_nothing_is_graded_yet():
+    open_course = comps(("MT", 0.3, None), ("FIN", 0.7, None))
+    tracking = {"courses": [{"course": "DevOps", "code": "D 1", "target": 90, "evaluation": goals.evaluate_course(open_course, 90)}]}
+    assert goals.alerts(tracking) == []
+    assert goals.recommendations(tracking) == []
+    behind = comps(("MT", 0.3, 80.0), ("FIN", 0.7, None))   # 80 on the midterm: the final now needs 94.3
+    tracking = {"courses": [{"course": "DevOps", "code": "D 1", "target": 90, "evaluation": goals.evaluate_course(behind, 90)}]}
+    assert any(a["title"] == "High score needed" and "94.3%" in a["detail"] for a in goals.alerts(tracking))
+
+
+# ─── GPA planner ─────────────────────────────────────────────────────
+def plan_course(name, credits, parts):
+    return {"course": name, "code": name, "credits": credits, "breakdown": parts,
+            "evaluation": goals.evaluate_course(parts, None)}
+
+
+def test_planner_suggests_grades_that_reach_the_gpa_from_current_scores():
+    open_course = comps(("MT", 0.3, None), ("FIN", 0.7, None))
+    term = [plan_course("Mobile", 6, comps(("MT", 0.3, 96.0), ("FIN", 0.7, None))),
+            plan_course("DevOps", 5, open_course), plan_course("NLP", 5, open_course),
+            plan_course("PM", 6, comps(("MT", 0.3, 70.0), ("FIN", 0.7, None))),   # weak midterm
+            plan_course("Law", 3, None)]
+    past = {"points": 3.24 * 120, "credits": 120.0}
+    plan = goals.plan_grades(3.3, "cumulative", term, past)
+    assert plan["status"] == "planned" and plan["gpa"] >= 3.3
+    by = {c["course"]: c for c in plan["courses"]}
+    # The weak-midterm course is asked for less; the others make up for it
+    assert by["PM"]["letter"] == "B+" and by["PM"]["required_average"] == 91.5
+    assert by["Mobile"]["letter"] == "A-" and by["Mobile"]["required_average"] == 87.5
+    # The plan really adds up: recompute the GPA from the suggested letters
+    points = past["points"] + sum(c["grade_point"] * c["credits"] for c in plan["courses"])
+    assert points / (past["credits"] + 25) >= 3.3
+
+
+def test_planner_respects_finished_courses_caps_and_impossible_targets():
+    term = [plan_course("Done", 5, comps(("Final", 1.0, 81.0))),                       # B, fixed
+            plan_course("Capped", 5, comps(("MT", 0.6, 60.0), ("FIN", 0.4, None)))]    # at most 76 -> B-
+    plan = goals.plan_grades(2.8, "semester", term)
+    by = {c["course"]: c for c in plan["courses"]}
+    assert by["Done"]["fixed"] is True and by["Done"]["letter"] == "B"
+    assert by["Capped"]["letter"] in ("B-", "C+") and by["Capped"]["grade_point"] <= 2.67
+    assert goals.plan_grades(3.5, "semester", term)["status"] == UNACHIEVABLE
+    assert goals.plan_grades(3.0, "cumulative", term, None)["status"] == INSUFFICIENT
+
+
+def test_plan_endpoint_saves_nothing():
+    from app.main import repo
+    u, tok = breakdown_student()
+    repo.save_snapshot(u["id"], "transcript", {"courses": [
+        {"semester": 1, "course_code": "OLD 100", "course_name": "Earlier terms", "grade_point": 3.0, "ects": 60}]})
+    res = client.get("/api/student/goals/plan?target_gpa=3.0", headers=auth(tok))
+    assert res.status_code == 200 and res.json()["status"] == "planned"
+    assert {c["code"] for c in res.json()["courses"]} == {"PHY 101", "CAL 101"}
+    assert client.get("/api/student/goals", headers=auth(tok)).json()["goal"] is None
+    assert client.get("/api/student/goals/plan?target_gpa=5", headers=auth(tok)).status_code == 422

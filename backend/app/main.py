@@ -1562,8 +1562,8 @@ class GoalRequest(BaseModel):
     target_gpa: Optional[float] = Field(default=None, ge=1.0, le=4.0)
     target_attendance: Optional[float] = Field(default=None, ge=50, le=100)
     course_targets: dict[str, float] = Field(default_factory=dict, max_length=30)
-    # "semester": this term's GPA; "cumulative": the transcript GPA after this term. Never interchangeable.
-    gpa_basis: Optional[Literal["semester", "cumulative"]] = None
+    # The GPA goal is the cumulative (overall transcript) GPA after this term; there is no term-GPA goal
+    gpa_basis: Optional[Literal["cumulative"]] = None
 
     @field_validator("course_targets")
     @classmethod
@@ -1576,6 +1576,7 @@ class GoalRequest(BaseModel):
         return {code.strip(): round(target, 1) for code, target in value.items()}
 
 
+GPA_GOAL_BASIS = "cumulative"              # the only GPA a goal is set for: the overall transcript GPA
 SDU_PLACEHOLDER_COMPONENT = "Final Grade"   # the SDU sync's one-line course total, not an assessment
 
 
@@ -1638,11 +1639,16 @@ def goal_context(user: User, semester: str) -> dict:
     }
 
 
+def gpa_plan_courses(ctx: dict) -> list[dict]:
+    return [{"course": c["course"], "code": c["code"], "credits": c.get("credits"), "breakdown": c["breakdown"],
+             "evaluation": goals_mod.evaluate_course(c["breakdown"], None)} for c in ctx["courses"]]
+
+
 def goal_tracking(goal: Optional[dict], ctx: dict) -> dict:
     """US-18/19: feasibility, maximum achievable results, status, required scores, alerts and next steps."""
     goal = goal or {}
     targets = goal.get("course_targets") or {}
-    basis = goal.get("gpa_basis") or "semester"
+    basis = GPA_GOAL_BASIS
     courses = []
     for c in ctx["courses"]:
         target = targets.get(c["code"])
@@ -1651,11 +1657,9 @@ def goal_tracking(goal: Optional[dict], ctx: dict) -> dict:
         courses.append({"course": c["course"], "code": c["code"], "credits": c.get("credits"), "score": c.get("score"),
                         "target": target, "evaluation": evaluation})
 
-    gpa_courses = [{"course": c["course"], "code": c["code"], "credits": c.get("credits"),
-                    "evaluation": goals_mod.evaluate_course(c["breakdown"], None)} for c in ctx["courses"]]
-    gpa_options = {b: goals_mod.evaluate_gpa(None, b, gpa_courses, ctx["past"], ctx["cumulative_gpa"])
-                   for b in ("semester", "cumulative")}
-    gpa = goals_mod.evaluate_gpa(goal.get("target_gpa"), basis, gpa_courses, ctx["past"], ctx["cumulative_gpa"])
+    gpa_courses = gpa_plan_courses(ctx)
+    gpa_options = {GPA_GOAL_BASIS: goals_mod.evaluate_gpa(None, GPA_GOAL_BASIS, gpa_courses, ctx["past"], ctx["cumulative_gpa"])}
+    gpa = goals_mod.evaluate_gpa(goal.get("target_gpa"), basis, gpa_courses, ctx["past"], ctx["cumulative_gpa"], targets)
 
     rows = []
     by_key = {}
@@ -1673,6 +1677,7 @@ def goal_tracking(goal: Optional[dict], ctx: dict) -> dict:
                                                                      "bound_only", "missing")}
                                             for b, v in gpa_options.items()},
                 "attendance": attendance, "courses": courses}
+    tracking["gpa_plan"] = goals_mod.plan_grades(goal.get("target_gpa"), basis, gpa_courses, ctx["past"])
     tracking["alerts"] = goals_mod.alerts(tracking)
     tracking["recommendations"] = goals_mod.recommendations(tracking)
     tracking["status_labels"] = goals_mod.STATUS_LABELS
@@ -1705,6 +1710,8 @@ def refresh_goal_alerts(user: User) -> None:
 
 def goals_payload(user: User, semester: str, ctx: Optional[dict] = None) -> dict:
     goal = repo.get_goal(user.id)
+    if goal:
+        goal["gpa_basis"] = GPA_GOAL_BASIS
     ctx = ctx or goal_context(user, semester)
     courses, transcript = ctx["courses"], ctx["transcript"]
     progress = academics.goal_progress(goal, [{k: c.get(k) for k in ("course", "code", "credits", "score")} for c in courses],
@@ -1719,6 +1726,14 @@ def goals_payload(user: User, semester: str, ctx: Optional[dict] = None) -> dict
 def get_goals(user: Annotated[User, Depends(require_role("student"))], semester: str = Query("spring-2026")):
     """US-18/19: saved targets, what is still reachable, and how far along the student is."""
     return goals_payload(user, semester)
+
+
+@app.get("/api/student/goals/plan")
+def plan_gpa_goal(user: Annotated[User, Depends(require_role("student"))],
+                  target_gpa: float = Query(ge=1.0, le=4.0), semester: str = Query("spring-2026")):
+    """Suggested grade per course for a GPA target the student is typing; nothing is saved."""
+    ctx = goal_context(user, semester)
+    return goals_mod.plan_grades(target_gpa, GPA_GOAL_BASIS, gpa_plan_courses(ctx), ctx["past"])
 
 
 def validate_goal_targets(req: GoalRequest, ctx: dict, basis: str) -> dict:
@@ -1746,7 +1761,7 @@ def save_goals(req: GoalRequest, user: Annotated[User, Depends(require_role("stu
     if unknown:
         raise HTTPException(status_code=400, detail=f"Not a course this term: {', '.join(unknown)}")
     previous = repo.get_goal(user.id) or {}
-    basis = req.gpa_basis or previous.get("gpa_basis") or "semester"
+    basis = GPA_GOAL_BASIS
     errors = validate_goal_targets(req, ctx, basis)
 
     # Valid targets are saved; a rejected one keeps its previously saved value instead of being overwritten
@@ -1760,7 +1775,7 @@ def save_goals(req: GoalRequest, user: Annotated[User, Depends(require_role("stu
         previous.get("target_gpa") if "target_gpa" in errors else req.target_gpa,
         previous.get("target_attendance") if "target_attendance" in errors else req.target_attendance,
         course_targets,
-        gpa_basis=previous.get("gpa_basis", "semester") if "target_gpa" in errors else basis,
+        gpa_basis=basis,
         semester=semester,
     )
     payload = goals_payload(user, semester, ctx)

@@ -166,7 +166,7 @@ def test_goals_are_saved_and_tracked_per_student():
     assert rows["Physics"]["target"] == 90.0 and rows["Physics"]["on_track"] is True
     assert rows["Calculus"]["target"] == 80 and rows["Calculus"]["gap"] == -1.0
     assert body["progress"]["gpa"]["on_track_pct"] == 100
-    assert body["tracking"]["gpa"]["status"] == "achieved"
+    assert body["tracking"]["gpa"]["status"] == "insufficient_data"   # cumulative GPA needs the transcript
     assert body["tracking"]["attendance"]["status"] == "insufficient_data"
 
 
@@ -247,11 +247,13 @@ def test_goals_show_ungraded_sdu_courses_and_cumulative_gpa():
                                transcript=transcript, active_term=ACTIVE_TERM, replace_local_grades=True)
     tok = token(u["student_id"], "password123")
 
-    res = client.put("/api/student/goals", headers=auth(tok), json={"target_gpa": 3.8, "course_targets": {"INF 451": 90}})
+    # 3.80 overall is out of reach: 12 ECTS at 3.50 plus 5 ECTS at best 4.0 gives at most 3.64
+    assert client.put("/api/student/goals", headers=auth(tok), json={"target_gpa": 3.8}).status_code == 422
+    res = client.put("/api/student/goals", headers=auth(tok), json={"target_gpa": 3.6, "course_targets": {"INF 451": 90}})
     assert res.status_code == 200
     progress = res.json()["progress"]
     assert progress["gpa"]["current"] == 3.5 and progress["gpa"]["basis"] == "cumulative"
-    assert progress["gpa"]["on_track_pct"] == 92
+    assert progress["gpa"]["on_track_pct"] == 97
     assert progress["courses"] == [{
         "course": "Project Management", "code": "INF 451", "credits": 5.0, "score": None, "target": 90,
         "target_source": "course", "gap": None, "on_track": None}]

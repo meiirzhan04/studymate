@@ -3084,7 +3084,6 @@ function InsightsTab({ token, sduStatus, onConnect }) {
 // The backend decides what is possible (it re-checks on save); goals.js gives the same answer while typing
 const GPA_GOAL_RANGE = { min: 1, max: 4, step: 0.01 }
 const ATTENDANCE_GOAL_RANGE = { min: 50, max: 100, step: 0.1 }
-const GPA_BASIS_OPTIONS = [{ id: 'semester', label: 'Semester GPA' }, { id: 'cumulative', label: 'Cumulative GPA' }]
 
 function numberOrNull(value) {
   return value === '' || value == null ? null : Number(value)
@@ -3120,7 +3119,6 @@ function GoalMetric({ label, current, target, status, sub }) {
 function goalForm(goal) {
   return {
     gpa: goal?.target_gpa ?? '',
-    basis: goal?.gpa_basis || 'semester',
     attendance: goal?.target_attendance ?? '',
     courses: Object.fromEntries(Object.entries(goal?.course_targets || {}).map(([k, v]) => [k, String(v)])),
   }
@@ -3143,8 +3141,8 @@ function TargetFeedback({ id, check, reach, serverError, unit = '%', decimals = 
         </span>
       ) : check.state === 'invalid' ? (
         <span className="goal-error">Enter a number in the allowed range.</span>
-      ) : check.state === 'unverified' ? (
-        <span className="muted">{reach.known && reach.bound_only ? 'Within the theoretical maximum; ' : ''}Unable to verify goal feasibility yet.</span>
+      ) : check.state === 'unverified' && reach?.known && reach.bound_only ? (
+        <span className="muted">Within the theoretical maximum; unable to verify goal feasibility yet.</span>
       ) : null}
       <span className="muted">{reachLine(reach, unit, decimals)}</span>
     </div>
@@ -3196,7 +3194,7 @@ function GoalCourseRow({ course, value, onChange, serverError }) {
         <label className="goal-course-input">
           <span className="sr-only">Target for {course.course}, %</span>
           <input className={`input${invalid ? ' input-invalid' : ''}`} type="number" inputMode="decimal" min={0} max={100} step={0.1}
-            placeholder={course.placeholder != null ? String(course.placeholder) : 'Target %'}
+            placeholder="Target %"
             aria-invalid={invalid} aria-describedby={feedbackId}
             value={value ?? ''} onChange={e => onChange(course.code, e.target.value)} />
         </label>
@@ -3248,6 +3246,35 @@ function AttendanceRecovery({ attendance }) {
   )
 }
 
+// US-18: which grade in which course reaches the GPA target, from the grades already earned
+function GpaPlan({ plan, onApply }) {
+  if (!plan || !plan.status) return null
+  if (plan.status !== 'planned') return plan.status === 'unachievable' ? null : <p className="muted goal-hint">{plan.message}</p>
+  const open = plan.courses.filter(c => !c.fixed)
+  return (
+    <div className="goal-plan">
+      <div className="goal-plan-head">
+        <b>Suggested grades for {Number(plan.target).toFixed(2)}</b>
+        <button type="button" className="link-btn" onClick={() => onApply(open)}>Use as course targets</button>
+      </div>
+      <ul className="goal-math-list">
+        {plan.courses.map(c => (
+          <li key={c.code}>
+            <span>{c.course}<small className="muted"> · {fmtNum(c.credits)} ECTS</small></span>
+            <b>
+              {c.fixed ? `${c.letter} · final` : `${c.letter} · ${fmtNum(c.min_score)}%+`}
+              {c.required_average != null && c.required_average !== c.min_score && (
+                <small className="muted"> (avg {fmtNum(c.required_average)}% on what's left)</small>
+              )}
+            </b>
+          </li>
+        ))}
+      </ul>
+      <p className="muted">{plan.message} Higher letters go where they are easiest to get from the grades you already have.</p>
+    </div>
+  )
+}
+
 function GoalsTab({ token }) {
   const [data, setData] = useState(null)
   const [form, setForm] = useState(() => goalForm(null))
@@ -3263,27 +3290,44 @@ function GoalsTab({ token }) {
       .catch(e => setErr(e.message))
   }, [token])
 
+  // Suggested grades for the GPA being typed (debounced; nothing is saved)
+  const [plan, setPlan] = useState(null)
+  useEffect(() => {
+    const target = Number(form.gpa)
+    if (form.gpa === '' || !Number.isFinite(target) || target < GPA_GOAL_RANGE.min || target > GPA_GOAL_RANGE.max) {
+      setPlan(null)
+      return undefined
+    }
+    let cancelled = false
+    const timer = setTimeout(() => {
+      api(`/api/student/goals/plan?semester=spring-2026&target_gpa=${target}`, token)
+        .then(p => { if (!cancelled) setPlan(p) })
+        .catch(() => { if (!cancelled) setPlan(null) })
+    }, 350)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [form.gpa, token])
+
   if (err && !data) return <div className="page page-narrow"><div className="alert-box alert-danger">{err}</div></div>
   if (!data) return <PageLoader label="Loading your goals…" />
 
   const tracking = data.tracking || {}
-  const progressRows = Object.fromEntries((data.progress?.courses || []).map(r => [r.code, r]))
-  const courses = (tracking.courses || []).map(c => ({
-    ...c, placeholder: progressRows[c.code]?.target_source === 'gpa' ? progressRows[c.code].target : null,
-  }))
+  const courses = tracking.courses || []
   const gpa = tracking.gpa || {}
   const attendance = tracking.attendance || {}
-  const gpaReach = tracking.gpa_options?.[form.basis]
+  // Only the overall (cumulative) GPA has a goal
+  const gpaReach = tracking.gpa_options?.cumulative
   const gpaCheck = checkTarget(form.gpa, gpaReach, { min: GPA_GOAL_RANGE.min, max: GPA_GOAL_RANGE.max })
-  const attReach = { known: attendance.known, max_exact: attendance.max_exact, maximum: attendance.maximum, missing: attendance.missing }
+  // Without SDU class-hour counts the backend still sends a ceiling from the recorded absence percentages
+  const attReach = attendance.bound_only
+    ? { known: true, bound_only: true, max_exact: attendance.max_exact, maximum: attendance.maximum }
+    : { known: attendance.known, max_exact: attendance.max_exact, maximum: attendance.maximum, missing: attendance.missing }
   const attCheck = checkTarget(form.attendance, attReach, { min: ATTENDANCE_GOAL_RANGE.min, max: ATTENDANCE_GOAL_RANGE.max })
-  const savedBasis = data.goal?.gpa_basis || 'semester'
 
   const touched = () => { setSaved(false); setNotice('') }
   const setField = (key, value) => {
     touched()
     setForm(prev => ({ ...prev, [key]: value }))
-    if (key === 'gpa' || key === 'basis') setServerErrors(prev => ({ ...prev, gpa: null }))
+    if (key === 'gpa') setServerErrors(prev => ({ ...prev, gpa: null }))
     if (key === 'attendance') setServerErrors(prev => ({ ...prev, attendance: null }))
   }
   const setCourse = (code, value) => {
@@ -3309,7 +3353,7 @@ function GoalsTab({ token }) {
         method: 'PUT',
         body: JSON.stringify({
           target_gpa: numberOrNull(form.gpa), target_attendance: numberOrNull(form.attendance),
-          course_targets: courseTargets, gpa_basis: form.basis,
+          course_targets: courseTargets, gpa_basis: 'cumulative',
         }),
       })
       setData(d); setForm(goalForm(d.goal)); setServerErrors(serverFieldErrors(null)); setSaved(true)
@@ -3328,7 +3372,7 @@ function GoalsTab({ token }) {
     }
   }
 
-  const gpaLabel = savedBasis === 'cumulative' ? 'Cumulative GPA' : 'Semester GPA'
+  const gpaLabel = 'Cumulative GPA'
   const attSub = attendance.target != null && attendance.known ? `max ${fmtNum(attendance.maximum)}%` : attendance.known === false && attendance.target != null ? "can't verify yet" : null
 
   return (
@@ -3338,7 +3382,7 @@ function GoalsTab({ token }) {
           current={gpa.current != null ? { value: gpa.current, text: Number(gpa.current).toFixed(2) } : null}
           target={gpa.target != null ? { value: gpa.target, text: Number(gpa.target).toFixed(2) } : null}
           status={gpa.status}
-          sub={gpa.target != null && gpa.known ? `max ${Number(gpa.maximum).toFixed(2)}` : gpa.current == null ? 'no final grades yet' : null} />
+          sub={gpa.target != null && gpa.known ? `max ${Number(gpa.maximum).toFixed(2)}` : gpa.current == null ? 'no transcript yet' : null} />
         <GoalMetric label="Attendance"
           current={attendance.current != null ? { value: attendance.current, text: `${fmtNum(attendance.current)}%` }
             : attendance.official != null ? { value: attendance.official, text: `${fmtNum(attendance.official)}%` } : null}
@@ -3380,8 +3424,7 @@ function GoalsTab({ token }) {
         </header>
         <div className="goal-fields">
           <div className="goal-field">
-            <label htmlFor="goal-gpa">Target GPA</label>
-            <Segmented options={GPA_BASIS_OPTIONS} value={form.basis} onChange={v => setField('basis', v)} label="GPA type" />
+            <label htmlFor="goal-gpa">Target cumulative GPA</label>
             <input id="goal-gpa" className={`input${serverErrors.gpa || gpaCheck.state === 'impossible' || gpaCheck.state === 'invalid' ? ' input-invalid' : ''}`}
               type="number" inputMode="decimal" placeholder="e.g. 3.50" value={form.gpa}
               min={GPA_GOAL_RANGE.min} max={GPA_GOAL_RANGE.max} step={GPA_GOAL_RANGE.step}
@@ -3389,12 +3432,12 @@ function GoalsTab({ token }) {
               onChange={e => setField('gpa', e.target.value)} />
             <TargetFeedback id="goal-gpa-feedback" check={gpaCheck} reach={gpaReach} serverError={serverErrors.gpa}
               unit="" decimals={2} onApply={v => setField('gpa', Number(v).toFixed(2))} />
-            {gpa.target != null && form.basis === savedBasis && gpa.required_score > 0 && gpa.status !== 'unachievable' && gpa.status !== 'achieved' && (
-              <p className="goal-required">Scoring {fmtNum(gpa.required_score)}%+ ({gpa.required_letter}) in every open course reaches {Number(gpa.target).toFixed(2)}.</p>
-            )}
-            {form.basis === savedBasis && (gpa.pace || (gpa.status === 'insufficient_data' && gpa.message)) && (
-              <p className="muted goal-hint">{gpa.status === 'insufficient_data' ? gpa.message : gpa.pace}</p>
-            )}
+            <GpaPlan plan={plan} onApply={rows => {
+              touched()
+              setForm(prev => ({ ...prev, courses: { ...prev.courses, ...Object.fromEntries(rows.map(r => [r.code, String(r.min_score)])) } }))
+              setServerErrors(prev => ({ ...prev, courses: {} }))
+            }} />
+            {gpa.pace && <p className="muted goal-hint">{gpa.pace}</p>}
           </div>
           <div className="goal-field">
             <label htmlFor="goal-attendance">Target attendance, %</label>
@@ -3407,6 +3450,12 @@ function GoalsTab({ token }) {
               onApply={v => setField('attendance', String(v))} />
             {attendance.target != null && attendance.status && attendance.status !== 'unachievable' && attendance.message && attendance.known && (
               <p className="goal-required">{attendance.message}</p>
+            )}
+            {attendance.bound_only && (
+              <p className="muted goal-hint">
+                SDU sent only absence percentages, not class hours, so the exact remaining classes are unknown. Targets above the
+                ceiling are rejected; lower ones are saved but can't be fully verified.
+              </p>
             )}
             <AttendanceRecovery attendance={attendance} />
           </div>
