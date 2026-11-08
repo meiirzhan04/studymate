@@ -6,7 +6,7 @@ import {
 } from 'recharts'
 import './styles.css'
 import { calcGPA, calcCompletedCredits, ectsOf } from './gpa.js'
-import { STATUS_LABEL, STATUS_TONE, checkTarget, progressPct, reachLine, serverFieldErrors } from './goals.js'
+import { STATUS_LABEL, STATUS_TONE, checkTarget, progressPct, reachLine, serverFieldErrors, simulateCourse } from './goals.js'
 import { UNKNOWN_DAY, classLocation, classTimes, findNextClass, getDayOrder, mergeBlocks, normalizeSchedule, sortSchedule } from './schedule.js'
 
 /* ─── API helper ──────────────────────────────────────────────────── */
@@ -1464,7 +1464,8 @@ const currentTermCourses = (transcript = []) => {
 }
 
 const WHATIF_SOURCE_HINTS = {
-  saved: 'Remembered from your last calculation for this course.',
+  saved: 'Remembered from your last calculation for this course (the same scenario as on the Goals page).',
+  sdu: 'Your grades and weights from the SDU grades page.',
   syllabus: 'Weights from the official course syllabus. Enter the scores you already have; edit if your section differs.',
   default: 'SDU shares only the final course grade, so these are typical weights. Edit them to match your syllabus and enter the scores you already have.',
 }
@@ -1517,14 +1518,14 @@ function WhatIfRows({ rows, solveIndex, onSolve, onChange, onRemove }) {
   )
 }
 
-function WhatIfModal({ token, transcript, onClose }) {
+function WhatIfModal({ token, transcript, onClose, initialCourse = null }) {
   const [fetchedCourses, setFetchedCourses] = useState([])
-  const [courseCode, setCourseCode]   = useState('')
+  const [courseCode, setCourseCode]   = useState(initialCourse?.code || '')
   const [rows, setRows]               = useState(DEFAULT_WHATIF_ROWS)
   const [solveIndex, setSolveIndex]   = useState(DEFAULT_WHATIF_ROWS.length - 1)
   const [source, setSource]           = useState('default')
   const [sourceLabel, setSourceLabel] = useState(null)
-  const [target, setTarget]           = useState(85)
+  const [target, setTarget]           = useState(initialCourse?.target ?? 85)
   const [result, setResult]           = useState(null)
   const [loading, setLoading]         = useState(false)
   const [loadingComp, setLoadingComp] = useState(false)
@@ -1532,7 +1533,11 @@ function WhatIfModal({ token, transcript, onClose }) {
 
   // The modal can open before SDU data arrives, so derive from the prop on every render
   const transcriptCourses = currentTermCourses(transcript)
-  const courses = transcriptCourses.length ? transcriptCourses : fetchedCourses
+  const listed = transcriptCourses.length ? transcriptCourses : fetchedCourses
+  // Opened from a course on the Goals page: that course is always in the list
+  const courses = initialCourse && !listed.some(c => c.code === initialCourse.code)
+    ? [{ code: initialCourse.code, course: initialCourse.course, score: initialCourse.score ?? null }, ...listed]
+    : listed
   const courseCodes = courses.map(c => c.code).join('|')
 
   // 1. No SDU transcript (password-only account): fall back to this term's stored grades
@@ -1556,7 +1561,8 @@ function WhatIfModal({ token, transcript, onClose }) {
       setRows(list); setSolveIndex(firstUnscored(list)); setSource(nextSource); setSourceLabel(nextLabel)
     }
     setLoadingComp(true); setResult(null); setErr('')
-    api(`/api/student/grades/whatif/template?course_code=${encodeURIComponent(courseCode)}`, token)
+    const courseName = courses.find(c => c.code === courseCode)?.course || ''
+    api(`/api/student/grades/whatif/template?course_code=${encodeURIComponent(courseCode)}&course=${encodeURIComponent(courseName)}`, token)
       .then(d => {
         const list = (d.components || []).map(c => ({
           name: c.name,
@@ -3150,33 +3156,127 @@ function TargetFeedback({ id, check, reach, serverError, unit = '%', decimals = 
   )
 }
 
-function CourseMath({ ev }) {
-  if (!ev?.known) return <p className="muted">{ev?.reason || 'No assessment breakdown is available for this course yet.'}</p>
+// What-if planner for one course, shared with the What-if planner in the menu: both read and save
+// the same breakdown for the course. Scenarios never change the real grades Goals checks against.
+const COURSE_WHATIF_SOURCES = {
+  saved: 'Your saved what-if scenario (also opens in the What-if planner).',
+  sdu: 'Your grades from SDU. Type the scores you expect for the rest.',
+  grades: 'Your recorded grades. Type the scores you expect for the rest.',
+  syllabus: 'Weights from the course syllabus; enter your scores.',
+  default: 'SDU gives no breakdown for this course: typical weights, edit them to match your syllabus.',
+}
+
+function CourseWhatIf({ course, token, onOpenFull }) {
+  const ev = course.evaluation || {}
+  const real = course.breakdown || []
+  const weightsLocked = real.length > 0
+  const toRows = list => list.map(a => ({
+    name: a.name, weight: Math.round(Number(a.weight) * (Number(a.weight) <= 1 ? 1000 : 10)) / 10,
+    score: a.score ?? '',
+  }))
+  const [rows, setRows] = useState(null)
+  const [source, setSource] = useState(null)
+  const [note, setNote] = useState({ text: '', tone: 'success' })
+  const [busy, setBusy] = useState(false)
+
+  const load = () => {
+    api(`/api/student/grades/whatif/template?course_code=${encodeURIComponent(course.code)}&course=${encodeURIComponent(course.course)}`, token)
+      .then(d => {
+        const list = toRows(d.components || [])
+        // A saved scenario whose assessments no longer match SDU's is replaced by the real breakdown
+        const matches = !weightsLocked || (list.length === real.length && list.every((r, i) => r.name === real[i].name))
+        if (list.length && matches) { setRows(list); setSource(d.source) } else { setRows(toRows(real)); setSource('sdu') }
+      })
+      .catch(() => { setRows(weightsLocked ? toRows(real) : DEFAULT_WHATIF_ROWS); setSource(weightsLocked ? 'sdu' : 'default') })
+  }
+  const update = (i, field, value) => { setNote({ text: '' }); setRows(prev => prev.map((r, j) => (j === i ? { ...r, [field]: value } : r))) }
+  const useReal = () => { setNote({ text: '' }); setRows(weightsLocked ? toRows(real) : rows.map(r => ({ ...r, score: '' }))); setSource(weightsLocked ? course.breakdown_source : source) }
+  const save = async () => {
+    setBusy(true)
+    try {
+      await api('/api/student/grades/whatif/template', token, {
+        method: 'PUT',
+        body: JSON.stringify({
+          course_code: course.code,
+          components: rows.map(r => ({ name: r.name.trim(), weight: Number(r.weight) / 100, score: r.score === '' ? null : Number(r.score) })),
+        }),
+      })
+      setSource('saved')
+      setNote({ text: 'Saved. The What-if planner in the menu opens this scenario too.', tone: 'success' })
+    } catch (e) {
+      setNote({ text: e.message, tone: 'danger' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const sim = rows ? simulateCourse(rows, course.target) : null
+  const realScore = name => real.find(a => a.name === name)?.score
+
   return (
-    <div className="goal-math">
-      <p>
-        Completed work: <b>{fmtNum(ev.earned)} pts</b> from {ev.completion}% of the grade
-        {ev.current_form != null && <> (average {fmtNum(ev.current_form)}%)</>}.
-        {' '}Maximum = completed points + full marks on everything left = <b>{fmtNum(ev.maximum)}%</b>.
-      </p>
-      {ev.remaining?.length > 0 && (
-        <ul className="goal-math-list">
-          {ev.remaining.map(r => (
-            <li key={r.name}>
-              <span>{r.name} · {fmtNum(r.weight)}% of grade</span>
-              <b>{r.min_score != null ? (ev.remaining.length > 1 ? `≥ ${fmtNum(r.min_score)} if 100 on the rest` : `≥ ${fmtNum(r.min_score)}/100`) : 'not graded'}</b>
-            </li>
-          ))}
-        </ul>
-      )}
-      {ev.message && ev.status !== 'unachievable' && <p>{ev.message}</p>}
-      {ev.pace && <p className="muted">{ev.pace}</p>}
-      <p className="muted">Source: {ev.source === 'sdu' ? 'SDU grades page' : 'your recorded assessments'}. Ungraded work is never counted as 0.</p>
-    </div>
+    <details className="goal-details" onToggle={e => { if (e.currentTarget.open && !rows) load() }}>
+      <summary>What-if planner</summary>
+      <div className="goal-math goal-whatif">
+        {!rows ? <p className="muted">Loading the course breakdown…</p> : (
+          <>
+            <p className="muted">{COURSE_WHATIF_SOURCES[source] || COURSE_WHATIF_SOURCES.default}</p>
+            <div className="whatif-mini-head" aria-hidden="true"><span>Assessment</span><span>Weight</span><span>Score</span></div>
+            <ul className="whatif-mini">
+              {rows.map((r, i) => {
+                const actual = realScore(r.name)
+                const isReal = actual != null && String(actual) === String(r.score)
+                return (
+                  <li key={i}>
+                    <span className="whatif-mini-name">{r.name}{isReal && <small className="tag tag-success">graded</small>}</span>
+                    {weightsLocked
+                      ? <span className="whatif-mini-weight">{fmtNum(r.weight)}%</span>
+                      : <input className="input" type="number" min={0} max={100} step={1} value={r.weight}
+                          aria-label={`${r.name} weight, %`} onChange={e => update(i, 'weight', e.target.value)} />}
+                    <input className="input" type="number" min={0} max={100} step={0.1} value={r.score} placeholder="—"
+                      aria-label={`${r.name} score`} onChange={e => update(i, 'score', e.target.value)} />
+                  </li>
+                )
+              })}
+            </ul>
+            <p className="whatif-mini-result" aria-live="polite">
+              {sim.state === 'weights' && <span className="goal-error">Weights add up to {fmtNum(sim.totalWeight)}%, not 100%.</span>}
+              {sim.state === 'scores' && <span className="goal-error">Scores must be between 0 and 100.</span>}
+              {sim.state === 'total' && (
+                <>With these scores: <b>{fmtNum(sim.total)}% · {sim.letter} ({sim.gp.toFixed(2)})</b>
+                  {course.target != null && (sim.reaches
+                    ? <span className="tone-success"> · reaches your {fmtNum(course.target)}% target</span>
+                    : <span className="tone-danger"> · {fmtNum(course.target - sim.total)} below your {fmtNum(course.target)}% target</span>)}
+                </>
+              )}
+              {sim.state === 'partial' && (
+                <>So far <b>{fmtNum(sim.earned)} pts</b>, at most <b>{fmtNum(sim.max)}%</b>.
+                  {sim.need && (sim.need.possible
+                    ? <> You need <b>{fmtNum(sim.need.score)}</b> on {sim.need.name} for {fmtNum(course.target)}%.</>
+                    : <span className="tone-danger"> {fmtNum(course.target)}% is out of reach with these scores.</span>)}
+                  {!sim.need && ' Fill in every score to see the final grade.'}
+                </>
+              )}
+            </p>
+            <div className="whatif-mini-actions">
+              <button type="button" className="link-btn" onClick={useReal}>{weightsLocked ? 'Use my real grades' : 'Clear scores'}</button>
+              <button type="button" className="link-btn" onClick={save} disabled={busy || sim.state === 'weights' || sim.state === 'scores'}>
+                {busy ? 'Saving…' : 'Save scenario'}
+              </button>
+              <button type="button" className="link-btn" onClick={() => onOpenFull({ code: course.code, course: course.course, score: course.score, target: course.target })}>Open in What-if planner</button>
+              {note.text && <span className={`tone-${note.tone}`}>{note.text}</span>}
+            </div>
+            {ev.known && (
+              <p className="muted">Real grades: {fmtNum(ev.earned)} pts from {ev.completion}% graded; maximum achievable {fmtNum(ev.maximum)}%.
+                Scenarios never change the grades your goals are checked against.</p>
+            )}
+          </>
+        )}
+      </div>
+    </details>
   )
 }
 
-function GoalCourseRow({ course, value, onChange, serverError }) {
+function GoalCourseRow({ course, value, onChange, serverError, token, onOpenWhatIf }) {
   const ev = course.evaluation || {}
   const reach = ev.known ? { known: true, max_exact: ev.max_exact, maximum: ev.maximum, final: ev.final } : { known: false, missing: ['assessment weights and grades'] }
   const check = checkTarget(value, reach)
@@ -3205,10 +3305,7 @@ function GoalCourseRow({ course, value, onChange, serverError }) {
         {course.target != null && ev.status && ev.status !== 'achieved' && ev.status !== 'unachievable' && ev.message && (
           <p className="goal-required">{ev.message}</p>
         )}
-        <details className="goal-details">
-          <summary>How this is calculated</summary>
-          <CourseMath ev={ev} />
-        </details>
+        <CourseWhatIf course={course} token={token} onOpenFull={onOpenWhatIf} />
       </div>
     </li>
   )
@@ -3276,7 +3373,7 @@ function GpaPlan({ plan, onApply }) {
   )
 }
 
-function GoalsTab({ token }) {
+function GoalsTab({ token, onOpenWhatIf }) {
   const [data, setData] = useState(null)
   const [form, setForm] = useState(() => goalForm(null))
   const [err, setErr] = useState('')
@@ -3466,7 +3563,7 @@ function GoalsTab({ token }) {
           <ul className="course-list goal-courses">
             {courses.map(c => (
               <GoalCourseRow key={c.code} course={c} value={form.courses[c.code]} onChange={setCourse}
-                serverError={serverErrors.courses[c.code]} />
+                serverError={serverErrors.courses[c.code]} token={token} onOpenWhatIf={onOpenWhatIf} />
             ))}
           </ul>
         ) : (
@@ -4549,7 +4646,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
           {tab === 'transcript' && <TranscriptTab key={gradesSemester ?? 'all'} sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} token={token} initialSemester={gradesSemester} />}
           {tab === 'support'    && <SupportTab token={token} defaultEmail={sduData.profile?.email || ''} page="student" />}
           {tab === 'insights'   && <InsightsTab token={token} sduStatus={sduStatus} onConnect={handleSduConnect} />}
-          {tab === 'goals'      && <GoalsTab token={token} />}
+          {tab === 'goals'      && <GoalsTab token={token} onOpenWhatIf={course => setShowWhatIf(course || true)} />}
           {tab === 'summary'    && <SummaryTab token={token} userName={user?.name || sduData.profile?.fullname || ''} />}
           {tab === 'attendance' && <AttendanceTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} />}
           {tab === 'profile'    && <SduProfileTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onDisconnect={handleSduDisconnect} onRefresh={loadSduLiveData} user={user} token={token} />}
@@ -4598,6 +4695,7 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
         <WhatIfModal
           token={token}
           transcript={sduData.transcript || []}
+          initialCourse={typeof showWhatIf === 'object' ? showWhatIf : null}
           onClose={() => setShowWhatIf(false)}
         />
       )}

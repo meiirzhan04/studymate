@@ -72,3 +72,50 @@ export function serverFieldErrors(detail) {
     courses: errors.course_targets || {},
   }
 }
+
+/* ─── What-if planner for one course (Goals page) ──────────────────────
+ * Same official SDU scale as the backend: (lowest percent, letter, grade point).
+ */
+export const SDU_SCALE = [
+  [95, 'A', 4.0], [90, 'A-', 3.67], [85, 'B+', 3.33], [80, 'B', 3.0], [75, 'B-', 2.67], [70, 'C+', 2.33],
+  [65, 'C', 2.0], [60, 'C-', 1.67], [55, 'D+', 1.33], [50, 'D', 1.0],
+]
+
+export function letterFor(percent) {
+  const hit = SDU_SCALE.find(([min]) => percent >= min - 1e-9)
+  return hit ? { letter: hit[1], gp: hit[2] } : { letter: 'F', gp: 0 }
+}
+
+/**
+ * Final course result for scores the student types in (weights in %, scores 0-100 or '').
+ * Returns the total when every weight is valid; with exactly one blank score it also returns
+ * the score that blank needs for the target.
+ */
+export function simulateCourse(rows, target) {
+  const parsed = rows.map(r => ({
+    name: r.name,
+    weight: Number(r.weight),
+    score: r.score === '' || r.score == null ? null : Number(r.score),
+  }))
+  const totalWeight = parsed.reduce((sum, r) => sum + (Number.isFinite(r.weight) ? r.weight : 0), 0)
+  if (parsed.some(r => !Number.isFinite(r.weight) || r.weight <= 0) || Math.abs(totalWeight - 100) > 0.5) {
+    return { state: 'weights', totalWeight: Math.round(totalWeight * 10) / 10 }
+  }
+  if (parsed.some(r => r.score != null && (!Number.isFinite(r.score) || r.score < 0 || r.score > 100))) {
+    return { state: 'scores' }
+  }
+  const earned = parsed.reduce((sum, r) => sum + (r.score ?? 0) * r.weight / 100, 0)
+  const blanks = parsed.filter(r => r.score == null)
+  const out = { earned: Math.round(earned * 10) / 10, blanks: blanks.length }
+  if (!blanks.length) {
+    const total = Math.round(earned * 10) / 10
+    return { ...out, state: 'total', total, ...letterFor(earned), reaches: target == null ? null : earned >= target - 1e-9 }
+  }
+  out.state = 'partial'
+  out.max = Math.round((earned + blanks.reduce((sum, r) => sum + r.weight, 0)) * 10) / 10
+  if (target != null && blanks.length === 1) {
+    const need = (target - earned) / (blanks[0].weight / 100)
+    out.need = { name: blanks[0].name, score: Math.ceil(Math.max(0, need) * 10 - 1e-9) / 10, possible: need <= 100 + 1e-9 }
+  }
+  return out
+}

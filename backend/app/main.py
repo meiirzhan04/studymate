@@ -1656,7 +1656,9 @@ def goal_tracking(goal: Optional[dict], ctx: dict) -> dict:
         evaluation = goals_mod.evaluate_course(c["breakdown"], target)
         evaluation["source"] = c["breakdown_source"]
         courses.append({"course": c["course"], "code": c["code"], "credits": c.get("credits"), "score": c.get("score"),
-                        "target": target, "evaluation": evaluation})
+                        "target": target, "evaluation": evaluation,
+                        # The official breakdown, for the course's what-if planner on the Goals page
+                        "breakdown": c["breakdown"], "breakdown_source": c["breakdown_source"]})
 
     gpa_courses = gpa_plan_courses(ctx)
     gpa_options = {GPA_GOAL_BASIS: goals_mod.evaluate_gpa(None, GPA_GOAL_BASIS, gpa_courses, ctx["past"], ctx["cumulative_gpa"])}
@@ -2038,11 +2040,15 @@ def grades_whatif(user: Annotated[User, Depends(require_role("student"))], req: 
 
 @app.get("/api/student/grades/whatif/template")
 def grades_whatif_template(user: Annotated[User, Depends(require_role("student"))],
-                           course_code: str = Query(min_length=1, max_length=20)):
-    """Starting breakdown for the planner: the student's own > stored grades > syllabus > default."""
+                           course_code: str = Query(min_length=1, max_length=20),
+                           course: Optional[str] = Query(None, max_length=200)):
+    """Starting breakdown for the planner: the student's own > SDU grades page > stored grades > syllabus > default."""
     saved = repo.get_whatif_template(user.id, syllabi.normalize_code(course_code))
     if saved:
         return {"source": "saved", "label": "Your saved breakdown", "components": saved}
+    official = sdu_breakdown(user.id, course_code, course)
+    if official:
+        return {"source": "sdu", "label": "Your grades from SDU", "components": official}
     stored = find_stored_components(user.student_id, course_code)
     if stored and len(stored) > 1:   # SDU sync keeps only a single "Final Grade"
         return {"source": "grades", "label": None, "components": stored}
@@ -2050,6 +2056,34 @@ def grades_whatif_template(user: Annotated[User, Depends(require_role("student")
     if preset:
         return {"source": "syllabus", "label": syllabi.SYLLABUS_LABEL, "components": preset}
     return {"source": "default", "label": None, "components": syllabi.as_components(syllabi.DEFAULT_COMPONENTS)}
+
+
+def sdu_breakdown(user_id: str, course_code: str, course_name: Optional[str] = None) -> Optional[list[dict]]:
+    """The course's assessment breakdown from the SDU grades page (weights as fractions), if synced."""
+    official = {}
+    for item in ((repo.get_snapshot(user_id, "grade_components") or {}).get("courses") or {}).values():
+        for key in _course_key(item.get("code"), item.get("course")):
+            official[key] = item
+    parts, _source = course_breakdown({"code": course_code, "course": course_name, "components": []}, official)
+    return parts if parts and len(parts) > 1 else None
+
+
+class WhatIfTemplateRequest(BaseModel):
+    course_code: str = Field(min_length=1, max_length=20)
+    components: list[WhatIfComponent] = Field(min_length=1, max_length=12)
+
+
+@app.put("/api/student/grades/whatif/template")
+def save_grades_whatif_template(req: WhatIfTemplateRequest, user: Annotated[User, Depends(require_role("student"))]):
+    """Save a course breakdown the student entered (syllabus weights) when SDU publishes none."""
+    components = [c.model_dump() for c in req.components]
+    names = [c["name"].strip() for c in components]
+    if len(set(names)) != len(names):
+        raise HTTPException(status_code=400, detail="Component names must be unique.")
+    if not math.isclose(sum(c["weight"] for c in components), 1.0, abs_tol=0.005):
+        raise HTTPException(status_code=400, detail="Component weights must add up to 100%.")
+    repo.save_whatif_template(user.id, syllabi.normalize_code(req.course_code), components)
+    return {"source": "saved", "label": "Your saved breakdown", "components": components}
 
 
 def whatif_verdict(needed_score: float, component_name: str, target_score: float) -> dict:
