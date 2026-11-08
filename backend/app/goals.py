@@ -16,7 +16,7 @@ from __future__ import annotations
 import math
 from typing import Callable, Optional
 
-from .academics import grade_point, letter_for, required_score
+from .academics import SDU_SCALE, grade_point, letter_for, required_score
 
 EPS = 1e-9
 
@@ -461,6 +461,94 @@ def evaluate_gpa(target: Optional[float], basis: str, courses: list[dict],
         message += f" Your open courses need an average grade point of {out['required_gp']:.2f} or more."
     out.update(status=status, verdict="achievable", pace=pace, message=message)
     return out
+
+
+# ─── GPA planner: which grade in which course reaches a GPA target ───
+# SDU letters from lowest to highest as (letter, lowest percent, grade point); F is 0
+LETTER_STEPS = (("F", 0.0, 0.0),) + tuple((letter, float(minimum), gp) for minimum, letter, gp in reversed(SDU_SCALE))
+
+
+def _step_for_gp(gp: float) -> int:
+    return max(i for i, (_l, _m, g) in enumerate(LETTER_STEPS) if g <= gp + EPS)
+
+
+def plan_grades(target: Optional[float], basis: str, courses: list[dict], past: Optional[dict] = None) -> dict:
+    """Suggested letter per open course that reaches a GPA target, based on the grades already earned.
+
+    Letters are raised one step at a time where the next one is easiest: the lowest average still
+    needed on the course's remaining work (a course without a breakdown counts the letter's own
+    percentage). So a course with a weak midterm is asked for less and the others make up for it.
+    A course is never planned above what it can still reach or below what it has already secured;
+    finished courses keep their grade. Courses without an assessment breakdown can reach up to an A.
+    """
+    if target is None:
+        return {"status": None}
+    basis = basis if basis in ("semester", "cumulative") else "semester"
+    rows = [{**c, **_course_gp_bounds(c)} for c in courses]
+    if not rows or any(r["credits"] <= 0 for r in rows):
+        return {"status": INSUFFICIENT, "message": "Credits for this term's courses are needed to plan grades."}
+    if basis == "cumulative" and (not past or (past.get("credits") or 0) <= 0):
+        return {"status": INSUFFICIENT, "message": "Your transcript with completed credits is needed to plan a cumulative GPA."}
+
+    base_points = past["points"] if basis == "cumulative" else 0.0
+    base_credits = past["credits"] if basis == "cumulative" else 0.0
+    total = base_credits + sum(r["credits"] for r in rows)
+    finals = [r for r in rows if r["known"] and r["final"]]
+    open_rows = [r for r in rows if not (r["known"] and r["final"])]
+    fixed = base_points + sum(r["max_gp"] * r["credits"] for r in finals)
+    needed = target * total - fixed
+    if not open_rows:
+        return {"status": INSUFFICIENT, "message": "Every course this term is already graded."}
+    for r in open_rows:
+        r["cap"] = _step_for_gp(r["max_gp"] if r["known"] else 4.0)
+        r["floor"] = min(_step_for_gp(r["min_gp"]), r["cap"])
+
+    def points(levels: dict) -> float:
+        return sum(LETTER_STEPS[levels[id(r)]][2] * r["credits"] for r in open_rows)
+
+    def at(level: int) -> dict:
+        return {id(r): max(r["floor"], min(level, r["cap"])) for r in open_rows}
+
+    top = len(LETTER_STEPS) - 1
+    if points(at(top)) < needed - EPS:
+        return {"status": UNACHIEVABLE, "message": "This GPA is out of reach even with the best grade still possible in every course."}
+
+    # Start every course at what it has already secured, then raise one letter at a time where the
+    # next letter is easiest to get from the grades already earned (lowest score needed on the rest)
+    def difficulty(r: dict, step: int) -> float:
+        minimum = LETTER_STEPS[step][1]
+        ev = r.get("evaluation") or {}
+        if ev.get("known") and r.get("breakdown") is not None and minimum > 0:
+            need = evaluate_course(r["breakdown"], minimum)
+            if need.get("required_average") is not None:
+                return need["required_average"]
+        return minimum
+
+    levels = {id(r): r["floor"] for r in open_rows}
+    while points(levels) < needed - EPS:
+        candidates = [r for r in open_rows if levels[id(r)] < r["cap"]]
+        best = min(candidates, key=lambda r: (difficulty(r, levels[id(r)] + 1), -r["credits"]))
+        levels[id(best)] += 1
+
+    plan = []
+    for r in rows:
+        if r in finals:
+            plan.append({"course": r["course"], "code": r["code"], "credits": r["credits"], "fixed": True,
+                         "letter": letter_for(r["evaluation"]["max_exact"]), "grade_point": r["max_gp"],
+                         "min_score": r["evaluation"]["maximum"]})
+            continue
+        letter, minimum, gp = LETTER_STEPS[levels[id(r)]]
+        item = {"course": r["course"], "code": r["code"], "credits": r["credits"], "fixed": False,
+                "letter": letter, "grade_point": gp, "min_score": minimum}
+        ev = r.get("evaluation") or {}
+        if ev.get("known") and r.get("breakdown") is not None and minimum > 0:
+            need = evaluate_course(r["breakdown"], minimum)
+            if need.get("required_average") is not None:
+                item["required_average"] = need["required_average"]
+        plan.append(item)
+    reached = (fixed + points(levels)) / total
+    return {"status": "planned", "target": target, "basis": basis, "courses": plan, "gpa": floor_to(reached, 2),
+            "message": f"With these grades your {basis} GPA would be {floor_to(reached, 2):.2f}."}
 
 
 # ─── Alerts and recommendations ──────────────────────────────────────

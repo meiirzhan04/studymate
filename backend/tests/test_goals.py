@@ -368,3 +368,50 @@ def test_no_high_score_alert_when_nothing_is_graded_yet():
     behind = comps(("MT", 0.3, 80.0), ("FIN", 0.7, None))   # 80 on the midterm: the final now needs 94.3
     tracking = {"courses": [{"course": "DevOps", "code": "D 1", "target": 90, "evaluation": goals.evaluate_course(behind, 90)}]}
     assert any(a["title"] == "High score needed" and "94.3%" in a["detail"] for a in goals.alerts(tracking))
+
+
+# ─── GPA planner ─────────────────────────────────────────────────────
+def plan_course(name, credits, parts):
+    return {"course": name, "code": name, "credits": credits, "breakdown": parts,
+            "evaluation": goals.evaluate_course(parts, None)}
+
+
+def test_planner_suggests_grades_that_reach_the_gpa_from_current_scores():
+    open_course = comps(("MT", 0.3, None), ("FIN", 0.7, None))
+    term = [plan_course("Mobile", 6, comps(("MT", 0.3, 96.0), ("FIN", 0.7, None))),
+            plan_course("DevOps", 5, open_course), plan_course("NLP", 5, open_course),
+            plan_course("PM", 6, comps(("MT", 0.3, 70.0), ("FIN", 0.7, None))),   # weak midterm
+            plan_course("Law", 3, None)]
+    past = {"points": 3.24 * 120, "credits": 120.0}
+    plan = goals.plan_grades(3.3, "cumulative", term, past)
+    assert plan["status"] == "planned" and plan["gpa"] >= 3.3
+    by = {c["course"]: c for c in plan["courses"]}
+    # The weak-midterm course is asked for less; the others make up for it
+    assert by["PM"]["letter"] == "B+" and by["PM"]["required_average"] == 91.5
+    assert by["Mobile"]["letter"] == "A-" and by["Mobile"]["required_average"] == 87.5
+    # The plan really adds up: recompute the GPA from the suggested letters
+    points = past["points"] + sum(c["grade_point"] * c["credits"] for c in plan["courses"])
+    assert points / (past["credits"] + 25) >= 3.3
+
+
+def test_planner_respects_finished_courses_caps_and_impossible_targets():
+    term = [plan_course("Done", 5, comps(("Final", 1.0, 81.0))),                       # B, fixed
+            plan_course("Capped", 5, comps(("MT", 0.6, 60.0), ("FIN", 0.4, None)))]    # at most 76 -> B-
+    plan = goals.plan_grades(2.8, "semester", term)
+    by = {c["course"]: c for c in plan["courses"]}
+    assert by["Done"]["fixed"] is True and by["Done"]["letter"] == "B"
+    assert by["Capped"]["letter"] in ("B-", "C+") and by["Capped"]["grade_point"] <= 2.67
+    assert goals.plan_grades(3.5, "semester", term)["status"] == UNACHIEVABLE
+    assert goals.plan_grades(3.0, "cumulative", term, None)["status"] == INSUFFICIENT
+
+
+def test_plan_endpoint_saves_nothing():
+    from app.main import repo
+    u, tok = breakdown_student()
+    repo.save_snapshot(u["id"], "transcript", {"courses": [
+        {"semester": 1, "course_code": "OLD 100", "course_name": "Earlier terms", "grade_point": 3.0, "ects": 60}]})
+    res = client.get("/api/student/goals/plan?target_gpa=3.0", headers=auth(tok))
+    assert res.status_code == 200 and res.json()["status"] == "planned"
+    assert {c["code"] for c in res.json()["courses"]} == {"PHY 101", "CAL 101"}
+    assert client.get("/api/student/goals", headers=auth(tok)).json()["goal"] is None
+    assert client.get("/api/student/goals/plan?target_gpa=5", headers=auth(tok)).status_code == 422

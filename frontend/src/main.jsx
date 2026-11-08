@@ -3246,6 +3246,35 @@ function AttendanceRecovery({ attendance }) {
   )
 }
 
+// US-18: which grade in which course reaches the GPA target, from the grades already earned
+function GpaPlan({ plan, onApply }) {
+  if (!plan || !plan.status) return null
+  if (plan.status !== 'planned') return plan.status === 'unachievable' ? null : <p className="muted goal-hint">{plan.message}</p>
+  const open = plan.courses.filter(c => !c.fixed)
+  return (
+    <div className="goal-plan">
+      <div className="goal-plan-head">
+        <b>Suggested grades for {Number(plan.target).toFixed(2)}</b>
+        <button type="button" className="link-btn" onClick={() => onApply(open)}>Use as course targets</button>
+      </div>
+      <ul className="goal-math-list">
+        {plan.courses.map(c => (
+          <li key={c.code}>
+            <span>{c.course}<small className="muted"> · {fmtNum(c.credits)} ECTS</small></span>
+            <b>
+              {c.fixed ? `${c.letter} · final` : `${c.letter} · ${fmtNum(c.min_score)}%+`}
+              {c.required_average != null && c.required_average !== c.min_score && (
+                <small className="muted"> (avg {fmtNum(c.required_average)}% on what's left)</small>
+              )}
+            </b>
+          </li>
+        ))}
+      </ul>
+      <p className="muted">{plan.message} Higher letters go where they are easiest to get from the grades you already have.</p>
+    </div>
+  )
+}
+
 function GoalsTab({ token }) {
   const [data, setData] = useState(null)
   const [form, setForm] = useState(() => goalForm(null))
@@ -3260,6 +3289,23 @@ function GoalsTab({ token }) {
       .then(d => { setData(d); setForm(goalForm(d.goal)) })
       .catch(e => setErr(e.message))
   }, [token])
+
+  // Suggested grades for the GPA being typed (debounced; nothing is saved)
+  const [plan, setPlan] = useState(null)
+  useEffect(() => {
+    const target = Number(form.gpa)
+    if (form.gpa === '' || !Number.isFinite(target) || target < GPA_GOAL_RANGE.min || target > GPA_GOAL_RANGE.max) {
+      setPlan(null)
+      return undefined
+    }
+    let cancelled = false
+    const timer = setTimeout(() => {
+      api(`/api/student/goals/plan?semester=spring-2026&target_gpa=${target}`, token)
+        .then(p => { if (!cancelled) setPlan(p) })
+        .catch(() => { if (!cancelled) setPlan(null) })
+    }, 350)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [form.gpa, token])
 
   if (err && !data) return <div className="page page-narrow"><div className="alert-box alert-danger">{err}</div></div>
   if (!data) return <PageLoader label="Loading your goals…" />
@@ -3386,9 +3432,11 @@ function GoalsTab({ token }) {
               onChange={e => setField('gpa', e.target.value)} />
             <TargetFeedback id="goal-gpa-feedback" check={gpaCheck} reach={gpaReach} serverError={serverErrors.gpa}
               unit="" decimals={2} onApply={v => setField('gpa', Number(v).toFixed(2))} />
-            {gpa.target != null && gpa.required_score > 0 && gpa.status !== 'unachievable' && gpa.status !== 'achieved' && (
-              <p className="goal-required">Scoring {fmtNum(gpa.required_score)}%+ ({gpa.required_letter}) in every open course reaches {Number(gpa.target).toFixed(2)}.</p>
-            )}
+            <GpaPlan plan={plan} onApply={rows => {
+              touched()
+              setForm(prev => ({ ...prev, courses: { ...prev.courses, ...Object.fromEntries(rows.map(r => [r.code, String(r.min_score)])) } }))
+              setServerErrors(prev => ({ ...prev, courses: {} }))
+            }} />
             {gpa.pace && <p className="muted goal-hint">{gpa.pace}</p>}
           </div>
           <div className="goal-field">
