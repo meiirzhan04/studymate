@@ -1281,3 +1281,19 @@ button.avatar:hover { box-shadow: 0 0 0 3px var(--accent-ring); }
   .page { max-width: none; gap: 12px; }
   .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
 }
+
+/* Goals: per-course what-if planner (shares its scenario with the What-if planner in the menu) */
+.goal-whatif { gap: 8px; }
+.whatif-mini-head, .whatif-mini li { display: grid; grid-template-columns: minmax(0, 1fr) 72px 84px; gap: 8px; align-items: center; }
+.whatif-mini-head { font-size: 11.5px; font-weight: 500; color: var(--text-muted); }
+.whatif-mini-head span:not(:first-child) { text-align: right; }
+.whatif-mini li { padding: 3px 0; }
+.whatif-mini li + li { border-top: 1px solid var(--border); }
+.whatif-mini-name { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--text-primary); }
+.whatif-mini-name .tag { height: 18px; font-size: 11px; }
+.whatif-mini-weight { text-align: right; font-variant-numeric: tabular-nums; }
+.whatif-mini .input { height: 30px; padding: 0 8px; text-align: right; font-variant-numeric: tabular-nums; }
+.whatif-mini-result { color: var(--text-secondary); }
+.whatif-mini-result b { color: var(--text-primary); }
+.whatif-mini-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+.whatif-mini-actions .link-btn { font-size: 12.5px; }

@@ -47,3 +47,29 @@ test('server errors map onto form fields', () => {
   assert.equal(mapped.attendance.suggested, 89.6)
   assert.deepEqual(Object.keys(mapped.courses), ['INF 101'])
 })
+
+import { letterFor, simulateCourse } from './goals.js'
+
+const rows = (...r) => r.map(([name, weight, score]) => ({ name, weight, score }))
+
+test('what-if total and letter from the scores typed in', () => {
+  const out = simulateCourse(rows(['Quizzes', 20, '90'], ['MT', 30, '86.7'], ['FIN', 50, '92']), 90)
+  assert.equal(out.state, 'total')
+  assert.equal(out.total, 90.0)
+  assert.equal(out.letter, 'A-')
+  assert.equal(out.reaches, true)
+})
+
+test('one blank score: what it needs for the target', () => {
+  const out = simulateCourse(rows(['Coursework', 60, '94'], ['Final Exam', 40, '']), 90)
+  assert.equal(out.state, 'partial')
+  assert.deepEqual(out.need, { name: 'Final Exam', score: 84, possible: true })
+  assert.equal(simulateCourse(rows(['MT', 60, '50'], ['FIN', 40, '']), 95).need.possible, false)
+})
+
+test('weights must add up to 100 and scores stay in range', () => {
+  assert.equal(simulateCourse(rows(['MT', 30, '80'], ['FIN', 40, '']), 90).state, 'weights')
+  assert.equal(simulateCourse(rows(['MT', 50, '120'], ['FIN', 50, '']), 90).state, 'scores')
+  assert.deepEqual(letterFor(94.99), { letter: 'A-', gp: 3.67 })
+  assert.deepEqual(letterFor(49), { letter: 'F', gp: 0 })
+})

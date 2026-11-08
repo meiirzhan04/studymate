@@ -415,3 +415,39 @@ def test_plan_endpoint_saves_nothing():
     assert {c["code"] for c in res.json()["courses"]} == {"PHY 101", "CAL 101"}
     assert client.get("/api/student/goals", headers=auth(tok)).json()["goal"] is None
     assert client.get("/api/student/goals/plan?target_gpa=5", headers=auth(tok)).status_code == 422
+
+
+# ─── What-if planner shared with the Goals page ──────────────────────
+def test_whatif_template_starts_from_sdu_breakdown_and_saves_a_scenario():
+    _u, tok = goals_demo_student()
+    body = client.get("/api/student/goals", headers=auth(tok)).json()
+    pm = next(c for c in body["tracking"]["courses"] if c["course"] == "Project Management")
+    assert pm["breakdown_source"] == "sdu" and [a["name"] for a in pm["breakdown"]] == ["Quizzes", "MT", "FIN"]
+    url = f"/api/student/grades/whatif/template?course_code={pm['code']}&course=Project Management"
+    start = client.get(url, headers=auth(tok)).json()
+    assert start["source"] == "sdu" and start["components"][2] == {"name": "FIN", "weight": 0.5, "score": None}
+    scenario = [{"name": "Quizzes", "weight": 0.2, "score": 90}, {"name": "MT", "weight": 0.3, "score": 86.7},
+                {"name": "FIN", "weight": 0.5, "score": 92}]
+    saved = client.put("/api/student/grades/whatif/template", headers=auth(tok), json={"course_code": pm["code"], "components": scenario})
+    assert saved.status_code == 200
+    again = client.get(url, headers=auth(tok)).json()        # the sidebar planner opens the same scenario
+    assert again["source"] == "saved" and again["components"][2]["score"] == 92
+    # A scenario never changes what Goals treats as real grades
+    after = client.get("/api/student/goals", headers=auth(tok)).json()
+    assert next(c for c in after["tracking"]["courses"] if c["course"] == "Project Management")["breakdown"][2]["score"] is None
+
+
+def test_whatif_template_must_add_up_to_100():
+    _u, tok = breakdown_student()
+    bad = [{"name": "MT", "weight": 0.3, "score": 80}, {"name": "FIN", "weight": 0.4, "score": None}]
+    assert client.put("/api/student/grades/whatif/template", headers=auth(tok),
+                      json={"course_code": "PHY 101", "components": bad}).status_code == 400
+
+
+def goals_demo_student():
+    from app.main import repo
+    u = repo.create_user("Whatif Demo", f"6{secrets.randbelow(10**8):08d}", "password123")
+    tok = token(u["student_id"], "password123")
+    client.post("/api/sdu/demo-connect", headers=auth(tok))
+    client.post("/api/sdu/sync", headers=auth(tok))
+    return u, tok
