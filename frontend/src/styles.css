@@ -1172,7 +1172,6 @@ button.avatar:hover { box-shadow: 0 0 0 3px var(--accent-ring); }
 .goal-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
 .goal-field { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .goal-field > label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
-.goal-field .segmented { align-self: flex-start; }
 .goal-hint { margin-top: 2px; font-size: 12.5px; }
 .goal-courses { margin: 18px -24px 0; border-top: 1px solid var(--border); }
 .goal-courses > li:last-child { border-bottom: 1px solid var(--border); }

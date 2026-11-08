@@ -211,6 +211,19 @@ def attendance_counts(row: dict) -> tuple[Optional[dict], list[str]]:
             "conducted": present + absent + permitted, "remaining": hours - present - absent - permitted}, []
 
 
+def percent_upper_bound(absence_percent: Optional[float]) -> Optional[float]:
+    """Highest attendance an SDU absence percentage still allows, without class-hour counts.
+
+    Absence is counted against every scheduled hour and never decreases, so attendance can only
+    fall. The reported percentage may be rounded (the portal prints whole numbers), so the bound
+    adds the rounding margin: it can prove a target impossible, never that one is achievable.
+    """
+    if absence_percent is None or absence_percent < 0:
+        return None
+    margin = 0.5 if float(absence_percent).is_integer() else 0.05
+    return min(100.0, 100.0 - absence_percent + margin)
+
+
 def evaluate_attendance_course(row: dict, target: Optional[float], absence_limit: float = 30.0) -> dict:
     """SDU rule: absence % = missed hours / all scheduled hours; excused ("permitted") hours are not absences.
 
@@ -221,9 +234,17 @@ def evaluate_attendance_course(row: dict, target: Optional[float], absence_limit
     base = {"course": row.get("course") or row.get("lesson"), "code": row.get("code") or row.get("course_code")}
     if counts is None:
         pct = _num(row.get("absence_percent"))
-        return {**base, "known": False, "missing": missing, "status": INSUFFICIENT if target is not None else None,
-                "reported": round(100 - pct, 1) if pct is not None else None,
-                "message": "Unable to verify goal feasibility: missing " + " and ".join(missing) + "."}
+        out = {**base, "known": False, "missing": missing, "status": INSUFFICIENT if target is not None else None,
+               "reported": round(100 - pct, 1) if pct is not None else None,
+               "message": "Unable to verify goal feasibility: missing " + " and ".join(missing) + "."}
+        upper = percent_upper_bound(pct)
+        if upper is not None:
+            out.update(bound_only=True, max_exact=upper, maximum=floor_to(upper))
+            if target is not None and upper < target - EPS:
+                out.update(status=UNACHIEVABLE, verdict="impossible", suggested=floor_to(100.0 - pct),
+                           message=(f"Your target of {_fmt(target)}% is not achievable. Absences never go away, so with "
+                                    f"{_fmt(pct)}% already missed your attendance cannot rise above {_fmt(floor_to(upper))}%."))
+        return out
 
     h, absent, remaining = counts["hours"], counts["absent"], counts["remaining"]
     current = 100.0 - absent / h * 100.0
@@ -272,6 +293,10 @@ def evaluate_attendance_course(row: dict, target: Optional[float], absence_limit
     return out
 
 
+def n_or_1(items: list) -> int:
+    return len(items) or 1
+
+
 def evaluate_attendance_overall(rows: list[dict], target: Optional[float]) -> dict:
     """Overall attendance the way StudyMate computes the official figure: 100 - mean course absence %."""
     if not rows:
@@ -282,9 +307,18 @@ def evaluate_attendance_overall(rows: list[dict], target: Optional[float]) -> di
     unknown = [c for c in courses if not c["known"]]
     if unknown:
         names = ", ".join(str(c["course"]) for c in unknown[:3]) + (" …" if len(unknown) > 3 else "")
-        return {"known": False, "status": INSUFFICIENT if target is not None else None, "courses": courses,
-                "missing": ["class-hour counts for " + names],
-                "message": f"Unable to verify goal feasibility: class-hour counts are missing for {names}."}
+        out = {"known": False, "status": INSUFFICIENT if target is not None else None, "courses": courses,
+               "missing": ["class-hour counts for " + names],
+               "message": f"Unable to verify goal feasibility: class-hour counts are missing for {names}."}
+        if all(c.get("max_exact") is not None for c in courses):
+            # Same mean as the official figure, using each course's exact maximum or its percentage bound
+            upper = sum(c["max_exact"] for c in courses) / n_or_1(courses)
+            out.update(bound_only=True, max_exact=upper, maximum=floor_to(upper))
+            if target is not None and upper < target - EPS:
+                out.update(status=UNACHIEVABLE, verdict="impossible", suggested=floor_to(upper),
+                           message=(f"Your target of {_fmt(target)}% is not achievable. Absences already recorded by SDU "
+                                    f"keep your attendance at or below {_fmt(floor_to(upper))}%, even if you attend every remaining class."))
+        return out
 
     n = len(courses)
     maximum = sum(c["max_exact"] for c in courses) / n
@@ -326,7 +360,8 @@ def _course_gp_bounds(course: dict) -> dict:
 
 
 def evaluate_gpa(target: Optional[float], basis: str, courses: list[dict],
-                 past: Optional[dict] = None, current_cumulative: Optional[float] = None) -> dict:
+                 past: Optional[dict] = None, current_cumulative: Optional[float] = None,
+                 course_targets: Optional[dict] = None) -> dict:
     """Highest and lowest reachable semester or cumulative GPA, from this term's course evaluations.
 
     courses: this term's courses as {"course", "code", "credits", "evaluation": evaluate_course(...)}
@@ -385,6 +420,12 @@ def evaluate_gpa(target: Optional[float], basis: str, courses: list[dict],
             score = required_score(needed_gp)
             out["required_score"] = score
             out["required_letter"] = letter_for(score) if score is not None else None
+        # What the student's own course targets add up to, when every open course has one
+        targets = course_targets or {}
+        if all(targets.get(r.get("code")) is not None for r in open_rows):
+            points = fixed + sum(grade_point(targets[r["code"]]) * r["credits"] for r in open_rows)
+            out["targets_gpa"] = floor_to(points / total_credits, 2)
+            out["targets_enough"] = points / total_credits >= target - EPS
     if target is None:
         out["status"] = None
         return out
@@ -416,8 +457,8 @@ def evaluate_gpa(target: Optional[float], basis: str, courses: list[dict],
         status = AHEAD if projected >= target + GPA_AHEAD_MARGIN else ON_TRACK if projected >= target - EPS else BEHIND
         pace = f"At your current form you would finish near {projected:.2f}."
     message = f"Achievable: the highest {label} you can still reach is {floor_to(upper, 2):.2f}."
-    if out.get("required_score"):
-        message += f" Scoring {_fmt(out['required_score'])}%+ ({out.get('required_letter')}) in every open course reaches {target:.2f}."
+    if out.get("required_gp") and out["required_gp"] > 0:
+        message += f" Your open courses need an average grade point of {out['required_gp']:.2f} or more."
     out.update(status=status, verdict="achievable", pace=pace, message=message)
     return out
 
@@ -462,7 +503,8 @@ def alerts(tracking: dict) -> list[dict]:
             if ev["status"] == BEHIND:
                 items.append({"key": key + ":behind", "tone": "warning", "course": c["course"], "title": "Grade below the required trajectory",
                               "detail": f"{c['course']}: {ev.get('pace')}"})
-            if need is not None and need >= HIGH_REQUIRED_SCORE:
+            # Only when earlier results raised the bar: needing 90% for a 90% goal with nothing graded is no news
+            if need is not None and need >= HIGH_REQUIRED_SCORE and need > tgt + EPS and ev.get("completion"):
                 single = ev["remaining"][0]["name"] if len(ev["remaining"]) == 1 else "the remaining assessments"
                 items.append({"key": key + f":high:{need}", "tone": "warning", "course": c["course"], "title": "High score needed",
                               "detail": f"You need at least {_fmt(need)}% on {'your ' + single if len(ev['remaining']) == 1 else single} "
@@ -502,14 +544,22 @@ def recommendations(tracking: dict) -> list[str]:
         if status == BEHIND:
             tips.append(f"Prioritise {heaviest['name']} in {course} ({_fmt(heaviest['weight'])}% of the grade): "
                         f"you need {_fmt(ev['required_average'])}% on average from here.")
-        elif status == ON_TRACK:
+        elif status == ON_TRACK and ev.get("completion"):
             tips.append(f"Keep an average of {_fmt(ev['required_average'])}% on the remaining {course} work to stay on track.")
 
     gpa = tracking.get("gpa") or {}
     if gpa.get("status") == UNACHIEVABLE:
         tips.append(f"Set your GPA goal to {gpa['suggested']:.2f} or lower; that is the most you can still reach.")
-    elif gpa.get("status") in (BEHIND, ON_TRACK) and gpa.get("required_score"):
-        tips.append(f"For your GPA goal, aim for {_fmt(gpa['required_score'])}%+ ({gpa.get('required_letter')}) in every open course.")
+    elif gpa.get("status") in (BEHIND, ON_TRACK, AHEAD, INSUFFICIENT) and gpa.get("target") is not None and gpa.get("required_gp", 0) > 0:
+        goal, need = f"{gpa['target']:.2f}", f"{gpa['required_gp']:.2f}"
+        if gpa.get("targets_gpa") is not None and gpa.get("targets_enough"):
+            tips.append(f"Reaching your course targets gives a {gpa['basis']} GPA of {gpa['targets_gpa']:.2f}, enough for your {goal} goal.")
+        elif gpa.get("targets_gpa") is not None:
+            tips.append(f"Your course targets add up to a {gpa['basis']} GPA of {gpa['targets_gpa']:.2f}, below your {goal} goal: "
+                        f"your open courses need an average grade point of {need} (A- = 3.67, A = 4.00).")
+        else:
+            tips.append(f"For a {goal} {gpa['basis']} GPA your open courses need an average grade point of {need} "
+                        f"(A- = 3.67, A = 4.00); {_fmt(gpa['required_score'])}%+ ({gpa.get('required_letter')}) in every one is the safe way.")
     seen, unique = set(), []
     for t in tips:
         if t not in seen:
