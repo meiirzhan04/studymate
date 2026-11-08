@@ -1359,7 +1359,8 @@ class SQLiteRepository:
                 if breakdowns or replace_local_grades:
                     self._swap_snapshot(db, user_id, "grade_components", {"courses": breakdowns}, now_iso)
             if isinstance(attendance, list) and attendance:
-                rows = [{k: a.get(k) for k in ("lesson", "course_code", "hours", "present", "absent", "permitted", "absence_percent")}
+                rows = [{k: a.get(k) for k in ("lesson", "course_code", "hours", "present", "absent", "permitted", "remaining",
+                                               "absence_percent")}
                         for a in attendance if isinstance(a, dict) and a.get("lesson")]
                 self._swap_snapshot(db, user_id, "attendance_detail", {"rows": rows}, now_iso)
 

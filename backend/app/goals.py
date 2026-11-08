@@ -207,8 +207,13 @@ def attendance_counts(row: dict) -> tuple[Optional[dict], list[str]]:
     permitted = permitted or 0.0
     if min(present, absent, permitted) < 0 or present + absent + permitted > hours + EPS:
         return None, ["consistent class-hour counts"]
+    remaining = hours - present - absent - permitted
+    ahead = _num(row.get("remaining"))
+    if ahead is not None and 0 <= ahead <= remaining + EPS:
+        # The journal dates every hour: past hours nobody marked are not still ahead
+        remaining = ahead
     return {"hours": hours, "present": present, "absent": absent, "permitted": permitted,
-            "conducted": present + absent + permitted, "remaining": hours - present - absent - permitted}, []
+            "conducted": present + absent + permitted, "remaining": remaining}, []
 
 
 def percent_upper_bound(absence_percent: Optional[float]) -> Optional[float]:

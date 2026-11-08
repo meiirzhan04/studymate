@@ -80,6 +80,7 @@ class FakePortal:
         self.require_code = True
         self.requests = []
         self.journal = ATTENDANCE_PAGE
+        self.course_journals = {}
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         cookies = dict(item.split("=", 1) for item in request.headers.get("cookie", "").split("; ") if "=" in item)
@@ -113,6 +114,11 @@ class FakePortal:
             action = form.get("action", [""])[0]
             if action == "GetGrades" and form.get("yt") == ["2026#1"]:
                 return httpx.Response(200, text=json.dumps({"CODE": "1", "DATA": GRADES_DATA}))
+            if action == "viewCourse":
+                key = (form.get("derskod", [""])[0], form.get("year", [""])[0], form.get("term", [""])[0], form.get("stud_id", [""])[0])
+                if key in self.course_journals:
+                    return httpx.Response(200, text=json.dumps({"CODE": 1, "DATA": self.course_journals[key]}))
+                return httpx.Response(200, text=json.dumps({"CODE": -1, "DATA": "No sections"}))
             if action == "showSchedule" and form.get("year") == ["2026"] and form.get("term") == ["1"]:
                 return httpx.Response(200, html=SCHEDULE_DATA)
             return httpx.Response(200, text="")
@@ -254,3 +260,59 @@ def test_expired_portal_session_asks_to_reconnect_and_disconnect_skips_api_sdu(p
 def _run(coro):
     import asyncio
     return asyncio.run(coro)
+
+
+# ─── Electronic attendance journal (the real page loads each course with viewCourse) ──
+JOURNAL_PICKER = """<select id="ysem"><option value="0#0">Choose</option><option value="2026#1" selected>2026 - 2027 ( 1 )</option></select>
+<input type="hidden" id="stud_id" value="200000001"><div id="divCont"></div>"""
+
+
+def journal_section(chart, rows, hours):
+    """One section the way viewCourse renders it: a row per class hour, a check, a cross or nothing."""
+    icons = {"present": '<img title="Attended" src="images/check.png">', "absent": '<img title="Absent" src="images/cross.png">',
+             "permitted": '<img title="Permitted" src="images/permit.png">', None: ""}
+    body = "".join(
+        f'<tr><td class="clsTd">{i}</td><td class="clsTd">{day.strftime("%d.%m.%Y")}</td><td class="clsTd">14:30</td>'
+        f'<td class="clsTd">I 310</td><td class="clsTd">{icons[status]}</td></tr>'
+        for i, (day, status) in enumerate(rows, start=1))
+    return (f'<div class="crsTit"><span class="grpTitle">01 - Test Teacher</span></div>'
+            f'<div class="crsTit"><span class="grpTitle"> 15 <span class="sSpn">(Week)</span>, {hours} <span class="sSpn">(Hours)</span></span></div>'
+            f'<table id="tblJourn" class="clsTbl"><tr><td></td><td><b>Date</b></td><td><b>Hour</b></td><td><b>Room</b></td><td><b>Attendance</b></td></tr>{body}</table>')
+
+
+def test_attendance_hours_come_from_each_course_journal(portal):
+    from datetime import date, timedelta
+    today = date.today()
+    past = [today - timedelta(days=d) for d in (40, 33, 26, 19, 12, 5)]
+    ahead = [today + timedelta(days=d) for d in (2, 9, 16)]
+    rows = list(zip(past, [None, "present", "present", "absent", "permitted", "present"])) + [(d, None) for d in ahead]
+    pie = '<input id="pieInput" type="" style="visibility: hidden;" value="pie01,3,1,1,4,9">'
+    portal.journal = JOURNAL_PICKER
+    portal.course_journals[("INF 101", "2026", "1", "200000001")] = journal_section("pie01", rows, 9) + pie
+    tok = sign_in(portal)["access_token"]
+    rows_out = client.get("/api/sdu/attendance?year=2026&term=1", headers=auth(tok)).json()["attendance"]
+    inf = next(r for r in rows_out if r["course_code"] == "INF 101")
+    # 9 scheduled hours: 3 attended, 1 absent, 1 excused, an unmarked past hour, 3 still ahead
+    assert (inf["hours"], inf["present"], inf["absent"], inf["permitted"], inf["remaining"]) == (9, 3, 1, 1, 3)
+    law = next(r for r in rows_out if r["course_code"] == "MDE 200")       # its journal answers CODE -1
+    assert law["hours"] is None and law["absence_percent"] == 0.0
+    assert any(action == "viewCourse" for _m, _p, _mod, action in portal.requests)
+
+
+def test_course_journal_counts_without_the_chart_input():
+    from datetime import date
+    today = date(2026, 11, 9)
+    rows = [(date(2026, 9, 3), None), (date(2026, 9, 10), "present"), (date(2026, 10, 8), "absent"),
+            (date(2026, 11, 12), None), (date(2026, 11, 19), None)]
+    counts = sdu_portal.parse_course_journal(journal_section("pie01", rows, 5), today=today)
+    assert counts == {"present": 1, "absent": 1, "permitted": 0, "unmarked": 3, "hours": 5, "remaining": 2}
+    assert sdu_portal.parse_course_journal("<p>No sections</p>") is None
+
+
+def test_journal_hours_make_attendance_goals_exact():
+    from app import goals
+    # SDU: 1 absent hour of 45 is the 2% on the attendance page; 15 hours are still ahead
+    row = {"lesson": "Mobile", "hours": 45, "present": 20, "absent": 1, "permitted": 0, "remaining": 15, "absence_percent": 2.0}
+    assert goals.evaluate_attendance_course(row, 98)["maximum"] == 97.7
+    out = goals.evaluate_attendance_course(row, 95)
+    assert out["remaining"] == 15 and out["affordable"] == 1 and out["must_attend"] == 14
