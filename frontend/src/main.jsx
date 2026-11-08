@@ -6,6 +6,7 @@ import {
 } from 'recharts'
 import './styles.css'
 import { calcGPA, calcCompletedCredits, ectsOf } from './gpa.js'
+import { STATUS_LABEL, STATUS_TONE, checkTarget, progressPct, reachLine, serverFieldErrors } from './goals.js'
 import { UNKNOWN_DAY, classLocation, classTimes, findNextClass, getDayOrder, mergeBlocks, normalizeSchedule, sortSchedule } from './schedule.js'
 
 /* ─── API helper ──────────────────────────────────────────────────── */
@@ -89,7 +90,10 @@ const api = async (path, token, options = {}) => {
         ? body.detail.map(d => d.msg || JSON.stringify(d)).join('; ')
         : (body.detail.message || JSON.stringify(body.detail))
     }
-    throw new Error(msg)
+    const error = new Error(msg)
+    error.status = res.status
+    error.body = body      // e.g. field errors from a rejected goal save
+    throw error
   }
   return body
 }
@@ -445,6 +449,7 @@ function notifTarget(type) {
   if (type === 'teacher_intervention') return { tab: 'insights', label: 'Open study plan' }
   if (type === 'support_reply') return { tab: 'support', label: 'Open conversation' }
   if (type === 'missed_deadline') return { tab: 'dashboard', label: 'View deadlines' }
+  if (type === 'goal') return { tab: 'goals', label: 'Open goals' }
   return null
 }
 
@@ -459,6 +464,7 @@ function notifMeta(type) {
     case 'teacher_intervention': return { icon: <Icons.Mail size={16} />, tone: 'accent' }
     case 'support_reply':  return { icon: <Icons.Mail size={16} />, tone: 'accent' }
     case 'missed_deadline': return { icon: <Icons.Clock size={16} />, tone: 'danger' }
+    case 'goal':           return { icon: <Icons.Award size={16} />, tone: 'accent' }
     default:               return { icon: <Icons.Bell size={16} />, tone: 'accent' }
   }
 }
@@ -3075,31 +3081,38 @@ function InsightsTab({ token, sduStatus, onConnect }) {
 }
 
 /* ─── GOALS (US-18, US-19) ──────────────────────────────────────── */
+// The backend decides what is possible (it re-checks on save); goals.js gives the same answer while typing
 const GPA_GOAL_RANGE = { min: 1, max: 4, step: 0.01 }
-const ATTENDANCE_GOAL_RANGE = { min: 50, max: 100, step: 1 }
-const ON_TRACK_CAUTION = 90
-
-function onTrackTone(pct) {
-  if (pct == null) return 'accent'
-  return pct >= 100 ? 'success' : pct >= ON_TRACK_CAUTION ? 'warning' : 'danger'
-}
+const ATTENDANCE_GOAL_RANGE = { min: 50, max: 100, step: 0.1 }
+const GPA_BASIS_OPTIONS = [{ id: 'semester', label: 'Semester GPA' }, { id: 'cumulative', label: 'Cumulative GPA' }]
 
 function numberOrNull(value) {
   return value === '' || value == null ? null : Number(value)
 }
 
-function GoalMetric({ label, current, target, pct, note }) {
+function fmtNum(value, decimals = 1) {
+  if (value == null) return '—'
+  return Number(value).toFixed(decimals).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1')
+}
+
+function GoalStatus({ status }) {
+  if (!status) return null
+  return <Status tone={STATUS_TONE[status] || 'neutral'}>{STATUS_LABEL[status] || status}</Status>
+}
+
+function GoalMetric({ label, current, target, status, sub }) {
+  const pct = progressPct(current?.value, target?.value)
   return (
     <Metric
       label={label}
-      value={current ?? '—'}
-      unit={target != null ? `/ ${target}` : undefined}
-      foot={target != null && pct != null ? (
+      value={current?.text ?? '—'}
+      unit={target ? `/ ${target.text}` : undefined}
+      foot={target ? (
         <>
-          <ProgressBar pct={pct} tone={onTrackTone(pct)} />
-          <span className="muted metric-note">{pct}% on track{note ? ` · ${note}` : ''}</span>
+          {pct != null && <ProgressBar pct={pct} tone={STATUS_TONE[status] === 'neutral' ? 'accent' : (STATUS_TONE[status] || 'accent')} />}
+          <span className="metric-note goal-metric-note"><GoalStatus status={status} />{sub && <span className="muted"> · {sub}</span>}</span>
         </>
-      ) : <span className="muted">{target != null ? 'No data yet' : 'No target set'}</span>}
+      ) : <span className="muted">{sub || 'No target set'}</span>}
     />
   )
 }
@@ -3107,29 +3120,131 @@ function GoalMetric({ label, current, target, pct, note }) {
 function goalForm(goal) {
   return {
     gpa: goal?.target_gpa ?? '',
+    basis: goal?.gpa_basis || 'semester',
     attendance: goal?.target_attendance ?? '',
     courses: Object.fromEntries(Object.entries(goal?.course_targets || {}).map(([k, v]) => [k, String(v)])),
   }
 }
 
-function GoalCourseRow({ course, value, onChange }) {
+// What the records allow for one target: maximum under the input, inline error, suggested target
+function TargetFeedback({ id, check, reach, serverError, unit = '%', decimals = 1, onApply }) {
+  const impossible = serverError || check.state === 'impossible'
+  const suggested = serverError?.suggested ?? check.suggested
   return (
-    <li className="course-row goal-row">
-      <div className="course-main">
-        <b>{course.course}</b>
-        <span>
-          {course.score != null ? `Now ${formatScore(course.score)}` : 'Not graded yet'}
-          {course.on_track === true && <span className="tone-success"> · on target</span>}
-          {course.on_track === false && <span className="tone-danger"> · {course.gap}% below target</span>}
+    <div className="goal-feedback" id={id} aria-live="polite">
+      {impossible ? (
+        <span className="goal-error">
+          {serverError?.message || 'Not achievable: this is above the maximum you can still reach.'}
+          {suggested != null && (
+            <button type="button" className="link-btn" onClick={() => onApply(suggested)}>
+              Use {fmtNum(suggested, decimals)}{unit}
+            </button>
+          )}
         </span>
+      ) : check.state === 'invalid' ? (
+        <span className="goal-error">Enter a number in the allowed range.</span>
+      ) : check.state === 'unverified' ? (
+        <span className="muted">{reach.known && reach.bound_only ? 'Within the theoretical maximum; ' : ''}Unable to verify goal feasibility yet.</span>
+      ) : null}
+      <span className="muted">{reachLine(reach, unit, decimals)}</span>
+    </div>
+  )
+}
+
+function CourseMath({ ev }) {
+  if (!ev?.known) return <p className="muted">{ev?.reason || 'No assessment breakdown is available for this course yet.'}</p>
+  return (
+    <div className="goal-math">
+      <p>
+        Completed work: <b>{fmtNum(ev.earned)} pts</b> from {ev.completion}% of the grade
+        {ev.current_form != null && <> (average {fmtNum(ev.current_form)}%)</>}.
+        {' '}Maximum = completed points + full marks on everything left = <b>{fmtNum(ev.maximum)}%</b>.
+      </p>
+      {ev.remaining?.length > 0 && (
+        <ul className="goal-math-list">
+          {ev.remaining.map(r => (
+            <li key={r.name}>
+              <span>{r.name} · {fmtNum(r.weight)}% of grade</span>
+              <b>{r.min_score != null ? (ev.remaining.length > 1 ? `≥ ${fmtNum(r.min_score)} if 100 on the rest` : `≥ ${fmtNum(r.min_score)}/100`) : 'not graded'}</b>
+            </li>
+          ))}
+        </ul>
+      )}
+      {ev.message && ev.status !== 'unachievable' && <p>{ev.message}</p>}
+      {ev.pace && <p className="muted">{ev.pace}</p>}
+      <p className="muted">Source: {ev.source === 'sdu' ? 'SDU grades page' : 'your recorded assessments'}. Ungraded work is never counted as 0.</p>
+    </div>
+  )
+}
+
+function GoalCourseRow({ course, value, onChange, serverError }) {
+  const ev = course.evaluation || {}
+  const reach = ev.known ? { known: true, max_exact: ev.max_exact, maximum: ev.maximum, final: ev.final } : { known: false, missing: ['assessment weights and grades'] }
+  const check = checkTarget(value, reach)
+  const invalid = Boolean(serverError) || check.state === 'impossible' || check.state === 'invalid'
+  const feedbackId = `goal-course-${course.code}`
+  return (
+    <li className="goal-course">
+      <div className="course-row goal-row">
+        <div className="course-main">
+          <b>{course.course}</b>
+          <span>
+            {course.score != null ? `Now ${formatScore(course.score)}` : ev.known ? `${ev.completion}% graded` : 'Not graded yet'}
+            {course.target != null && ev.status && <> · <GoalStatus status={ev.status} /></>}
+          </span>
+        </div>
+        <label className="goal-course-input">
+          <span className="sr-only">Target for {course.course}, %</span>
+          <input className={`input${invalid ? ' input-invalid' : ''}`} type="number" inputMode="decimal" min={0} max={100} step={0.1}
+            placeholder={course.placeholder != null ? String(course.placeholder) : 'Target %'}
+            aria-invalid={invalid} aria-describedby={feedbackId}
+            value={value ?? ''} onChange={e => onChange(course.code, e.target.value)} />
+        </label>
       </div>
-      <label className="goal-course-input">
-        <span className="sr-only">Target for {course.course}, %</span>
-        <input className="input" type="number" inputMode="numeric" min={0} max={100} step={1}
-          placeholder={course.target_source === 'gpa' ? String(course.target) : 'Target %'}
-          value={value ?? ''} onChange={e => onChange(course.code, e.target.value)} />
-      </label>
+      <div className="goal-course-foot">
+        <TargetFeedback id={feedbackId} check={check} reach={reach} serverError={serverError} onApply={v => onChange(course.code, String(v))} />
+        {course.target != null && ev.status && ev.status !== 'achieved' && ev.status !== 'unachievable' && ev.message && (
+          <p className="goal-required">{ev.message}</p>
+        )}
+        <details className="goal-details">
+          <summary>How this is calculated</summary>
+          <CourseMath ev={ev} />
+        </details>
+      </div>
     </li>
+  )
+}
+
+function AttendanceRecovery({ attendance }) {
+  const rows = (attendance.courses || []).filter(c => c.known)
+  if (!rows.length) return null
+  return (
+    <details className="goal-details">
+      <summary>Attendance recovery by course</summary>
+      <ul className="goal-math-list goal-recovery">
+        {rows.map(c => (
+          <li key={c.code || c.course}>
+            <span>
+              <b>{c.course}</b>
+              <small className="muted">
+                {fmtNum(c.current)}% now · max {fmtNum(c.maximum)}% · {c.remaining} of {c.hours} class hours left
+                {c.limit_buffer >= 0 && c.remaining > 0 ? ` · ${c.limit_buffer} more absences before the SDU limit` : ''}
+              </small>
+            </span>
+            <span className="goal-recovery-side">
+              {c.target != null && <GoalStatus status={c.status} />}
+              {c.target != null && c.status !== 'unachievable' && c.remaining > 0 && (
+                <small className="muted">attend ≥ {c.must_attend} · can miss {c.affordable}</small>
+              )}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="muted goal-footnote">
+        SDU counts absence against every scheduled hour, and excused hours are not absences, so attending all remaining classes keeps
+        attendance where it is: that is the maximum. "Can miss" is how many more hours keep the course at your target.
+      </p>
+    </details>
   )
 }
 
@@ -3137,6 +3252,8 @@ function GoalsTab({ token }) {
   const [data, setData] = useState(null)
   const [form, setForm] = useState(() => goalForm(null))
   const [err, setErr] = useState('')
+  const [notice, setNotice] = useState('')
+  const [serverErrors, setServerErrors] = useState(() => serverFieldErrors(null))
   const [busy, setBusy] = useState(false)
   const [saved, setSaved] = useState(false)
 
@@ -3149,13 +3266,39 @@ function GoalsTab({ token }) {
   if (err && !data) return <div className="page page-narrow"><div className="alert-box alert-danger">{err}</div></div>
   if (!data) return <PageLoader label="Loading your goals…" />
 
-  const { gpa, attendance, courses, courses_on_track: onTarget, courses_tracked: tracked } = data.progress
-  const setField = (key, value) => { setSaved(false); setForm(prev => ({ ...prev, [key]: value })) }
-  const setCourse = (code, value) => { setSaved(false); setForm(prev => ({ ...prev, courses: { ...prev.courses, [code]: value } })) }
+  const tracking = data.tracking || {}
+  const progressRows = Object.fromEntries((data.progress?.courses || []).map(r => [r.code, r]))
+  const courses = (tracking.courses || []).map(c => ({
+    ...c, placeholder: progressRows[c.code]?.target_source === 'gpa' ? progressRows[c.code].target : null,
+  }))
+  const gpa = tracking.gpa || {}
+  const attendance = tracking.attendance || {}
+  const gpaReach = tracking.gpa_options?.[form.basis]
+  const gpaCheck = checkTarget(form.gpa, gpaReach, { min: GPA_GOAL_RANGE.min, max: GPA_GOAL_RANGE.max })
+  const attReach = { known: attendance.known, max_exact: attendance.max_exact, maximum: attendance.maximum, missing: attendance.missing }
+  const attCheck = checkTarget(form.attendance, attReach, { min: ATTENDANCE_GOAL_RANGE.min, max: ATTENDANCE_GOAL_RANGE.max })
+  const savedBasis = data.goal?.gpa_basis || 'semester'
+
+  const touched = () => { setSaved(false); setNotice('') }
+  const setField = (key, value) => {
+    touched()
+    setForm(prev => ({ ...prev, [key]: value }))
+    if (key === 'gpa' || key === 'basis') setServerErrors(prev => ({ ...prev, gpa: null }))
+    if (key === 'attendance') setServerErrors(prev => ({ ...prev, attendance: null }))
+  }
+  const setCourse = (code, value) => {
+    touched()
+    setForm(prev => ({ ...prev, courses: { ...prev.courses, [code]: value } }))
+    setServerErrors(prev => ({ ...prev, courses: Object.fromEntries(Object.entries(prev.courses).filter(([k]) => k !== code)) }))
+  }
+
+  const tracked = courses.filter(c => c.target != null && c.evaluation?.status)
+  const onTarget = tracked.filter(c => ['achieved', 'ahead', 'on_track'].includes(c.evaluation.status)).length
+  const blocking = gpaCheck.state === 'impossible' || attCheck.state === 'impossible' || gpaCheck.state === 'invalid' || attCheck.state === 'invalid'
 
   const save = async e => {
     e.preventDefault()
-    setBusy(true); setErr('')
+    setBusy(true); setErr(''); setNotice('')
     // Only this term's courses: a target kept for a course that has since left the list would be rejected
     const currentCodes = new Set(courses.map(c => c.code))
     const courseTargets = Object.fromEntries(
@@ -3164,67 +3307,126 @@ function GoalsTab({ token }) {
     try {
       const d = await api('/api/student/goals?semester=spring-2026', token, {
         method: 'PUT',
-        body: JSON.stringify({ target_gpa: numberOrNull(form.gpa), target_attendance: numberOrNull(form.attendance), course_targets: courseTargets }),
+        body: JSON.stringify({
+          target_gpa: numberOrNull(form.gpa), target_attendance: numberOrNull(form.attendance),
+          course_targets: courseTargets, gpa_basis: form.basis,
+        }),
       })
-      setData(d); setForm(goalForm(d.goal)); setSaved(true)
+      setData(d); setForm(goalForm(d.goal)); setServerErrors(serverFieldErrors(null)); setSaved(true)
     } catch (e2) {
-      setErr(e2.message)
+      const detail = e2.body?.detail
+      if (e2.status === 422 && detail?.errors) {
+        // Valid targets were saved; rejected ones stay in the form, marked, so they can be fixed
+        if (detail.goals) setData(detail.goals)
+        setServerErrors(serverFieldErrors(detail))
+        setNotice(detail.message)
+      } else {
+        setErr(e2.message)
+      }
     } finally {
       setBusy(false)
     }
   }
 
+  const gpaLabel = savedBasis === 'cumulative' ? 'Cumulative GPA' : 'Semester GPA'
+  const attSub = attendance.target != null && attendance.known ? `max ${fmtNum(attendance.maximum)}%` : attendance.known === false && attendance.target != null ? "can't verify yet" : null
+
   return (
     <div className="page page-fade">
       <section className="metric-grid">
-        {/* Until this term is graded, progress is measured by the cumulative GPA, as on the Overview page */}
-        <GoalMetric label={gpa.basis === 'cumulative' ? 'GPA · cumulative' : 'Term GPA'} current={gpa.current?.toFixed(2)}
-          target={gpa.target?.toFixed(2)} pct={gpa.on_track_pct} note={gpa.basis === 'cumulative' ? 'term not graded yet' : null} />
-        <GoalMetric label="Attendance" current={attendance.current != null ? `${attendance.current}%` : null}
-          target={attendance.target != null ? `${attendance.target}%` : null} pct={attendance.on_track_pct} />
+        <GoalMetric label={gpaLabel}
+          current={gpa.current != null ? { value: gpa.current, text: Number(gpa.current).toFixed(2) } : null}
+          target={gpa.target != null ? { value: gpa.target, text: Number(gpa.target).toFixed(2) } : null}
+          status={gpa.status}
+          sub={gpa.target != null && gpa.known ? `max ${Number(gpa.maximum).toFixed(2)}` : gpa.current == null ? 'no final grades yet' : null} />
+        <GoalMetric label="Attendance"
+          current={attendance.current != null ? { value: attendance.current, text: `${fmtNum(attendance.current)}%` }
+            : attendance.official != null ? { value: attendance.official, text: `${fmtNum(attendance.official)}%` } : null}
+          target={attendance.target != null ? { value: attendance.target, text: `${fmtNum(attendance.target)}%` } : null}
+          status={attendance.status} sub={attSub} />
         <Metric
           label="Courses on target"
-          value={tracked ? onTarget : '—'}
-          unit={tracked ? `/ ${tracked}` : undefined}
-          foot={<span className="muted">{tracked ? 'Current score at or above target'
-            : courses.length && (gpa.target != null || Object.keys(data.goal?.course_targets || {}).length) ? 'No grades this term yet'
-            : 'Set a GPA or course target'}</span>}
+          value={tracked.length ? onTarget : '—'}
+          unit={tracked.length ? `/ ${tracked.length}` : undefined}
+          foot={<span className="muted">{tracked.length ? 'Achieved, ahead or on track' : courses.length ? 'Set a course target below' : 'No courses this term yet'}</span>}
         />
       </section>
 
-      <form className="card" onSubmit={save}>
+      {(tracking.alerts?.length > 0 || tracking.recommendations?.length > 0) && (
+        <section className="card goal-next">
+          <header className="card-head"><h2>What needs attention</h2></header>
+          {tracking.alerts?.length > 0 && (
+            <ul className="goal-alerts">
+              {tracking.alerts.map(a => (
+                <li key={a.key} className={`alert-box alert-${a.tone === 'success' ? 'success' : a.tone === 'danger' ? 'danger' : 'warning'}`}>
+                  {a.tone === 'success' ? <Icons.CheckCircle size={16} /> : <Icons.AlertTriangle size={16} />}
+                  <span><b>{a.title}.</b> {a.detail}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {tracking.recommendations?.length > 0 && (
+            <ul className="goal-recs">
+              {tracking.recommendations.map(r => <li key={r}>{r}</li>)}
+            </ul>
+          )}
+        </section>
+      )}
+
+      <form className="card" onSubmit={save} noValidate>
         <header className="card-head">
           <h2>Targets for this term</h2>
           {saved && <Status tone="success">Saved</Status>}
         </header>
         <div className="goal-fields">
-          <label>
-            Target GPA
-            <input className="input" type="number" inputMode="decimal" placeholder="e.g. 3.80" value={form.gpa}
+          <div className="goal-field">
+            <label htmlFor="goal-gpa">Target GPA</label>
+            <Segmented options={GPA_BASIS_OPTIONS} value={form.basis} onChange={v => setField('basis', v)} label="GPA type" />
+            <input id="goal-gpa" className={`input${serverErrors.gpa || gpaCheck.state === 'impossible' || gpaCheck.state === 'invalid' ? ' input-invalid' : ''}`}
+              type="number" inputMode="decimal" placeholder="e.g. 3.50" value={form.gpa}
               min={GPA_GOAL_RANGE.min} max={GPA_GOAL_RANGE.max} step={GPA_GOAL_RANGE.step}
+              aria-invalid={Boolean(serverErrors.gpa) || gpaCheck.state === 'impossible'} aria-describedby="goal-gpa-feedback"
               onChange={e => setField('gpa', e.target.value)} />
-          </label>
-          <label>
-            Target attendance, %
-            <input className="input" type="number" inputMode="numeric" placeholder="e.g. 90" value={form.attendance}
+            <TargetFeedback id="goal-gpa-feedback" check={gpaCheck} reach={gpaReach} serverError={serverErrors.gpa}
+              unit="" decimals={2} onApply={v => setField('gpa', Number(v).toFixed(2))} />
+            {gpa.target != null && form.basis === savedBasis && gpa.required_score > 0 && gpa.status !== 'unachievable' && gpa.status !== 'achieved' && (
+              <p className="goal-required">Scoring {fmtNum(gpa.required_score)}%+ ({gpa.required_letter}) in every open course reaches {Number(gpa.target).toFixed(2)}.</p>
+            )}
+            {form.basis === savedBasis && (gpa.pace || (gpa.status === 'insufficient_data' && gpa.message)) && (
+              <p className="muted goal-hint">{gpa.status === 'insufficient_data' ? gpa.message : gpa.pace}</p>
+            )}
+          </div>
+          <div className="goal-field">
+            <label htmlFor="goal-attendance">Target attendance, %</label>
+            <input id="goal-attendance" className={`input${serverErrors.attendance || attCheck.state === 'impossible' || attCheck.state === 'invalid' ? ' input-invalid' : ''}`}
+              type="number" inputMode="decimal" placeholder="e.g. 90" value={form.attendance}
               min={ATTENDANCE_GOAL_RANGE.min} max={ATTENDANCE_GOAL_RANGE.max} step={ATTENDANCE_GOAL_RANGE.step}
+              aria-invalid={Boolean(serverErrors.attendance) || attCheck.state === 'impossible'} aria-describedby="goal-attendance-feedback"
               onChange={e => setField('attendance', e.target.value)} />
-          </label>
+            <TargetFeedback id="goal-attendance-feedback" check={attCheck} reach={attReach} serverError={serverErrors.attendance}
+              onApply={v => setField('attendance', String(v))} />
+            {attendance.target != null && attendance.status && attendance.status !== 'unachievable' && attendance.message && attendance.known && (
+              <p className="goal-required">{attendance.message}</p>
+            )}
+            <AttendanceRecovery attendance={attendance} />
+          </div>
         </div>
-        {gpa.required_score != null && (
-          <p className="muted goal-hint">Scoring {gpa.required_score}%+ in every course guarantees a {gpa.target.toFixed(2)} GPA. Courses with their own target use that instead.</p>
-        )}
 
         {courses.length ? (
           <ul className="course-list goal-courses">
-            {courses.map(c => <GoalCourseRow key={c.code} course={c} value={form.courses[c.code]} onChange={setCourse} />)}
+            {courses.map(c => (
+              <GoalCourseRow key={c.code} course={c} value={form.courses[c.code]} onChange={setCourse}
+                serverError={serverErrors.courses[c.code]} />
+            ))}
           </ul>
         ) : (
-          <EmptyState icon={<Icons.Book size={20} />} title="No grades this term yet" text="Course targets appear once grades are published." />
+          <EmptyState icon={<Icons.Book size={20} />} title="No courses this term yet" text="Course targets appear once your courses are synced." />
         )}
 
+        {notice && <div className="alert-box alert-warning goal-notice"><Icons.AlertTriangle size={16} /><span>{notice}</span></div>}
         {err && <div className="alert-box alert-danger">{err}</div>}
         <div className="goal-actions">
+          {blocking && <span className="muted goal-blocking">Fix the marked target to save it.</span>}
           <button type="submit" className="btn-primary" disabled={busy}>{busy ? 'Saving…' : 'Save goals'}</button>
         </div>
       </form>

@@ -79,22 +79,22 @@ _SCHEDULE_ROWS = [
     ("INF 395", "Enterprise Architecture", "Thursday", "08:30:00", "10:20:00", "Block F", "F301", "Dr. Yerlan Kassymov", "Lecture", False),
 ]
 
-# (lesson, absence_percent)
+# (lesson, scheduled hours, present, absent, excused) as in the SDU journal; absence % = absent / scheduled
 _ATTENDANCE_ROWS = [
-    ("Project Management", 4.0),
-    ("Information Security", 9.5),
-    ("Data Analytics", 21.0),
-    ("Mobile Application Development", 12.0),
-    ("Enterprise Architecture", 6.5),
+    ("Project Management", 45, 26, 2, 0),
+    ("Information Security", 45, 24, 4, 1),
+    ("Data Analytics", 45, 19, 9, 1),
+    ("Mobile Application Development", 60, 33, 7, 1),
+    ("Enterprise Architecture", 45, 26, 3, 0),
 ]
 
-# (lesson, ects, current percent)
+# (lesson, ects, current percent, assessment breakdown as on the SDU grades page: (name, weight /100, score or None))
 _CURRENT_GRADES = [
-    ("Project Management", 6, 88.0),
-    ("Information Security", 6, 81.5),
-    ("Data Analytics", 5, 73.0),
-    ("Mobile Application Development", 6, 92.0),
-    ("Enterprise Architecture", 5, 85.0),
+    ("Project Management", 6, 88.0, [("Quizzes", 20, 90), ("MT", 30, 86.7), ("FIN", 50, None)]),
+    ("Information Security", 6, 81.5, [("Labs", 30, 83), ("MT", 30, 80), ("FIN", 40, None)]),
+    ("Data Analytics", 5, 73.0, [("Assignments", 20, 70), ("MT", 30, 75), ("Project", 20, None), ("FIN", 30, None)]),
+    ("Mobile Application Development", 6, 92.0, [("Labs", 40, 92), ("MT", 20, 92), ("FIN", 40, None)]),
+    ("Enterprise Architecture", 5, 85.0, [("Case studies", 20, 85), ("MT", 30, 85), ("FIN", 50, None)]),
 ]
 
 _YEAR, _TERM = 2026, 1
@@ -153,8 +153,9 @@ def transcript(semester: int | None = None, passed: bool | None = None) -> dict:
 def attendance(terms_back: int = 0) -> dict:
     if terms_back <= 0:
         items = [
-            {"lesson": lesson, "year": _YEAR, "term": _TERM, "absence_percent": absence, "updated_at": _now()}
-            for lesson, absence in _ATTENDANCE_ROWS
+            {"lesson": lesson, "year": _YEAR, "term": _TERM, "hours": hours, "present": present, "absent": absent,
+             "permitted": excused, "absence_percent": round(absent / hours * 100, 1), "updated_at": _now()}
+            for lesson, hours, present, absent, excused in _ATTENDANCE_ROWS
         ]
     else:
         # A past term: that transcript semester's courses with stable, made-up absence
@@ -170,11 +171,12 @@ def attendance(terms_back: int = 0) -> dict:
 
 def grades() -> dict:
     items = []
-    for lesson, ects, pct in _CURRENT_GRADES:
+    for lesson, ects, pct, parts in _CURRENT_GRADES:
         letter, _gp = _letter(pct)
         items.append({
             "lesson": lesson, "year": _YEAR, "term": _TERM, "grade": pct,
             "letter_grade": letter, "credits": ects, "ects": ects, "updated_at": _now(),
+            "components": [{"name": name, "weight": weight, "score": score} for name, weight, score in parts],
         })
     return {"source": DEMO_SOURCE, "fetched_at": _now(), "grades": items}
 
