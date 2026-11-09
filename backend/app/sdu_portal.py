@@ -10,8 +10,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+import json
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
@@ -224,6 +225,76 @@ def parse_attendance(html: str, year: int, term: int) -> list[dict]:
     return items
 
 
+# ─── Electronic attendance journal (mod=ejurnal, action=viewCourse) ──
+# The journal page itself only holds the term picker; each course's sessions come from an AJAX call
+# answering {"CODE": 1, "DATA": "<html>"}: a table per section (one row per class hour, with its
+# date and an icon) and a hidden "pieInput" with per-section counts
+# "<chart id>,<attended>,<absent>,<permitted>,<not submitted>,<total hours>:...".
+JOURNAL_DATE = re.compile(r"^(\d{2})\.(\d{2})\.(\d{4})$")
+ALMATY = timezone(timedelta(hours=5))
+
+
+def _session_status(cell) -> Optional[str]:
+    img = cell.find("img") if cell is not None else None
+    if img is None:
+        return None                          # nothing submitted for this hour (yet)
+    src = (img.get("src") or "").lower()
+    if "check" in src:
+        return "present"
+    if "cross" in src:
+        return "absent"
+    return "permitted"                       # any other mark: excused / permitted
+
+
+def parse_course_journal(html: str, today: Optional[date] = None) -> Optional[dict]:
+    """Class hours of one course from its journal: totals, marks and the hours still ahead."""
+    soup = _soup(html)
+    today = today or datetime.now(ALMATY).date()
+    sessions = []
+    for row in soup.find_all("tr"):          # every row once, whatever the tables are nested in
+        cells = row.find_all("td", recursive=False)
+        if len(cells) < 5:
+            continue
+        match = JOURNAL_DATE.match(_text(cells[1]))
+        if not match:
+            continue
+        day = date(int(match.group(3)), int(match.group(2)), int(match.group(1)))
+        sessions.append({"date": day.isoformat(), "status": _session_status(cells[-1])})
+    counts = None
+    pie = soup.find("input", id="pieInput")
+    if pie is not None and pie.get("value"):
+        totals = [0, 0, 0, 0, 0]
+        for part in pie["value"].split(":"):
+            fields = part.split(",")
+            if len(fields) >= 6 and all(f.strip().lstrip("-").isdigit() for f in fields[1:6]):
+                for i in range(5):
+                    totals[i] += int(fields[i + 1])
+        if totals[4] > 0:
+            counts = dict(zip(("present", "absent", "permitted", "unmarked", "hours"), totals))
+    if counts is None:
+        if not sessions:
+            return None
+        counts = {"present": sum(s["status"] == "present" for s in sessions),
+                  "absent": sum(s["status"] == "absent" for s in sessions),
+                  "permitted": sum(s["status"] == "permitted" for s in sessions),
+                  "unmarked": sum(s["status"] is None for s in sessions), "hours": len(sessions)}
+    # Hours still ahead: unmarked sessions from today on. Past hours with no mark are not "remaining"
+    # (the class happened, the teacher has not submitted it) and are not absences either, as on SDU.
+    counts["remaining"] = sum(1 for s in sessions if s["status"] is None and s["date"] >= today.isoformat()) \
+        if sessions else None
+    return counts
+
+
+def _journal_data(text: str) -> Optional[str]:
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        return text if "<table" in text else None
+    if str(payload.get("CODE")) != "1":
+        return None
+    return payload.get("DATA") or None
+
+
 def _assessments(detail_row) -> list[dict]:
     parts = []
     if detail_row is None:
@@ -342,11 +413,13 @@ async def fetch(endpoint: str, access_token: str, params: Optional[dict] = None)
                 year, term = current or wanted or (0, 0)
                 items = parse_attendance(resp.text, year, term)
                 if not items and current:
-                    # The live journal page can come back without course rows; the grades list has absence per course too
+                    # The journal page holds only the term picker: each course's class hours come from its own
+                    # viewCourse call. The grades list names the courses and gives SDU's absence percentage.
                     status, grades = await _grades(client, current)
                     if status != 200:
                         return status, grades
-                    items = attendance_from_grades(grades["grades"])
+                    student = _soup(resp.text).find("input", id="stud_id")
+                    items = await _journal_attendance(client, grades["grades"], student.get("value") if student else None)
                 return 200, {"source": SOURCE, "fetched_at": _now(), "attendance": items}
             if endpoint == "grades":
                 wanted = _term(params)
@@ -396,6 +469,33 @@ async def _grades(client: httpx.AsyncClient, wanted: tuple[int, int]) -> tuple[i
     if str(payload.get("CODE")) != "1":
         return 502, {"detail": "upstream_error", "message": str(payload.get("DATA") or "The portal refused the grades request.")}
     return 200, {"source": SOURCE, "fetched_at": _now(), "grades": parse_grades(payload.get("DATA") or "", year, term)}
+
+
+async def _journal_attendance(client: httpx.AsyncClient, grades: list[dict], student_id: Optional[str]) -> list[dict]:
+    """Attendance per course from the journal; a course whose journal can't be read keeps only its percentage."""
+    items = attendance_from_grades(grades)
+    if not student_id:
+        return items
+    for item in items:
+        code = item.get("course_code")
+        if not code:
+            continue
+        params = {"ajx": "1", "mod": "ejurnal", "action": "viewCourse", "stud_id": student_id,
+                  "derskod": code, "year": str(item["year"]), "term": str(item["term"])}
+        try:
+            # Sent like the portal's own page does (query string) and in the form body, which other AJAX calls need
+            resp = await client.post("/index.php", params=params, data=params)
+        except httpx.HTTPError:
+            continue
+        if _is_login_page(resp):
+            continue
+        data = _journal_data(resp.text)
+        counts = parse_course_journal(data) if data else None
+        if counts:
+            item.update({k: counts[k] for k in ("hours", "present", "absent", "permitted", "remaining")})
+            if item.get("absence_percent") is None and counts["hours"]:
+                item["absence_percent"] = round(counts["absent"] / counts["hours"] * 100, 1)
+    return items
 
 
 def attendance_from_grades(grades: list[dict]) -> list[dict]:
