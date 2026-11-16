@@ -810,6 +810,14 @@ function SduPortalForm({ token, onDone, onCancel, allowTeacher = !token }) {
     } finally { setBusy(false) }
   }
 
+  const signInDemoTeacher = async () => {
+    if (!isTeacher || busy) return
+    setBusy(true); setError('')
+    try {
+      onDone(await api('/api/sdu/pms/demo', null, { method: 'POST' }))
+    } catch (err) { setError(err.message) } finally { setBusy(false) }
+  }
+
   return step === 'password' ? (
     <form onSubmit={submitPassword} className="login-form">
       {allowTeacher && (
@@ -848,6 +856,12 @@ function SduPortalForm({ token, onDone, onCancel, allowTeacher = !token }) {
       <button className="btn-submit-primary" disabled={busy}>
         {busy ? (isTeacher ? 'Signing in to PMS…' : 'Signing in to SDU…') : (isTeacher ? 'Sign in as Teacher →' : 'Sign in with SDU →')}
       </button>
+      {isTeacher && (
+        <button type="button" className="btn-ghost" style={{ width: '100%', justifyContent: 'center' }}
+                disabled={busy} onClick={signInDemoTeacher}>
+          Try Demo Teacher (mock roster)
+        </button>
+      )}
       {onCancel && <button type="button" className="login-back" onClick={onCancel}>Cancel</button>}
     </form>
   ) : (

@@ -128,9 +128,10 @@ def sign_in_teacher(pms_fake, username: str = "aliya.zhunis") -> dict:
 
 def test_pms_login_config_and_disable_flag(monkeypatch):
     monkeypatch.delenv("ENABLE_PMS_LOGIN", raising=False)
-    assert client.get("/api/sdu/pms/config").json() == {"enabled": True}
+    monkeypatch.delenv("ENABLE_MOCK_TEACHER", raising=False)
+    assert client.get("/api/sdu/pms/config").json() == {"enabled": True, "mock_enabled": True}
     monkeypatch.setenv("ENABLE_PMS_LOGIN", "0")
-    assert client.get("/api/sdu/pms/config").json() == {"enabled": False}
+    assert client.get("/api/sdu/pms/config").json() == {"enabled": False, "mock_enabled": True}
     res = client.post("/api/sdu/pms/login", json={"username": "aliya.zhunis", "password": "x"})
     assert res.status_code == 404
 
@@ -213,3 +214,37 @@ def test_pms_sync_refreshes_expired_access_token_and_disconnect_skips_oauth(pms,
     monkeypatch.setattr(sdu_client, "revoke_token", no_revoke)
     assert client.post("/api/sdu/disconnect", headers=auth(tok)).status_code == 200
     assert revoked == []
+
+
+def test_mock_teacher_demo_login_populates_roster_analytics_and_student_detail(monkeypatch):
+    monkeypatch.setenv("ENABLE_MOCK_TEACHER", "1")
+    res = client.post("/api/sdu/pms/demo")
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["demo_mode"] is True and data["user"]["role"] == "teacher"
+    tok = data["access_token"]
+
+    # Logging in via /api/sdu/pms/login with demo.teacher / teacher123 works without touching auth.sdu.edu.kz
+    cred = client.post("/api/sdu/pms/login", json={"username": "demo.teacher", "password": "teacher123"})
+    assert cred.status_code == 200 and cred.json()["demo_mode"] is True
+
+    roster = client.get("/api/teacher/students", headers=auth(tok)).json()
+    assert roster["pms_connected"] is True
+    assert len(roster["items"]) == 8
+    at_risk = {s["id"]: s for s in roster["items"] if s["risk_factors"]}
+    assert "MOCK-2402" in at_risk and "MOCK-2406" in at_risk
+
+    detail = client.get("/api/teacher/students/MOCK-2402", headers=auth(tok)).json()
+    assert len(detail["courses"]) == 2
+    assert len(detail["tutoring_requests"]) >= 1
+
+    corr = client.get("/api/teacher/analytics/attendance-performance", headers=auth(tok)).json()
+    assert corr["data_status"] == "available" and len(corr["points"]) == 8 and corr["correlation"] is not None
+
+    # Sync PMS works on mock teacher too
+    sync = client.post("/api/sdu/pms/sync", headers=auth(tok))
+    assert sync.status_code == 200 and sync.json()["students_synced"] == 8
+
+    # Turning off ENABLE_MOCK_TEACHER disables demo teacher endpoint
+    monkeypatch.setenv("ENABLE_MOCK_TEACHER", "0")
+    assert client.post("/api/sdu/pms/demo").status_code == 404

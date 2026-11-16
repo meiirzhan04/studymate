@@ -17,6 +17,8 @@ PMS_API_ORIGIN = os.getenv("SDU_PMS_API_ORIGIN", "https://pms-alpha-api.sdu.edu.
 PMS_CLIENT_ID = os.getenv("SDU_PMS_CLIENT_ID", "pms")
 TOKEN_PREFIX = "pms:"
 SOURCE = "pms"
+DEMO_ACCESS_TOKEN = "pms-demo-mode"
+DEMO_SCOPE = "pms_demo"
 PENDING_TTL_SECONDS = 10 * 60
 TIMEOUT = httpx.Timeout(20.0, connect=8.0)
 
@@ -26,6 +28,62 @@ TRANSPORT: Optional[httpx.AsyncBaseTransport] = None
 
 def pms_enabled() -> bool:
     return os.getenv("ENABLE_PMS_LOGIN", "1") != "0"
+
+
+def mock_teacher_enabled() -> bool:
+    return os.getenv("ENABLE_MOCK_TEACHER", "1") != "0"
+
+
+def is_demo_connection(conn: Optional[dict]) -> bool:
+    if not conn:
+        return False
+    return conn.get("access_token") == DEMO_ACCESS_TOKEN or conn.get("scope") == DEMO_SCOPE
+
+
+def mock_teacher_roster() -> dict:
+    """Synthetic roster for trying the Teacher Portal without a live SDU faculty account."""
+    courses = [
+        {"code": "INF 451", "courseTitle": "Project Management", "section": "01"},
+        {"code": "CSS 301", "courseTitle": "Algorithms & Data Structures", "section": "02"},
+        {"code": "INF 240", "courseTitle": "Database Systems", "section": "01"},
+    ]
+    students = [
+        {"id": "MOCK-2401", "name": "Aigerim Nurlan", "cohort": "IS-2024", "attendance": 96.0, "missing_assignments": 0,
+         "grades": [{"code": "INF 451", "course": "Project Management", "credits": 5, "score": 92.0},
+                    {"code": "CSS 301", "course": "Algorithms & Data Structures", "credits": 5, "score": 89.0}]},
+        {"id": "MOCK-2402", "name": "Damir Kassym", "cohort": "IS-2024", "attendance": 64.0, "missing_assignments": 2,
+         "tutoring_request": {"course": "INF 451", "preferred_time": "Tue 15:00", "note": "Need help with project charter"},
+         "grades": [{"code": "INF 451", "course": "Project Management", "credits": 5, "score": 54.0},
+                    {"code": "CSS 301", "course": "Algorithms & Data Structures", "credits": 5, "score": 62.0}]},
+        {"id": "MOCK-2403", "name": "Madina Tulegen", "cohort": "CS-2024", "attendance": 79.0, "missing_assignments": 1,
+         "grades": [{"code": "INF 451", "course": "Project Management", "credits": 5, "score": 57.0},
+                    {"code": "INF 240", "course": "Database Systems", "credits": 5, "score": 74.0}]},
+        {"id": "MOCK-2404", "name": "Sanzhar Alim", "cohort": "IS-2024", "attendance": 67.5, "missing_assignments": 0,
+         "grades": [{"code": "INF 451", "course": "Project Management", "credits": 5, "score": 76.0},
+                    {"code": "INF 240", "course": "Database Systems", "credits": 5, "score": 71.0}]},
+        {"id": "MOCK-2405", "name": "Kamila Serik", "cohort": "CS-2024", "attendance": 91.5, "missing_assignments": 0,
+         "grades": [{"code": "CSS 301", "course": "Algorithms & Data Structures", "credits": 5, "score": 86.0},
+                    {"code": "INF 240", "course": "Database Systems", "credits": 5, "score": 84.0}]},
+        {"id": "MOCK-2406", "name": "Arman Bekzat", "cohort": "IS-2024", "attendance": 83.0, "missing_assignments": 2,
+         "grades": [{"code": "INF 451", "course": "Project Management", "credits": 5, "score": 73.0},
+                    {"code": "CSS 301", "course": "Algorithms & Data Structures", "credits": 5, "score": 75.0}]},
+        {"id": "MOCK-2407", "name": "Dana Ospan", "cohort": "CS-2024", "attendance": 98.0, "missing_assignments": 0,
+         "grades": [{"code": "INF 451", "course": "Project Management", "credits": 5, "score": 95.0},
+                    {"code": "INF 240", "course": "Database Systems", "credits": 5, "score": 94.0}]},
+        {"id": "MOCK-2408", "name": "Timur Zhanat", "cohort": "IS-2024", "attendance": 73.5, "missing_assignments": 0,
+         "grades": [{"code": "CSS 301", "course": "Algorithms & Data Structures", "credits": 5, "score": 68.0},
+                    {"code": "INF 240", "course": "Database Systems", "credits": 5, "score": 70.0}]},
+    ]
+    return {
+        "profile": {
+            "employee_id": "demo",
+            "fullname": "Dr. Aliya Zhunis (Demo)",
+            "email": "demo.teacher@sdu.edu.kz",
+            "username": "demo.teacher",
+        },
+        "courses": courses,
+        "students": students,
+    }
 
 
 def is_pms_token(access_token: Optional[str]) -> bool:

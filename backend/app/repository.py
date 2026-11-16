@@ -1311,17 +1311,28 @@ class SQLiteRepository:
                 sname = str(s.get("name") or f"Student {sid}").strip()
                 scohort = str(s.get("cohort") or "SDU Student").strip()
                 att = s.get("attendance")
+                missing = s.get("missing_assignments")
                 db.execute(
-                    "INSERT OR IGNORE INTO students (id, name, cohort, attendance, missing_assignments) VALUES (?, ?, ?, ?, 0)",
-                    (sid, sname, scohort, att)
+                    "INSERT OR IGNORE INTO students (id, name, cohort, attendance, missing_assignments) VALUES (?, ?, ?, ?, ?)",
+                    (sid, sname, scohort, att, int(missing) if missing is not None else 0)
                 )
                 if att is not None:
                     db.execute("UPDATE students SET attendance = ? WHERE id = ?", (att, sid))
+                if missing is not None:
+                    db.execute("UPDATE students SET missing_assignments = ? WHERE id = ?", (int(missing), sid))
                 if not sname.startswith("Student "):
                     db.execute("UPDATE students SET name = ? WHERE id = ? AND (name LIKE 'Student %' OR name = '')", (sname, sid))
                 if scohort != "SDU Student":
                     db.execute("UPDATE students SET cohort = ? WHERE id = ? AND cohort = 'SDU Student'", (scohort, sid))
                 db.execute("INSERT OR IGNORE INTO teacher_scope (teacher_id, student_id) VALUES (?, ?)", (teacher_id, sid))
+                tr = s.get("tutoring_request")
+                if isinstance(tr, dict) and tr.get("course") and tr.get("preferred_time"):
+                    has_tr = db.execute("SELECT 1 FROM tutoring_requests WHERE student_id = ? LIMIT 1", (sid,)).fetchone()
+                    if not has_tr:
+                        db.execute(
+                            "INSERT INTO tutoring_requests (student_id, course, preferred_time, note, status, created_at) VALUES (?, ?, ?, ?, 'requested', ?)",
+                            (sid, tr["course"], tr["preferred_time"], tr.get("note"), now)
+                        )
                 for g in s.get("grades") or []:
                     score = g.get("score")
                     course = g.get("course")

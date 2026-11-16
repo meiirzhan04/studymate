@@ -1174,7 +1174,49 @@ async def finish_pms_login(tokens: dict, username: str, user: Optional[User]) ->
 
 @app.get("/api/sdu/pms/config")
 def sdu_pms_config():
-    return {"enabled": pms_portal.pms_enabled()}
+    return {"enabled": pms_portal.pms_enabled(), "mock_enabled": pms_portal.mock_teacher_enabled()}
+
+
+def finish_mock_pms_login() -> dict:
+    if not pms_portal.mock_teacher_enabled():
+        raise HTTPException(status_code=404, detail="Demo teacher mode is disabled.")
+    mock = pms_portal.mock_teacher_roster()
+    profile = mock["profile"]
+    db_user = repo.find_or_create_pms_teacher(
+        teacher_key=profile["employee_id"],
+        fullname=profile["fullname"],
+        email=profile["email"],
+        username=profile["username"],
+    )
+    repo.save_sdu_connection(
+        user_id=db_user["id"],
+        access_token=pms_portal.DEMO_ACCESS_TOKEN,
+        expires_at=time.time() + 30 * 86400,
+        scope=pms_portal.DEMO_SCOPE,
+    )
+    sync_res = repo.sync_pms_teacher_data(
+        user_id=db_user["id"],
+        teacher_id=db_user["teacher_id"],
+        students=mock["students"],
+        courses=mock["courses"],
+    )
+    return {
+        "access_token": issue_token(db_user),
+        "token_type": "bearer",
+        "expires_in": 1800,
+        "user": db_user,
+        "pms_connected": True,
+        "demo_mode": True,
+        "source": "demo",
+        "teacher_profile": profile,
+        "sync": sync_res,
+    }
+
+
+@app.post("/api/sdu/pms/demo")
+def sdu_pms_demo():
+    """One-click synthetic Teacher Portal account for testing the teacher dashboard and roster."""
+    return finish_mock_pms_login()
 
 
 @app.post("/api/sdu/pms/login")
@@ -1183,6 +1225,8 @@ async def sdu_pms_login(req: PmsLoginRequest,
     """Step 1 for teachers: SDU PMS username and password (used once, never stored)."""
     require_pms_login()
     clean_user = pms_portal.normalize_username(req.username)
+    if not user and pms_portal.mock_teacher_enabled() and clean_user.lower() == "demo.teacher" and req.password == "teacher123":
+        return finish_mock_pms_login()
     attempt_key = f"pms:{clean_user.lower()}"
     if repo.check_brute_force(attempt_key):
         raise HTTPException(status_code=429, detail="Too many sign-in attempts. Try again in 15 minutes.")
@@ -1243,6 +1287,17 @@ async def sdu_pms_resend(req: PmsResendRequest):
 @app.post("/api/sdu/pms/sync")
 async def sdu_pms_sync(user: Annotated[User, Depends(require_role("teacher"))]):
     conn = repo.get_sdu_connection(user.id)
+    if conn and pms_portal.is_demo_connection(conn):
+        if not pms_portal.mock_teacher_enabled():
+            raise HTTPException(status_code=404, detail="Demo teacher mode is disabled.")
+        mock = pms_portal.mock_teacher_roster()
+        sync_res = repo.sync_pms_teacher_data(
+            user_id=user.id,
+            teacher_id=user.teacher_id,
+            students=mock["students"],
+            courses=mock["courses"],
+        )
+        return {"ok": True, "demo_mode": True, **sync_res}
     tokens = pms_portal.unseal_tokens(conn["access_token"]) if conn else None
     if not tokens:
         raise HTTPException(status_code=400, detail="No SDU PMS connection found. Sign in with your PMS account.")
@@ -2372,7 +2427,7 @@ def teacher_students(user: Annotated[User, Depends(require_role("teacher"))]):
     snap = repo.get_snapshot(user.id, "pms_courses") or {}
     return {
         "items": items,
-        "pms_connected": bool(conn and pms_portal.is_pms_token(conn.get("access_token"))),
+        "pms_connected": bool(conn and (pms_portal.is_pms_token(conn.get("access_token")) or pms_portal.is_demo_connection(conn))),
         "courses": snap.get("courses") or [],
     }
 
