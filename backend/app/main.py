@@ -26,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from .repository import LOW_GRADE_THRESHOLD, MIN_ATTENDANCE, SQLiteRepository
-from . import admin, sdu_client, sdu_mock, sdu_portal, moodle_calendar
+from . import admin, pms_portal, sdu_client, sdu_mock, sdu_portal, moodle_calendar
 from . import deadlines as deadlines_mod
 from . import syllabi
 from . import academics
@@ -48,6 +48,20 @@ class PortalLoginRequest(BaseModel):
 class PortalVerifyRequest(BaseModel):
     pending: str = Field(min_length=10, max_length=8000)
     code: str = Field(pattern=r"^[0-9]{6}$")
+
+
+class PmsLoginRequest(BaseModel):
+    username: str = Field(min_length=2, max_length=120)
+    password: str = Field(min_length=1, max_length=200)
+
+
+class PmsVerifyRequest(BaseModel):
+    pending: str = Field(min_length=10, max_length=16000)
+    code: str = Field(pattern=r"^[0-9]{6}$")
+
+
+class PmsResendRequest(BaseModel):
+    pending: str = Field(min_length=10, max_length=16000)
 
 
 class MoodleLoginRequest(BaseModel):
@@ -288,6 +302,24 @@ async def health_portal():
             resp = await client.get("https://my.sdu.edu.kz/index.php", params={"lng": "en"})
         return {"reachable": True, "status": resp.status_code, "login_form": "loginAuth.php" in resp.text,
                 "ms": round((time.monotonic() - started) * 1000)}
+    except httpx.HTTPError as exc:
+        return {"reachable": False, "error": type(exc).__name__, "ms": round((time.monotonic() - started) * 1000)}
+
+
+@app.get("/health/pms")
+async def health_pms():
+    """Can this server reach the SDU teacher portal (auth.sdu.edu.kz + pms.sdu.edu.kz)?"""
+    started = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            auth_resp = await client.get(pms_portal.AUTH_ORIGIN)
+            pms_resp = await client.get("https://pms.sdu.edu.kz/")
+        return {
+            "reachable": True,
+            "auth_status": auth_resp.status_code,
+            "pms_status": pms_resp.status_code,
+            "ms": round((time.monotonic() - started) * 1000),
+        }
     except httpx.HTTPError as exc:
         return {"reachable": False, "error": type(exc).__name__, "ms": round((time.monotonic() - started) * 1000)}
 
@@ -1067,6 +1099,170 @@ async def sdu_portal_verify(req: PortalVerifyRequest,
     return await finish_portal_login(result["cookies"], user)
 
 
+def require_pms_login() -> None:
+    if not pms_portal.pms_enabled():
+        raise HTTPException(status_code=404, detail="Signing in through SDU PMS is not enabled.")
+
+
+def pms_failure(exc: pms_portal.PmsError, attempt_key: str, stage: str) -> HTTPException:
+    if exc.status == 401:
+        repo.record_attempt(attempt_key)
+    elif exc.status >= 500:
+        admin.record_sdu_error(stage, exc.status, exc.message)
+    return HTTPException(status_code=400 if exc.status == 401 else exc.status, detail=exc.message)
+
+
+async def _sync_teacher_from_pms(user_id: str, teacher_id: str, tokens: dict,
+                                   year: Optional[int] = None, term: Optional[int] = None) -> tuple[dict, dict]:
+    roster = await pms_portal.fetch_teacher_roster(tokens, year=year, term=term)
+    tokens = roster.get("tokens") or tokens
+    repo.save_sdu_connection(
+        user_id=user_id,
+        access_token=pms_portal.connection_token(tokens),
+        expires_at=time.time() + PORTAL_CONNECTION_SECONDS,
+        scope="pms",
+    )
+    sync_res = repo.sync_pms_teacher_data(
+        user_id=user_id,
+        teacher_id=teacher_id,
+        students=roster.get("students") or [],
+        courses=roster.get("courses") or [],
+    )
+    return sync_res, tokens
+
+
+async def finish_pms_login(tokens: dict, username: str, user: Optional[User]) -> dict:
+    try:
+        profile, tokens = await pms_portal.fetch_session_and_profile(tokens, username=username)
+    except pms_portal.PmsError as exc:
+        if exc.status >= 500:
+            admin.record_sdu_error("pms/profile", exc.status, exc.message)
+        raise HTTPException(status_code=400 if exc.status == 401 else exc.status, detail=exc.message)
+
+    if user:
+        db_user = repo.get_user_by_id(user.id)
+        if not db_user:
+            raise HTTPException(status_code=404, detail="User not found")
+        if db_user["role"] != "teacher":
+            raise HTTPException(status_code=403, detail="Teacher account required for PMS sign-in.")
+    else:
+        db_user = repo.find_or_create_pms_teacher(
+            teacher_key=profile["employee_id"],
+            fullname=profile["fullname"],
+            email=profile.get("email"),
+            username=profile.get("username") or username,
+        )
+
+    sync_res, tokens = await _sync_teacher_from_pms(
+        user_id=db_user["id"],
+        teacher_id=db_user["teacher_id"],
+        tokens=tokens,
+        year=profile.get("year"),
+        term=profile.get("term"),
+    )
+    return {
+        "access_token": issue_token(db_user),
+        "token_type": "bearer",
+        "expires_in": 1800,
+        "user": db_user,
+        "pms_connected": True,
+        "source": "pms",
+        "teacher_profile": profile,
+        "sync": sync_res,
+    }
+
+
+@app.get("/api/sdu/pms/config")
+def sdu_pms_config():
+    return {"enabled": pms_portal.pms_enabled()}
+
+
+@app.post("/api/sdu/pms/login")
+async def sdu_pms_login(req: PmsLoginRequest,
+                        user: Annotated[Optional[User], Depends(optional_current_user)] = None):
+    """Step 1 for teachers: SDU PMS username and password (used once, never stored)."""
+    require_pms_login()
+    clean_user = pms_portal.normalize_username(req.username)
+    attempt_key = f"pms:{clean_user.lower()}"
+    if repo.check_brute_force(attempt_key):
+        raise HTTPException(status_code=429, detail="Too many sign-in attempts. Try again in 15 minutes.")
+    if not user:
+        local = repo.authenticate(req.username, req.password) or repo.authenticate(clean_user, req.password)
+        if local:
+            repo.clear_attempts(attempt_key)
+            return {"access_token": issue_token(local), "token_type": "bearer", "expires_in": 1800, "user": local}
+    try:
+        result = await pms_portal.login(req.username, req.password)
+    except pms_portal.PmsError as exc:
+        raise pms_failure(exc, attempt_key, "pms/login")
+    repo.clear_attempts(attempt_key)
+    if result["state"] == "verify":
+        return {
+            "verification_required": True,
+            "pending": result["pending"],
+            "notice": result.get("notice"),
+            "resend_cooldown": result.get("resend_cooldown"),
+        }
+    return await finish_pms_login(result["tokens"], result.get("username", clean_user), user)
+
+
+@app.post("/api/sdu/pms/verify")
+async def sdu_pms_verify(req: PmsVerifyRequest,
+                         user: Annotated[Optional[User], Depends(optional_current_user)] = None):
+    """Step 2 for teachers: 6-digit 2FA code emailed by auth.sdu.edu.kz."""
+    require_pms_login()
+    attempt_key = "pms-verify:" + hashlib.sha256(req.pending.encode()).hexdigest()[:24]
+    if repo.check_brute_force(attempt_key):
+        raise HTTPException(status_code=429, detail="Too many wrong codes. Sign in again.")
+    try:
+        result = await pms_portal.verify(req.pending, req.code)
+    except pms_portal.PmsError as exc:
+        raise pms_failure(exc, attempt_key, "pms/verify")
+    repo.clear_attempts(attempt_key)
+    return await finish_pms_login(result["tokens"], result.get("username", ""), user)
+
+
+@app.post("/api/sdu/pms/resend")
+async def sdu_pms_resend(req: PmsResendRequest):
+    require_pms_login()
+    attempt_key = "pms-resend:" + hashlib.sha256(req.pending.encode()).hexdigest()[:24]
+    if repo.check_brute_force(attempt_key):
+        raise HTTPException(status_code=429, detail="Too many resend attempts. Wait 15 minutes.")
+    repo.record_attempt(attempt_key)
+    try:
+        result = await pms_portal.resend(req.pending)
+    except pms_portal.PmsError as exc:
+        raise pms_failure(exc, attempt_key, "pms/resend")
+    return {
+        "pending": result["pending"],
+        "notice": result.get("notice"),
+        "resend_cooldown": result.get("resend_cooldown"),
+    }
+
+
+@app.post("/api/sdu/pms/sync")
+async def sdu_pms_sync(user: Annotated[User, Depends(require_role("teacher"))]):
+    conn = repo.get_sdu_connection(user.id)
+    tokens = pms_portal.unseal_tokens(conn["access_token"]) if conn else None
+    if not tokens:
+        raise HTTPException(status_code=400, detail="No SDU PMS connection found. Sign in with your PMS account.")
+    try:
+        profile, tokens = await pms_portal.fetch_session_and_profile(tokens)
+    except pms_portal.PmsError as exc:
+        if exc.status == 401:
+            repo.delete_sdu_connection(user.id)
+            raise HTTPException(status_code=409, detail="SDU PMS session expired. Sign in again.")
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+    sync_res, _ = await _sync_teacher_from_pms(
+        user_id=user.id,
+        teacher_id=user.teacher_id,
+        tokens=tokens,
+        year=profile.get("year"),
+        term=profile.get("term"),
+    )
+    return {"ok": True, **sync_res}
+
+
 @app.get("/api/sdu/status")
 def sdu_status(user: Annotated[User, Depends(current_user)]):
     conn = live_connection(user.id)
@@ -1391,7 +1587,7 @@ async def sdu_disconnect(user: Annotated[User, Depends(current_user)]):
     conn = repo.get_sdu_connection(user.id)
     if conn:
         # Portal connections hold our own encrypted cookies: never send them to the api-sdu gateway
-        if not sdu_mock.is_demo_connection(conn) and not sdu_portal.is_portal_token(conn["access_token"]):
+        if not sdu_mock.is_demo_connection(conn) and not sdu_portal.is_portal_token(conn["access_token"]) and not pms_portal.is_pms_token(conn["access_token"]):
             await sdu_client.revoke_token(conn["access_token"])
         repo.delete_sdu_connection(user.id)
     return {"ok": True, "message": "SDU account disconnected and token revoked successfully."}
@@ -2171,8 +2367,14 @@ def read_notification(id: int, user: Annotated[User, Depends(require_role("stude
 @app.get("/api/teacher/students")
 def teacher_students(user: Annotated[User, Depends(require_role("teacher"))]):
     ids = repo.teacher_scope.get(user.teacher_id, set())
-    items = [{**repo.students[sid], "attendance": repo.attendance.get(sid), "risk_factors": risks(sid)} for sid in sorted(ids)]
-    return {"items": items}
+    items = [{**repo.students[sid], "attendance": repo.attendance.get(sid), "risk_factors": risks(sid)} for sid in sorted(ids) if sid in repo.students]
+    conn = repo.get_sdu_connection(user.id)
+    snap = repo.get_snapshot(user.id, "pms_courses") or {}
+    return {
+        "items": items,
+        "pms_connected": bool(conn and pms_portal.is_pms_token(conn.get("access_token"))),
+        "courses": snap.get("courses") or [],
+    }
 
 
 @app.get("/api/teacher/students/{student_id}")

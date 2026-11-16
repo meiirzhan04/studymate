@@ -750,23 +750,33 @@ function NotificationsDropdown({ token, unread, onUnreadChange, onSelectTab }) {
 }
 
 /* ─── REDESIGNED SIGN IN & CREATE ACCOUNT SCREEN ─────────────────── */
-/* SDU portal sign-in: student number and password (used once, never stored), then the code SDU emails */
-function SduPortalForm({ token, onDone, onCancel }) {
-  const [step, setStep]           = useState('password') // 'password' | 'code'
-  const [studentId, setStudentId] = useState('')
-  const [password, setPassword]   = useState('')
-  const [code, setCode]           = useState('')
-  const [pending, setPending]     = useState(null)
-  const [notice, setNotice]       = useState('')
-  const [error, setError]         = useState('')
-  const [busy, setBusy]           = useState(false)
+/* SDU portal sign-in: students via my.sdu.edu.kz, teachers via pms.sdu.edu.kz (password used once, never stored) */
+function SduPortalForm({ token, onDone, onCancel, allowTeacher = !token }) {
+  const [portalType, setPortalType] = useState('student') // 'student' | 'teacher'
+  const [step, setStep]             = useState('password') // 'password' | 'code'
+  const [studentId, setStudentId]   = useState('')
+  const [password, setPassword]     = useState('')
+  const [code, setCode]             = useState('')
+  const [pending, setPending]       = useState(null)
+  const [notice, setNotice]         = useState('')
+  const [error, setError]           = useState('')
+  const [busy, setBusy]             = useState(false)
+
+  const isTeacher = allowTeacher && portalType === 'teacher'
 
   const submitPassword = async e => {
     e.preventDefault(); setError('')
-    if (!studentId.trim() || !password) { setError('Enter your SDU student number and password.'); return }
+    if (!studentId.trim() || !password) {
+      setError(isTeacher ? 'Enter your SDU PMS username and password.' : 'Enter your SDU student number and password.')
+      return
+    }
     setBusy(true)
     try {
-      const res = await api('/api/sdu/portal/login', token, { method: 'POST', body: JSON.stringify({ student_id: studentId.trim(), password }) })
+      const endpoint = isTeacher ? '/api/sdu/pms/login' : '/api/sdu/portal/login'
+      const body = isTeacher
+        ? { username: studentId.trim(), password }
+        : { student_id: studentId.trim(), password }
+      const res = await api(endpoint, token, { method: 'POST', body: JSON.stringify(body) })
       setPassword('')
       if (res.verification_required) {
         setPending(res.pending); setNotice(res.notice || 'SDU emailed you a 6-digit code.'); setStep('code')
@@ -779,7 +789,21 @@ function SduPortalForm({ token, onDone, onCancel }) {
     if (!/^\d{6}$/.test(code)) { setError('Enter the 6-digit code from the email.'); return }
     setBusy(true)
     try {
-      onDone(await api('/api/sdu/portal/verify', token, { method: 'POST', body: JSON.stringify({ pending, code }) }))
+      const endpoint = isTeacher ? '/api/sdu/pms/verify' : '/api/sdu/portal/verify'
+      onDone(await api(endpoint, token, { method: 'POST', body: JSON.stringify({ pending, code }) }))
+    } catch (err) {
+      setError(err.message)
+      if (/expired|sign in again/i.test(err.message)) { setStep('password'); setCode('') }
+    } finally { setBusy(false) }
+  }
+
+  const resendCode = async () => {
+    if (!isTeacher || !pending || busy) return
+    setBusy(true); setError('')
+    try {
+      const res = await api('/api/sdu/pms/resend', token, { method: 'POST', body: JSON.stringify({ pending }) })
+      setPending(res.pending)
+      if (res.notice) setNotice(res.notice)
     } catch (err) {
       setError(err.message)
       if (/expired|sign in again/i.test(err.message)) { setStep('password'); setCode('') }
@@ -788,25 +812,42 @@ function SduPortalForm({ token, onDone, onCancel }) {
 
   return step === 'password' ? (
     <form onSubmit={submitPassword} className="login-form">
+      {allowTeacher && (
+        <div className="segmented-control" style={{ marginBottom: 14 }}>
+          <button type="button" className={`segmented-btn ${portalType === 'student' ? 'active' : ''}`}
+                  onClick={() => { setPortalType('student'); setError(''); setStudentId('') }}>
+            Student (my.sdu)
+          </button>
+          <button type="button" className={`segmented-btn ${portalType === 'teacher' ? 'active' : ''}`}
+                  onClick={() => { setPortalType('teacher'); setError(''); setStudentId('') }}>
+            Teacher (pms.sdu)
+          </button>
+        </div>
+      )}
       <div className="field-group">
-        <label className="field-label" htmlFor="sduStudentId">SDU student number</label>
+        <label className="field-label" htmlFor="sduStudentId">{isTeacher ? 'SDU PMS username' : 'SDU student number'}</label>
         <div className="input-container">
           <div className="input-icon-left"><Icons.User size={16} /></div>
-          <input id="sduStudentId" className="input-field" value={studentId} inputMode="numeric" autoComplete="username"
-                 onChange={e => setStudentId(e.target.value)} placeholder="e.g. 240103118" />
+          <input id="sduStudentId" className="input-field" value={studentId}
+                 inputMode={isTeacher ? 'text' : 'numeric'} autoComplete="username"
+                 onChange={e => setStudentId(e.target.value)}
+                 placeholder={isTeacher ? 'e.g. name.surname' : 'e.g. 240103118'} />
         </div>
       </div>
       <div className="field-group">
-        <label className="field-label" htmlFor="sduPassword">SDU portal password</label>
+        <label className="field-label" htmlFor="sduPassword">{isTeacher ? 'SDU PMS password' : 'SDU portal password'}</label>
         <div className="input-container">
           <div className="input-icon-left"><Icons.Lock size={16} /></div>
           <input id="sduPassword" className="input-field" type="password" value={password} autoComplete="current-password"
-                 onChange={e => setPassword(e.target.value)} placeholder="Your my.sdu.edu.kz password" />
+                 onChange={e => setPassword(e.target.value)}
+                 placeholder={isTeacher ? 'Your pms.sdu.edu.kz password' : 'Your my.sdu.edu.kz password'} />
         </div>
-        <small className="field-hint">Used once to sign in to my.sdu.edu.kz. StudyMate never stores it.</small>
+        <small className="field-hint">Used once to sign in to {isTeacher ? 'pms.sdu.edu.kz' : 'my.sdu.edu.kz'}. StudyMate never stores it.</small>
       </div>
       {error && <div className="alert-box alert-danger"><Icons.AlertTriangle size={16} /><span>{error}</span></div>}
-      <button className="btn-submit-primary" disabled={busy}>{busy ? 'Signing in to SDU…' : 'Sign in with SDU →'}</button>
+      <button className="btn-submit-primary" disabled={busy}>
+        {busy ? (isTeacher ? 'Signing in to PMS…' : 'Signing in to SDU…') : (isTeacher ? 'Sign in as Teacher →' : 'Sign in with SDU →')}
+      </button>
       {onCancel && <button type="button" className="login-back" onClick={onCancel}>Cancel</button>}
     </form>
   ) : (
@@ -819,6 +860,11 @@ function SduPortalForm({ token, onDone, onCancel }) {
       </div>
       {error && <div className="alert-box alert-danger"><Icons.AlertTriangle size={16} /><span>{error}</span></div>}
       <button className="btn-submit-primary" disabled={busy}>{busy ? 'Checking the code…' : 'Verify and continue →'}</button>
+      {isTeacher && (
+        <button type="button" className="login-back" disabled={busy} onClick={resendCode}>
+          Resend code
+        </button>
+      )}
       <button type="button" className="login-back" onClick={() => { setStep('password'); setCode(''); setError('') }}>
         ← Back
       </button>
@@ -875,22 +921,29 @@ function Login({ onLogin, theme, toggleTheme }) {
   const [code, setCode]             = useState('')
   const [showSupport, setShowSupport] = useState(false)
 
-  // One form for everyone: a student number signs in through the SDU portal, an email with a StudyMate password
-  const isStudentNumber = /^\d{6,12}$/.test(identifier.trim())
+  // One form for everyone: student number -> my.sdu, teacher username (name.surname) -> pms.sdu, email -> StudyMate password
+  const trimmedId = identifier.trim()
+  const isStudentNumber = /^\d{6,12}$/.test(trimmedId)
+  const isTeacherUsername = !isStudentNumber && !trimmedId.includes('@') && /^[A-Za-z][A-Za-z0-9._-]{1,60}$/.test(trimmedId)
 
   const submit = async e => {
     e.preventDefault(); setError('')
     const fe = {}
-    if (!identifier.trim()) fe.identifier = portalLogin ? 'Enter your student number or email' : 'Please enter your email or Student ID'
+    if (!trimmedId) fe.identifier = portalLogin ? 'Enter your student number, teacher username, or email' : 'Please enter your email or Student ID'
     if (!password) fe.password = 'Please enter your password'
     setFieldErr(fe)
     if (Object.keys(fe).length) return
     setBusy(true)
     try {
       if (portalLogin && isStudentNumber) {
-        const res = await api('/api/sdu/portal/login', null, { method: 'POST', body: JSON.stringify({ student_id: identifier.trim(), password }) })
+        const res = await api('/api/sdu/portal/login', null, { method: 'POST', body: JSON.stringify({ student_id: trimmedId, password }) })
         if (res.verification_required) {
-          setPassword(''); setCode(''); setPortalStep({ pending: res.pending, notice: res.notice })
+          setPassword(''); setCode(''); setPortalStep({ pending: res.pending, notice: res.notice, kind: 'portal' })
+        } else onLogin(res)
+      } else if (portalLogin && isTeacherUsername) {
+        const res = await api('/api/sdu/pms/login', null, { method: 'POST', body: JSON.stringify({ username: trimmedId, password }) })
+        if (res.verification_required) {
+          setPassword(''); setCode(''); setPortalStep({ pending: res.pending, notice: res.notice, kind: 'pms' })
         } else onLogin(res)
       } else {
         onLogin(await api('/api/auth/login', null, { method: 'POST', body: JSON.stringify({ identifier, password }) }))
@@ -905,7 +958,20 @@ function Login({ onLogin, theme, toggleTheme }) {
     if (!/^\d{6}$/.test(code)) { setError('Enter the 6-digit code from the email.'); return }
     setBusy(true)
     try {
-      onLogin(await api('/api/sdu/portal/verify', null, { method: 'POST', body: JSON.stringify({ pending: portalStep.pending, code }) }))
+      const endpoint = portalStep?.kind === 'pms' ? '/api/sdu/pms/verify' : '/api/sdu/portal/verify'
+      onLogin(await api(endpoint, null, { method: 'POST', body: JSON.stringify({ pending: portalStep.pending, code }) }))
+    } catch (err) {
+      setError(err.message)
+      if (/expired|sign in again/i.test(err.message)) setPortalStep(null)
+    } finally { setBusy(false) }
+  }
+
+  const resendPortalCode = async () => {
+    if (portalStep?.kind !== 'pms' || !portalStep?.pending || busy) return
+    setBusy(true); setError('')
+    try {
+      const res = await api('/api/sdu/pms/resend', null, { method: 'POST', body: JSON.stringify({ pending: portalStep.pending }) })
+      setPortalStep(prev => prev ? { ...prev, pending: res.pending, notice: res.notice || prev.notice } : prev)
     } catch (err) {
       setError(err.message)
       if (/expired|sign in again/i.test(err.message)) setPortalStep(null)
@@ -1062,7 +1128,7 @@ function Login({ onLogin, theme, toggleTheme }) {
 
           <div className="login-header-text">
             <h2>{portalStep ? 'Check your email' : showPortalConnect ? 'Connect with SDU Portal' : authMode === 'login' ? 'Welcome back' : 'Create your account'}</h2>
-            <p>{portalStep ? 'Enter the code SDU just sent you.' : showPortalConnect ? 'Sign in with your my.sdu.edu.kz account.' : authMode === 'login' ? 'Sign in to see your grades and schedule.' : 'It takes less than a minute.'}</p>
+            <p>{portalStep ? 'Enter the code SDU just sent you.' : showPortalConnect ? 'Sign in with your my.sdu.edu.kz or pms.sdu.edu.kz account.' : authMode === 'login' ? 'Sign in to see your grades and schedule.' : 'It takes less than a minute.'}</p>
           </div>
 
           {portalStep ? (
@@ -1076,6 +1142,11 @@ function Login({ onLogin, theme, toggleTheme }) {
               </div>
               {error && <div className="alert-box alert-danger"><Icons.AlertTriangle size={16} /><span>{error}</span></div>}
               <button className="btn-submit-primary" disabled={busy || code.length !== 6}>{busy ? 'Checking the code…' : 'Verify and sign in →'}</button>
+              {portalStep.kind === 'pms' && (
+                <button type="button" className="login-back" disabled={busy} onClick={resendPortalCode}>
+                  Resend code
+                </button>
+              )}
               <button type="button" className="login-back" onClick={() => { setPortalStep(null); setError('') }}>
                 ← Use a different account
               </button>
@@ -1110,7 +1181,7 @@ function Login({ onLogin, theme, toggleTheme }) {
           {authMode === 'login' ? (
             <form onSubmit={submit} className="login-form">
               <div className="field-group">
-                <label className="field-label" htmlFor="identifier">{portalLogin ? 'Student number or email' : 'University Email or Student ID'}</label>
+                <label className="field-label" htmlFor="identifier">{portalLogin ? 'Student number, teacher username, or email' : 'University Email or Student ID'}</label>
                 <div className="input-container">
                   <div className="input-icon-left"><Icons.User size={16} /></div>
                   <input
@@ -1118,7 +1189,7 @@ function Login({ onLogin, theme, toggleTheme }) {
                     className="input-field"
                     value={identifier}
                     onChange={e => { setIdentifier(e.target.value); setFieldErr(f => ({ ...f, identifier: '' })) }}
-                    placeholder={portalLogin ? 'e.g. 240103118' : 'e.g. 240103118 or student@univ.edu'}
+                    placeholder={portalLogin ? 'e.g. 240103118 or name.surname' : 'e.g. 240103118 or student@univ.edu'}
                     autoComplete="username"
                     style={fieldErr.identifier ? { borderColor: '#ef4444' } : undefined}
                   />
@@ -1141,7 +1212,7 @@ function Login({ onLogin, theme, toggleTheme }) {
                     type={showPw ? 'text' : 'password'}
                     value={password}
                     onChange={e => { setPassword(e.target.value); setFieldErr(f => ({ ...f, password: '' })) }}
-                    placeholder={portalLogin && isStudentNumber ? 'Your my.sdu.edu.kz password' : 'Enter your password'}
+                    placeholder={portalLogin && isStudentNumber ? 'Your my.sdu.edu.kz password' : portalLogin && isTeacherUsername ? 'Your pms.sdu.edu.kz password' : 'Enter your password'}
                     autoComplete="current-password"
                     style={{ paddingRight: 44, ...(fieldErr.password ? { borderColor: '#ef4444' } : {}) }}
                   />
@@ -1157,7 +1228,7 @@ function Login({ onLogin, theme, toggleTheme }) {
                 </div>
                 {fieldErr.password
                   ? <div style={{ color: '#ef4444', fontSize: 13, marginTop: 6 }}>{fieldErr.password}</div>
-                  : portalLogin && <small className="field-hint">Students: your SDU portal password. StudyMate never stores it.</small>}
+                  : portalLogin && <small className="field-hint">Students: my.sdu · Teachers: pms.sdu. StudyMate never stores it.</small>}
               </div>
 
               {error && (
@@ -1168,7 +1239,7 @@ function Login({ onLogin, theme, toggleTheme }) {
               )}
 
               <button className="btn-submit-primary" disabled={busy}>
-                {busy ? (portalLogin && isStudentNumber ? 'Signing in to SDU…' : 'Signing in…') : 'Sign in →'}
+                {busy ? (portalLogin && (isStudentNumber || isTeacherUsername) ? 'Signing in to SDU…' : 'Signing in…') : 'Sign in →'}
               </button>
             </form>
           ) : (
@@ -4267,7 +4338,7 @@ function AvatarMenu({ user, logout, token, onUpdateUser, onOpenProfile, onOpenSu
         <div className="popover menu">
           <div className="menu-head">
             <b>{user?.name ?? 'User'}</b>
-            <span>{user?.student_id ? `ID ${user.student_id}` : (user?.email ?? user?.id ?? '')}</span>
+            <span>{user?.student_id ? `ID ${user.student_id}` : user?.teacher_id ? `Teacher · ${user.teacher_id}` : (user?.email ?? user?.id ?? '')}</span>
           </div>
 
           {editing ? (
@@ -4764,7 +4835,9 @@ function TeacherStudentModal({ studentId, token, onClose }) {
               <div className="mini-stats">
                 <div>
                   <span>Attendance</span>
-                  <b className={`tone-${data.attendance < 75 ? 'danger' : 'success'}`}>{data.attendance}%</b>
+                  <b className={`tone-${data.attendance != null && data.attendance < 75 ? 'danger' : 'success'}`}>
+                    {data.attendance != null ? `${data.attendance}%` : '—'}
+                  </b>
                 </div>
                 <div>
                   <span>Risk signals</span>
@@ -4863,24 +4936,46 @@ function TeacherStudentModal({ studentId, token, onClose }) {
 
 /* ─── TEACHER VIEW ───────────────────────────────────────────────── */
 function Teacher({ token, user, logout }) {
-  const [students, setStudents]   = useState()
-  const [analytics, setAnalytics] = useState()
+  const [students, setStudents]       = useState()
+  const [pmsConnected, setPmsConnected] = useState(false)
+  const [syncingPms, setSyncingPms]   = useState(false)
+  const [syncErr, setSyncErr]         = useState('')
+  const [analytics, setAnalytics]     = useState()
   const [selectedStudent, setSelectedStudent] = useState(null)
   const [filter, setFilter] = useState('all') // 'all' | 'risk' | 'good'
   const [search, setSearch] = useState('')
 
-  useEffect(() => {
+  const loadTeacherData = useCallback(() => {
     Promise.all([
       api('/api/teacher/students', token),
       api('/api/teacher/analytics/attendance-performance', token)
-    ]).then(([s, a]) => { setStudents(s.items); setAnalytics(a) })
+    ]).then(([s, a]) => {
+      setStudents(s.items)
+      setPmsConnected(Boolean(s.pms_connected))
+      setAnalytics(a)
+    })
   }, [token])
+
+  useEffect(() => { loadTeacherData() }, [loadTeacherData])
+
+  const syncPms = async () => {
+    setSyncingPms(true); setSyncErr('')
+    try {
+      await api('/api/sdu/pms/sync', token, { method: 'POST' })
+      loadTeacherData()
+    } catch (err) {
+      setSyncErr(err.message)
+    } finally {
+      setSyncingPms(false)
+    }
+  }
 
   if (!students || !analytics) return <PageLoader label="Loading your students…" />
 
   const atRisk = students.filter(s => s.risk_factors.length)
-  const avgAtt = students.length
-    ? (students.reduce((a, s) => a + s.attendance, 0) / students.length).toFixed(1)
+  const attStudents = students.filter(s => s.attendance != null)
+  const avgAtt = attStudents.length
+    ? (attStudents.reduce((a, s) => a + s.attendance, 0) / attStudents.length).toFixed(1)
     : '—'
 
   const exportClassRosterCSV = () => {
@@ -4890,7 +4985,7 @@ function Teacher({ token, user, logout }) {
       `"${s.name}"`,
       `"${s.id}"`,
       `"${s.cohort}"`,
-      `${s.attendance}%`,
+      s.attendance != null ? `${s.attendance}%` : '—',
       s.risk_factors.length,
       `"${s.risk_factors.map(r => r.detail).join('; ')}"`
     ])
@@ -4915,6 +5010,7 @@ function Teacher({ token, user, logout }) {
 
   return (
     <div className="page page-fade">
+      {syncErr && <div className="alert-box alert-danger" style={{ marginBottom: 16 }}><Icons.AlertTriangle size={16} /><span>{syncErr}</span></div>}
       <section className="metric-grid">
         <Metric label="Students" value={students.length} foot={<span className="muted">In your scope</span>} />
         <Metric
@@ -4922,7 +5018,7 @@ function Teacher({ token, user, logout }) {
           value={atRisk.length}
           foot={<Status tone={atRisk.length ? 'danger' : 'success'}>{atRisk.length ? 'Need follow-up' : 'Nobody at risk'}</Status>}
         />
-        <Metric label="Avg. attendance" value={`${avgAtt}%`} foot={<span className="muted">Across the cohort</span>} />
+        <Metric label="Avg. attendance" value={avgAtt === '—' ? '—' : `${avgAtt}%`} foot={<span className="muted">Across the cohort</span>} />
       </section>
 
       <div className="toolbar">
@@ -4948,6 +5044,11 @@ function Teacher({ token, user, logout }) {
               aria-label="Search students"
             />
           </div>
+          {pmsConnected && (
+            <button type="button" className="btn-ghost btn-sm" onClick={syncPms} disabled={syncingPms} title="Sync courses and students from SDU PMS">
+              <Icons.Refresh size={14} className={syncingPms ? 'spinning' : ''} /> {syncingPms ? 'Syncing…' : 'Sync PMS'}
+            </button>
+          )}
           <button type="button" className="icon-btn" onClick={exportClassRosterCSV} title="Export roster (CSV)" aria-label="Export roster (CSV)">
             <Icons.Download size={16} />
           </button>
@@ -4975,7 +5076,9 @@ function Teacher({ token, user, logout }) {
                         ? <Status tone="danger">{s.risk_factors[0].detail}{s.risk_factors.length > 1 ? ` +${s.risk_factors.length - 1}` : ''}</Status>
                         : <Status tone="success">No risk signals</Status>}
                     </span>
-                    <span className={`att-value tone-${s.attendance < 75 ? 'danger' : 'success'}`}>{s.attendance}%</span>
+                    <span className={`att-value tone-${s.attendance != null && s.attendance < 75 ? 'danger' : 'success'}`}>
+                      {s.attendance != null ? `${s.attendance}%` : '—'}
+                    </span>
                   </button>
                 </li>
               ))}
@@ -4988,7 +5091,7 @@ function Teacher({ token, user, logout }) {
         <article className="card">
           <header className="card-head">
             <h2>Attendance vs grade</h2>
-            <span className="muted">r = {analytics.correlation}</span>
+            <span className="muted">r = {analytics.correlation != null ? analytics.correlation : '—'}</span>
           </header>
           <ResponsiveContainer width="100%" height={220}>
             <ScatterChart margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>

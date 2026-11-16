@@ -601,7 +601,7 @@
     } catch (err) { toast(err.message) }
   })
 
-  const SOURCE_LABEL = { portal: 'SDU portal', 'api-sdu': 'api-sdu', demo: 'Demo' }
+  const SOURCE_LABEL = { portal: 'SDU portal', pms: 'SDU PMS (teacher)', 'api-sdu': 'api-sdu', demo: 'Demo' }
   async function loadSdu() {
     const d = await api('/api/admin/sdu-connections')
     $('sdu').innerHTML = d.items.length ? d.items.map(c => {

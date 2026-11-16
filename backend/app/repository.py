@@ -1177,7 +1177,7 @@ class SQLiteRepository:
             "user_id": r["user_id"], "name": r["name"], "student_id": r["student_id"],
             "scope": r["scope"], "updated_at": r["updated_at"], "expires_at": r["expires_at"],
             "demo": bool(r["demo"]), "expired": r["expires_at"] < now,
-            "source": "demo" if r["demo"] else "portal" if r["scope"] == "portal" else "api-sdu",
+            "source": "demo" if r["demo"] else "pms" if r["scope"] == "pms" else "portal" if r["scope"] == "portal" else "api-sdu",
         } for r in rows]
 
     def admin_delete_user(self, user_id: str) -> bool:
@@ -1248,6 +1248,103 @@ class SQLiteRepository:
             db.commit()
 
             return {"id": new_uid, "name": clean_name, "role": "student", "student_id": clean_sid, "teacher_id": None}
+
+    def find_or_create_pms_teacher(self, teacher_key: str, fullname: str, email: str | None, username: str | None = None) -> dict:
+        clean_key = teacher_key.strip()
+        clean_tid = clean_key if clean_key.startswith("pms-") else f"pms-{clean_key}"
+        clean_name = fullname.strip() or f"Teacher {clean_key}"
+        clean_username = (username or "").strip() or None
+        clean_email = (email or "").strip() or (f"{clean_username}@sdu.edu.kz" if clean_username and "@" not in clean_username else None)
+        identifiers = [val for val in dict.fromkeys([clean_tid, clean_username, clean_email]) if val]
+
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT id, name, role, student_id, teacher_id FROM users WHERE teacher_id = ?",
+                (clean_tid,)
+            ).fetchone()
+            if not row and identifiers:
+                placeholders = " OR ".join("identifier = ? COLLATE NOCASE" for _ in identifiers)
+                row = db.execute(
+                    f"""SELECT u.id, u.name, u.role, u.student_id, u.teacher_id
+                        FROM users u
+                        WHERE u.role = 'teacher'
+                        AND u.id IN (SELECT user_id FROM login_identifiers WHERE {placeholders})""",
+                    identifiers
+                ).fetchone()
+
+            if row:
+                u = dict(row)
+                if clean_name and (not u.get("name") or u["name"].startswith("Teacher ")):
+                    db.execute("UPDATE users SET name = ? WHERE id = ?", (clean_name, u["id"]))
+                    u["name"] = clean_name
+                if not u.get("teacher_id"):
+                    db.execute("UPDATE users SET teacher_id = ? WHERE id = ?", (clean_tid, u["id"]))
+                    u["teacher_id"] = clean_tid
+                for ident in identifiers:
+                    db.execute("INSERT OR IGNORE INTO login_identifiers (identifier, user_id) VALUES (?, ?)", (ident, u["id"]))
+                db.commit()
+                return u
+
+            new_uid = f"u-{clean_tid}"
+            salt = secrets.token_hex(8)
+            pw_hash = hash_password(secrets.token_urlsafe(16), salt)
+            db.execute(
+                "INSERT INTO users (id, name, role, student_id, teacher_id, password_salt, password_hash) VALUES (?, ?, 'teacher', NULL, ?, ?, ?)",
+                (new_uid, clean_name, clean_tid, salt, pw_hash)
+            )
+            for ident in identifiers:
+                db.execute("INSERT OR IGNORE INTO login_identifiers (identifier, user_id) VALUES (?, ?)", (ident, new_uid))
+            db.commit()
+            return {"id": new_uid, "name": clean_name, "role": "teacher", "student_id": None, "teacher_id": clean_tid}
+
+    def sync_pms_teacher_data(self, user_id: str, teacher_id: str, students: list[dict], courses: list[dict] | None = None) -> dict:
+        now = datetime.now(timezone.utc).isoformat()
+        linked = 0
+        with self.connect() as db:
+            db.execute("INSERT OR IGNORE INTO semesters (id, label) VALUES ('spring-2026', 'Spring 2026')")
+            if isinstance(courses, list):
+                self._swap_snapshot(db, user_id, "pms_courses", {"courses": courses, "fetched_at": now}, now)
+            for s in students:
+                sid = str(s.get("id") or "").strip()
+                if not sid:
+                    continue
+                sname = str(s.get("name") or f"Student {sid}").strip()
+                scohort = str(s.get("cohort") or "SDU Student").strip()
+                att = s.get("attendance")
+                db.execute(
+                    "INSERT OR IGNORE INTO students (id, name, cohort, attendance, missing_assignments) VALUES (?, ?, ?, ?, 0)",
+                    (sid, sname, scohort, att)
+                )
+                if att is not None:
+                    db.execute("UPDATE students SET attendance = ? WHERE id = ?", (att, sid))
+                if not sname.startswith("Student "):
+                    db.execute("UPDATE students SET name = ? WHERE id = ? AND (name LIKE 'Student %' OR name = '')", (sname, sid))
+                if scohort != "SDU Student":
+                    db.execute("UPDATE students SET cohort = ? WHERE id = ? AND cohort = 'SDU Student'", (scohort, sid))
+                db.execute("INSERT OR IGNORE INTO teacher_scope (teacher_id, student_id) VALUES (?, ?)", (teacher_id, sid))
+                for g in s.get("grades") or []:
+                    score = g.get("score")
+                    course = g.get("course")
+                    code = g.get("code") or course
+                    credits = int(g.get("credits") or 3)
+                    if not course or score is None:
+                        continue
+                    comps = [{"name": "Final Grade", "score": float(score), "weight": 1.0}]
+                    existing = db.execute(
+                        "SELECT id FROM grades WHERE student_id = ? AND semester = 'spring-2026' AND code = ?",
+                        (sid, code)
+                    ).fetchone()
+                    if existing:
+                        db.execute("UPDATE grades SET components_json = ? WHERE id = ?", (json.dumps(comps), existing["id"]))
+                    else:
+                        db.execute(
+                            "INSERT INTO grades (student_id, semester, course, code, credits, components_json) VALUES (?, 'spring-2026', ?, ?, ?, ?)",
+                            (sid, course, code, credits, json.dumps(comps))
+                        )
+                linked += 1
+            db.execute("UPDATE sdu_connections SET updated_at = ? WHERE user_id = ?", (now, user_id))
+            db.commit()
+        return {"synced": True, "students_synced": linked, "courses_synced": len(courses or []), "updated_at": now}
 
     def sync_sdu_student_data(self, user_id: str, profile: dict, schedule: list | None, grades: list | None, attendance: list | None,
                               deadlines: list | None = None, transcript: list | None = None,
