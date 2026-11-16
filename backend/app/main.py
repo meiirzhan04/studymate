@@ -279,6 +279,41 @@ app.add_middleware(
 )
 
 
+_DOCS_PATHS = {"/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"}
+
+
+def _docs_request_allowed(request: Request) -> bool:
+    is_prod = os.getenv("APP_ENV") == "production" or bool(os.getenv("RENDER"))
+    if not is_prod or os.getenv("ENABLE_API_DOCS") == "1":
+        return True
+    auth_header = request.headers.get("authorization") or ""
+    if auth_header.startswith("Bearer "):
+        try:
+            body, signature = auth_header[7:].rsplit(".", 1)
+            if hmac.compare_digest(signature, sign(body)):
+                payload = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+                if payload.get("exp", 0) >= time.time() and admin.is_admin_payload(payload):
+                    return True
+        except (ValueError, KeyError, json.JSONDecodeError):
+            pass
+    elif auth_header.startswith("Basic ") and admin.admin_configured():
+        try:
+            decoded = base64.b64decode(auth_header[6:].strip()).decode("utf-8")
+            username, password = decoded.split(":", 1)
+            if admin.check_admin_password(username, password):
+                return True
+        except (ValueError, UnicodeDecodeError):
+            pass
+    return False
+
+
+@app.middleware("http")
+async def hide_docs_in_production(request: Request, call_next):
+    if request.url.path in _DOCS_PATHS and not _docs_request_allowed(request):
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
+    return await call_next(request)
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     logging.getLogger("uvicorn.error").error(f"Unhandled error on {request.method} {request.url.path}: {str(exc)}", exc_info=True)

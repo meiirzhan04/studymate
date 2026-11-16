@@ -1441,3 +1441,35 @@ def test_expired_moodle_session_points_the_student_to_reconnect(monkeypatch):
     assert "Moodle session expired" in res["reason"]
     assert res["action_url"] is None
     assert repo.get_sdu_connection(u["id"]) is not None      # SDU itself stays connected
+
+
+def test_api_docs_open_locally_and_hidden_in_production(monkeypatch):
+    import base64
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.delenv("RENDER", raising=False)
+    monkeypatch.delenv("ENABLE_API_DOCS", raising=False)
+    assert client.get("/docs").status_code == 200
+    assert client.get("/openapi.json").status_code == 200
+
+    # In production, /docs, /redoc, and /openapi.json are hidden (404) from normal users
+    monkeypatch.setenv("APP_ENV", "production")
+    for path in ("/docs", "/redoc", "/openapi.json"):
+        assert client.get(path).status_code == 404
+
+    # Regular student token still cannot view production docs
+    student = client.post("/api/sdu/demo-connect", json={}).json()["access_token"]
+    assert client.get("/docs", headers=auth(student)).status_code == 404
+
+    # Developers with admin credentials or ENABLE_API_DOCS=1 can access them
+    adm = admin_token(monkeypatch)
+    assert client.get("/docs", headers=auth(adm)).status_code == 200
+    assert client.get("/openapi.json", headers=auth(adm)).status_code == 200
+
+    monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-secret")
+    wrong_basic = base64.b64encode(b"admin:wrong").decode()
+    assert client.get("/docs", headers={"Authorization": f"Basic {wrong_basic}"}).status_code == 404
+    basic = base64.b64encode(b"admin:test-admin-secret").decode()
+    assert client.get("/docs", headers={"Authorization": f"Basic {basic}"}).status_code == 200
+
+    monkeypatch.setenv("ENABLE_API_DOCS", "1")
+    assert client.get("/docs").status_code == 200
