@@ -5,8 +5,10 @@ import {
   Tooltip, XAxis, YAxis, Scatter, ScatterChart
 } from 'recharts'
 import './styles.css'
+import './theme.css'
 import { calcGPA, calcCompletedCredits, ectsOf } from './gpa.js'
 import { STATUS_LABEL, STATUS_TONE, checkTarget, progressPct, reachLine, serverFieldErrors, simulateCourse } from './goals.js'
+import { DifficultForecast, MonitoringTab, PredictedGpaWidget, SyncBar } from './Monitoring.jsx'
 import { UNKNOWN_DAY, classLocation, classTimes, findNextClass, getDayOrder, mergeBlocks, normalizeSchedule, sortSchedule } from './schedule.js'
 
 /* ─── API helper ──────────────────────────────────────────────────── */
@@ -324,7 +326,7 @@ function useTheme() {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('sm_theme')
       if (stored) return stored
-      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+      return 'light'   // light is the default; the toggle switches to dark
     }
     return 'light'
   })
@@ -853,7 +855,7 @@ function SduPortalForm({ token, onDone, onCancel, allowTeacher = !token }) {
         <small className="field-hint">Used once to sign in to {isTeacher ? 'pms.sdu.edu.kz' : 'my.sdu.edu.kz'}. StudyMate never stores it.</small>
       </div>
       {error && <div className="alert-box alert-danger"><Icons.AlertTriangle size={16} /><span>{error}</span></div>}
-      <button className="btn-submit-primary" disabled={busy}>
+      <button className="btn-submit-primary btn-glass" disabled={busy}>
         {busy ? (isTeacher ? 'Signing in to PMS…' : 'Signing in to SDU…') : (isTeacher ? 'Sign in as Teacher →' : 'Sign in with SDU →')}
       </button>
       {isTeacher && (
@@ -1120,7 +1122,7 @@ function Login({ onLogin, theme, toggleTheme }) {
         <Brand subtitle="SDU student" />
 
         <div className="login-hero">
-          <h1>Your studies,<br />at a glance.</h1>
+          <h1 className="fx-lightleak" data-text={"Your studies,\nat a glance."}>Your studies,<br />at a glance.</h1>
           <p>Grades, schedule and attendance from SDU — in one calm place.</p>
           <ul className="login-points">
             <li><Icons.Check size={16} /> Know your next class</li>
@@ -1252,7 +1254,7 @@ function Login({ onLogin, theme, toggleTheme }) {
                 </div>
               )}
 
-              <button className="btn-submit-primary" disabled={busy}>
+              <button className="btn-submit-primary btn-glass" disabled={busy}>
                 {busy ? (portalLogin && (isStudentNumber || isTeacherUsername) ? 'Signing in to SDU…' : 'Signing in…') : 'Sign in →'}
               </button>
             </form>
@@ -2125,7 +2127,7 @@ function ComingUpCard({ nextInfo, scheduleFailed, deadlines, onOpenSchedule, onO
 
 function AttentionCard({ items, onSelect }) {
   return (
-    <article className="card card-fill">
+    <article className="card card-fill attention-card">
       <header className="card-head">
         <h2>Needs attention</h2>
         {items.length > 0 && <span className="count-pill">{items.length}</span>}
@@ -2265,6 +2267,8 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token
           />
         </div>
       </section>
+
+      {connected && <PredictedGpaWidget api={api} token={token} version={syncVersion} onOpen={() => setTab('monitoring')} />}
 
       <section className="split split-even">
         <ComingUpCard nextInfo={findNextClass(sduData.schedule || [])} scheduleFailed={!!sduData.scheduleIssue && !sduData.schedule?.length} deadlines={deadlines} onOpenSchedule={() => setTab('schedule')} onOpenMoodle={onOpenMoodle} />
@@ -2836,7 +2840,7 @@ function BreakdownModal({ token, course, onClose }) {
 }
 
 /* ─── ATTENDANCE TAB ─────────────────────────────────────────────── */
-function AttendanceTab({ sduData, sduLoading, sduStatus, onConnect }) {
+function AttendanceTab({ sduData, sduLoading, sduStatus, onConnect, onSync }) {
   const attendanceList = sduData?.attendance || []
   if (!sduStatus?.connected && !attendanceList.length) return <SduOnboardCard onConnect={onConnect} />
   if (sduLoading && !attendanceList.length) return <PageLoader label="Loading attendance…" />
@@ -2850,6 +2854,7 @@ function AttendanceTab({ sduData, sduLoading, sduStatus, onConnect }) {
 
   return (
     <div className="page page-fade">
+      {onSync && <SyncBar updatedAt={sduStatus?.updated_at} onSync={onSync} syncing={sduLoading} demo={sduStatus?.demo_mode} />}
       <section className="card att-summary">
         <div>
           <span className="metric-label">Overall attendance</span>
@@ -3184,6 +3189,8 @@ function InsightsTab({ token, sduStatus, onConnect }) {
           )}
         </article>
       </section>
+
+      <DifficultForecast api={api} token={token} />
 
       {data.tutoring_requests.length > 0 && (
         <article className="card card-flush">
@@ -4454,6 +4461,7 @@ const STUDENT_NAV = [
   { id: 'transcript', label: 'Grades',     icon: Icons.Book },
   { id: 'attendance', label: 'Attendance', icon: Icons.CheckCircle },
   { id: 'insights',   label: 'Insights',   icon: Icons.Target },
+  { id: 'monitoring', label: 'Monitoring', icon: Icons.Shield },
   { id: 'goals',      label: 'Goals',      icon: Icons.Award },
 ]
 
@@ -4795,9 +4803,10 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
           {tab === 'transcript' && <TranscriptTab key={gradesSemester ?? 'all'} sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} token={token} initialSemester={gradesSemester} />}
           {tab === 'support'    && <SupportTab token={token} defaultEmail={sduData.profile?.email || ''} page="student" />}
           {tab === 'insights'   && <InsightsTab token={token} sduStatus={sduStatus} onConnect={handleSduConnect} />}
+          {tab === 'monitoring' && <MonitoringTab api={api} token={token} sduStatus={sduStatus} onConnect={handleSduConnect} onSync={handleSduSync} syncing={sduLoading} version={syncVersion} />}
           {tab === 'goals'      && <GoalsTab token={token} onOpenWhatIf={course => setShowWhatIf(course || true)} />}
           {tab === 'summary'    && <SummaryTab token={token} userName={user?.name || sduData.profile?.fullname || ''} />}
-          {tab === 'attendance' && <AttendanceTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} />}
+          {tab === 'attendance' && <AttendanceTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onSync={handleSduSync} />}
           {tab === 'profile'    && <SduProfileTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onDisconnect={handleSduDisconnect} onRefresh={loadSduLiveData} user={user} token={token} />}
           {tab === 'alerts'     && <AlertsTab    token={token} onUnreadChange={setUnread} onSelectTab={setTab} />}
         </main>

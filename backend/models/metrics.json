@@ -1,0 +1,33 @@
+{
+  "version": "20261122-113613",
+  "params": {
+    "n_estimators": 150,
+    "max_depth": 7,
+    "min_samples_leaf": 3,
+    "random_state": 42
+  },
+  "features": [
+    "attendance_pct",
+    "max_absence_pct",
+    "absent_hours",
+    "pending_hours",
+    "avg_grade",
+    "min_grade",
+    "grade_trend",
+    "missed_deadlines",
+    "low_grade_courses"
+  ],
+  "data_source": "public:uci-student-performance (1044 real students)",
+  "gpa_model_data": "public",
+  "accuracy": 0.9665,
+  "f1": 0.9683,
+  "precision": 0.9386,
+  "recall": 1.0,
+  "roc_auc": 0.9863,
+  "gpa_mae": 0.2467,
+  "baseline_logreg_accuracy": 0.9665,
+  "baseline_logreg_f1": 0.9683,
+  "train_rows": 835,
+  "test_rows": 209,
+  "at_risk_share": 0.511
+}

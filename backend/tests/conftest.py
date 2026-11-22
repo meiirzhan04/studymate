@@ -1,5 +1,8 @@
 import os
 
+# A developer's .env must never reach the tests (it could hold the real DATABASE_URL)
+os.environ.setdefault("STUDYMATE_SKIP_DOTENV", "1")
+
 # Demo SDU data is opt-in; the test-suite relies on it
 os.environ.setdefault("ENABLE_DEMO_MODE", "1")
 

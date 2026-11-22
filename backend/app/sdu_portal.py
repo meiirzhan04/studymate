@@ -285,6 +285,27 @@ def parse_course_journal(html: str, today: Optional[date] = None) -> Optional[di
     return counts
 
 
+def parse_journal_sessions(html: str, today: Optional[date] = None) -> dict:
+    """Every class hour of a course journal with its own status, keeping "Not submitted" apart.
+
+    A past hour nobody marked yet is `pending` (the teacher has not submitted it): it is neither an
+    absence nor attendance, so the risk model can weigh it separately. Hours still ahead are `upcoming`.
+    """
+    today_iso = (today or datetime.now(ALMATY).date()).isoformat()
+    sessions = []
+    for row in _soup(html).find_all("tr"):
+        cells = row.find_all("td", recursive=False)
+        if len(cells) < 5:
+            continue
+        match = JOURNAL_DATE.match(_text(cells[1]))
+        if not match:
+            continue
+        day = date(int(match.group(3)), int(match.group(2)), int(match.group(1))).isoformat()
+        status = _session_status(cells[-1]) or ("pending" if day < today_iso else "upcoming")
+        sessions.append({"date": day, "status": status})
+    return {"pending": sum(s["status"] == "pending" for s in sessions), "sessions": sessions}
+
+
 def _journal_data(text: str) -> Optional[str]:
     try:
         payload = json.loads(text)
@@ -493,6 +514,7 @@ async def _journal_attendance(client: httpx.AsyncClient, grades: list[dict], stu
         counts = parse_course_journal(data) if data else None
         if counts:
             item.update({k: counts[k] for k in ("hours", "present", "absent", "permitted", "remaining")})
+            item.update(parse_journal_sessions(data))
             if item.get("absence_percent") is None and counts["hours"]:
                 item["absence_percent"] = round(counts["absent"] / counts["hours"] * 100, 1)
     return items

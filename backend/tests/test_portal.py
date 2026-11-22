@@ -316,3 +316,23 @@ def test_journal_hours_make_attendance_goals_exact():
     assert goals.evaluate_attendance_course(row, 98)["maximum"] == 97.7
     out = goals.evaluate_attendance_course(row, 95)
     assert out["remaining"] == 15 and out["affordable"] == 1 and out["must_attend"] == 14
+
+
+def _every_stored_value():
+    """All text in every table of the database, as one string (works on SQLite and Postgres)."""
+    from app import db as dbmod
+    with repo.connect() as db:
+        if dbmod.BACKEND == "postgres":
+            tables = [r[0] for r in db.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")]
+        else:
+            tables = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")]
+        return "\n".join(str(v) for t in tables for row in db.execute(f"SELECT * FROM {t}") for v in tuple(row.values() if hasattr(row, "values") else row))
+
+
+def test_sdu_password_is_found_nowhere_in_the_database(portal):
+    """The strongest proof that it is never stored: after a full sign-in + sync, search every table for it."""
+    data = sign_in(portal)
+    client.post("/api/sdu/sync", headers={"Authorization": f"Bearer {data['access_token']}"})
+    stored = _every_stored_value()
+    assert "200000001" in stored                       # the search covers real data (the student exists)
+    assert portal.password not in stored

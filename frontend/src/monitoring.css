@@ -1,0 +1,88 @@
+/* Monitoring tab. Uses the app's design tokens, so light and dark themes work without extra rules. */
+.mon-page { gap: 16px; }
+.mon-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.mon-span { grid-column: 1 / -1; }
+.mon-card { padding: 18px 20px; }
+.mon-card .group-head { margin: -4px 0 12px; padding: 0; border: 0; }
+.mon-small { font-size: 13px; line-height: 1.5; margin: 0 0 10px; }
+.mon-empty { color: var(--text-muted); font-size: 14px; padding: 6px 0; margin: 0 0 8px; }
+.mon-sub { font-size: 12.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 16px 0 8px; }
+
+.mon-syncbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.mon-sync-text { font-size: 13.5px; color: var(--text-secondary); }
+
+.mon-pill { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.mon-pill-success { background: var(--success-soft); color: var(--success); }
+.mon-pill-warning { background: var(--warning-soft); color: var(--warning); }
+.mon-pill-danger  { background: var(--danger-soft);  color: var(--danger); }
+.mon-pill-neutral { background: var(--neutral-soft); color: var(--text-secondary); }
+
+/* Safe to skip */
+.mon-skip-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 16px; }
+.mon-skip-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.mon-skip-head .mon-pill { margin-left: auto; }
+.mon-bar { position: relative; height: 10px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.mon-bar-fill { height: 100%; border-radius: inherit; transition: width .35s var(--ease); }
+.mon-fill-success { background: var(--success); } .mon-fill-warning { background: var(--warning); } .mon-fill-danger { background: var(--danger); } .mon-fill-neutral { background: var(--neutral); }
+.mon-bar-pending { position: absolute; top: 0; bottom: 0; background: repeating-linear-gradient(135deg, var(--warning-soft) 0 4px, transparent 4px 8px); border-left: 1px dashed var(--warning); }
+.mon-skip-foot { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 16px; margin-top: 6px; font-size: 13px; color: var(--text-secondary); }
+.mon-pending-note { color: var(--warning); }
+
+/* Risk */
+.mon-risk-top { display: flex; align-items: flex-end; gap: 28px; flex-wrap: wrap; }
+.mon-risk-value { font-size: 34px; font-weight: 700; line-height: 1.1; letter-spacing: -.02em; }
+.tone-success { color: var(--success); } .tone-warning { color: var(--warning); } .tone-danger { color: var(--danger); }
+.mon-reasons { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.mon-reasons li { display: grid; grid-template-columns: minmax(0, 1fr) 80px 64px; gap: 10px; align-items: center; font-size: 13.5px; }
+.mon-reasons li b { text-align: right; font-variant-numeric: tabular-nums; color: var(--danger); font-size: 12.5px; }
+.mon-reason-bar { height: 6px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.mon-reason-bar i { display: block; height: 100%; background: var(--danger); border-radius: inherit; }
+
+/* Simulation */
+.mon-sim-controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; align-items: end; }
+.mon-slider { display: flex; flex-direction: column; gap: 8px; font-size: 13.5px; }
+.mon-slider span { display: flex; justify-content: space-between; color: var(--text-secondary); }
+.mon-slider b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.mon-slider input[type=range] { width: 100%; accent-color: var(--accent); }
+.mon-select { display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; color: var(--text-secondary); }
+.mon-sim-result { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 18px 0 6px; }
+.mon-sim-num { font-size: 28px; font-weight: 700; letter-spacing: -.02em; }
+.mon-delta { font-size: 14px; font-weight: 600; color: var(--success); margin-left: 4px; }
+.mon-delta.down { color: var(--danger); }
+.mon-sim-msg { margin: 8px 0 12px; font-size: 14px; color: var(--text-secondary); }
+.mon-sim-msg.bad { color: var(--danger); font-weight: 600; }
+.mon-chart { margin-top: 6px; }
+.mon-legend { margin-top: 4px; display: flex; gap: 16px; justify-content: center; font-size: 12px; color: var(--text-muted); }
+.mon-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
+
+/* Alerts */
+.mon-alerts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.mon-alert { padding: 10px 12px; border-radius: var(--radius); border: 1px solid var(--border); border-left-width: 4px; background: var(--surface); }
+.mon-alert p { margin: 6px 0 0; font-size: 13.5px; line-height: 1.5; color: var(--text-secondary); }
+.mon-alert-danger { border-left-color: var(--danger); } .mon-alert-warning { border-left-color: var(--warning); } .mon-alert-neutral { border-left-color: var(--neutral); }
+
+.mon-curator { display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; }
+.mon-curator > div { display: flex; gap: 8px; }
+.mon-curator .input { flex: 1; min-width: 0; }
+
+/* Overview widget */
+.mon-widget { display: flex; justify-content: space-between; gap: 16px; align-items: center; flex-wrap: wrap; padding: 16px 20px; }
+.mon-widget-main { display: flex; flex-direction: column; gap: 2px; }
+.mon-widget-side { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; text-align: right; max-width: 340px; }
+
+@media (max-width: 760px) {
+  .mon-grid { grid-template-columns: minmax(0, 1fr); }
+  .mon-sim-controls { grid-template-columns: minmax(0, 1fr); }
+  .mon-reasons li { grid-template-columns: minmax(0, 1fr) 56px; }
+  .mon-reasons li .mon-reason-bar { display: none; }
+  .mon-widget-side { align-items: flex-start; text-align: left; }
+}
+@media (prefers-reduced-motion: reduce) { .mon-bar-fill { transition: none; } }
+
+.mon-summary { margin: 14px 0 0; font-size: 14.5px; line-height: 1.55; color: var(--text-primary); }
+.mon-helping li b { color: var(--success); }
+.mon-helping .mon-reason-bar i { background: var(--success); }
+
+/* Simulation: cost of one missed hour, and the empty risk history */
+.mon-cost { margin: 14px 0 0; padding: 10px 12px; border-radius: 12px; background: var(--accent-soft); font-size: 13px; line-height: 1.5; color: var(--text-secondary); }
+.mon-hist-empty { margin: 16px 0 0; font-size: 13px; color: var(--text-muted); }

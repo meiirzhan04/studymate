@@ -26,13 +26,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from .repository import LOW_GRADE_THRESHOLD, MIN_ATTENDANCE, SQLiteRepository
-from . import admin, pms_portal, sdu_client, sdu_mock, sdu_portal, moodle_calendar
+from . import admin, pms_portal, sdu_client, sdu_mock, sdu_portal, moodle_calendar, notify
 from . import deadlines as deadlines_mod
 from . import syllabi
 from . import academics
 from . import goals as goals_mod
 from . import summaries as summaries_mod
 from . import db as dbmod
+from . import monitoring, monitoring_store, monitoring_api
 
 
 class SduAuthorizeRequest(BaseModel):
@@ -514,11 +515,18 @@ def send_gmail_code(to_email: str, code: str) -> tuple[bool, str]:
 def send_email(to_email: str, subject: str, text: str) -> tuple[bool, str]:
     """Send a plain-text email (support replies). Returns (sent, reason).
 
+    0. Resend, when RESEND_API_KEY is set (the same service the risk alerts use).
     1. Vercel HTTPS relay (Render blocks outbound SMTP). The relay's message mode
        only works with MAILER_SECRET_KEY, so it can't be used as an open relay.
     2. Direct SMTP fallback.
     """
     subject = " ".join(subject.split())[:150]
+    resend_note = ""
+    if notify.configured():
+        sent, why = notify.send_resend(to_email, subject, text)
+        if sent:
+            return True, why
+        resend_note = f"{why}; "
     mailer_secret = os.getenv("MAILER_SECRET_KEY")
     relay_error = "MAILER_SECRET_KEY not set"
     if mailer_secret:
@@ -546,7 +554,10 @@ def send_email(to_email: str, subject: str, text: str) -> tuple[bool, str]:
     smtp_user = os.getenv("GMAIL_USER") or os.getenv("SMTP_USER") or "amirzhanmeirzhan5@gmail.com"
     smtp_pass = (os.getenv("GMAIL_APP_PASSWORD") or os.getenv("SMTP_PASSWORD") or "").replace(" ", "")
     if not smtp_user or not smtp_pass:
-        return False, f"{relay_error}; SMTP credentials not configured"
+        if not resend_note and not mailer_secret:
+            return False, ("E-mail is not set up on this server. Add RESEND_API_KEY to backend/.env "
+                           "(see docs/MONITORING.md), then restart the backend.")
+        return False, f"{resend_note}{relay_error}; SMTP credentials not configured"
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
@@ -560,6 +571,9 @@ def send_email(to_email: str, subject: str, text: str) -> tuple[bool, str]:
         return True, "Sent via SMTP"
     except Exception as exc:
         return False, f"{relay_error}; SMTP failed: {exc}"[:300]
+
+
+deliver_email = send_email   # tests replace `send_email`; this alias keeps the real function reachable
 
 
 # ─── SUPPORT TICKETS ─────────────────────────────────────────────────────────
@@ -1396,6 +1410,7 @@ async def sdu_sync(user: Annotated[User, Depends(current_user)], auto: bool = Qu
         )
         repo.save_snapshot(user.id, "synced", {})
         refresh_goal_alerts(user)
+        monitoring_after_sync(user, sdu_mock.attendance().get("attendance"))
         return {"ok": True, "connected": True, "synced": True, "demo_mode": True, "updated_at": res.get("updated_at"),
                 "new_notifications": res.get("new_notifications", 0)}
 
@@ -1438,10 +1453,22 @@ async def sdu_sync(user: Annotated[User, Depends(current_user)], auto: bool = Qu
     )
     repo.save_snapshot(user.id, "synced", {})
     refresh_goal_alerts(user)
+    monitoring_after_sync(user, att_data.get("attendance") if isinstance(att_data, dict) else None)
     return {"ok": True, "connected": True, "synced": True, "updated_at": res.get("updated_at"), "new_notifications": res.get("new_notifications", 0)}
 
 
 AUTO_SYNC_INTERVAL_SECONDS = 10 * 60
+
+
+def monitoring_after_sync(user: User, attendance: Optional[list]) -> None:
+    """Keep the per-hour attendance log (incl. "Not submitted" hours) and refresh the risk history.
+
+    Never lets a monitoring problem break the SDU sync itself."""
+    try:
+        monitoring_store.save_attendance_log(repo, user.student_id, attendance)
+        monitoring_api.record_current_risk(user)
+    except Exception:
+        logging.getLogger("studymate.monitoring").exception("post-sync monitoring step failed")
 
 
 def seconds_since(iso_time: Optional[str]) -> float:
@@ -2509,6 +2536,66 @@ def attendance_performance(user: Annotated[User, Depends(require_role("teacher")
 # Admin panel (/admin page + /api/admin/*) must be registered before the SPA catch-all below.
 app.include_router(admin.create_admin_router(repo, sign, sdu_client.SDU_ORIGIN, sdu_client.SDU_CLIENT_ID,
                                             lambda to, subject, text: send_email(to, subject, text)))
+
+
+# ─── Monitoring tab, risk model and e-mail alerts (see monitoring_api.py) ────────────────────────
+def monitoring_grades(student_id: str, user_id: str) -> dict:
+    """Current course scores, names and the score trend (points per term) for the risk model."""
+    courses = student_courses(student_id, "spring-2026")
+    names = {c["code"]: c["course"] for c in courses}
+    by_term: dict[int, list[float]] = {}
+    for c in (repo.get_snapshot(user_id, "transcript") or {}).get("courses") or []:
+        try:
+            semester, percent = int(c.get("semester")), float(c.get("grade_percent") if c.get("grade_percent") is not None else c.get("grade"))
+        except (TypeError, ValueError):
+            continue
+        by_term.setdefault(semester, []).append(percent)
+    means = [sum(v) / len(v) for _, v in sorted(by_term.items())][-4:]
+    trend = None
+    if len(means) >= 2:
+        n = len(means)
+        mx, my = (n - 1) / 2, sum(means) / n
+        trend = sum((i - mx) * (m - my) for i, m in enumerate(means)) / sum((i - mx) ** 2 for i in range(n))
+    graded = [c for c in courses if c["score"] is not None]
+    credits = sum(c["credits"] for c in graded)
+    gpa = sum(grade_point(c["score"]) * c["credits"] for c in graded) / credits if credits else None
+    return {"scores": [c["score"] for c in graded], "names": names, "trend": trend, "gpa": gpa}
+
+
+def monitoring_user_for_student(student_id: str) -> Optional[dict]:
+    with repo.connect() as db:
+        row = db.execute("SELECT id, name FROM users WHERE student_id = ? AND role = 'student'", (student_id,)).fetchone()
+        return dict(row) if row else None
+
+
+app.include_router(monitoring_api.build_router(
+    repo=repo, current_user=current_user, require_role=require_role, grades=monitoring_grades,
+    last_synced=lambda user_id: (repo.get_sdu_connection(user_id) or {}).get("updated_at"),
+    fallback_sender=lambda to, subject, text: send_email(to, subject, text),
+    teacher_scope=lambda user: repo.teacher_scope.get(user.teacher_id, set()),
+    user_for_student=monitoring_user_for_student))
+
+
+@app.get("/api/monitoring/forecast")
+def monitoring_forecast(user: Annotated[User, Depends(require_role("student"))], semester: str = Query("spring-2026"), limit: int = Query(5, ge=1, le=12)):
+    """Forecast chart data for the hardest subjects: lowest current scores first, with the final-grade range
+    from the existing forecast and each course's attendance standing from the class-hour counts."""
+    base = student_forecast(user, semester)["items"]
+    inputs = monitoring_api.student_inputs(user.id, user.student_id)
+    standing = {c["code"]: c for c in monitoring.safe_to_skip(inputs["courses"])["items"]}
+    rows = []
+    for item in sorted((i for i in base if i["current_score"] is not None), key=lambda i: i["current_score"])[:limit]:
+        f = item["forecast"]
+        shown = f.get("status") in ("predicted", "final")
+        att = standing.get(item["code"])
+        rows.append({"course": item["course"], "code": item["code"], "current_score": item["current_score"],
+                     "forecast_status": f.get("status"),
+                     "predicted_score": f.get("predicted_score") if shown else None,
+                     "low": f.get("low") if shown else None, "high": f.get("high") if shown else None,
+                     "letter": f.get("letter") if shown else None,
+                     "attendance_level": att["level"] if att else None,
+                     "remaining_skips": att["remaining_skips"] if att else None})
+    return {"semester": semester, "items": rows, "min_completion": round(academics.FORECAST_MIN_COMPLETION * 100)}
 
 
 # In production the frontend build is copied here by the container build.
