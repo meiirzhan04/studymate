@@ -49,6 +49,34 @@ export function toggleTask(tasks, id) {
   return tasks.map(t => (t.id === id ? { ...t, done: !t.done } : t))
 }
 
+/** Edit an existing task without changing its completion status. */
+export function editTask(tasks, id, title) {
+  const clean = String(title ?? '').trim()
+
+  if (!clean) {
+    return { tasks, error: 'Enter a task title.' }
+  }
+
+  if (clean.length > TASK_TITLE_LIMIT) {
+    return {
+      tasks,
+      error: `Keep the title under ${TASK_TITLE_LIMIT} characters.`
+    }
+  }
+
+  return {
+    tasks: tasks.map(t =>
+      t.id === id ? { ...t, title: clean } : t
+    ),
+    error: null
+  }
+}
+
+/** Remove a task from the checklist. */
+export function deleteTask(tasks, id) {
+  return tasks.filter(t => t.id !== id)
+}
+
 export function taskSummary(tasks) {
   const done = tasks.filter(t => t.done).length
   return { done, total: tasks.length }
