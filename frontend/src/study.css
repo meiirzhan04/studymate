@@ -1,0 +1,49 @@
+/* Personal study tools (US-27 … US-32) */
+
+.study-add { display: flex; gap: 8px; align-items: center; }
+.study-add .input { flex: 1; min-width: 0; }
+.study-error { margin-top: 6px; font-size: 12.5px; color: var(--danger); }
+.study-empty { margin-top: 12px; font-size: 13px; }
+.study-tasks { margin-top: 8px; }
+.study-tasks .task { align-items: center; }
+
+/* Focus timer */
+.timer-face {
+  margin: 8px 0 4px; text-align: center; font-size: 44px; font-weight: 600; letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums; color: var(--text-primary);
+}
+.timer-paused { color: var(--text-muted); }
+.timer-done { color: var(--success); }
+.timer-controls { display: flex; justify-content: center; gap: 8px; }
+.timer-note { margin-top: 12px; text-align: center; font-size: 13px; }
+
+/* Course notes (inside the course dialog) */
+.course-note { margin-top: 4px; padding-top: 16px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+.course-note .section-title { margin: 0; }
+.note-foot { display: flex; align-items: center; gap: 12px; }
+.note-count { font-size: 12.5px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.note-count.at-limit { color: var(--warning, var(--danger)); font-weight: 500; }
+.note-state { flex: 1; font-size: 12.5px; }
+.note-foot .btn-primary { margin-left: auto; }
+
+/* Pinned courses: a leading pin column in the course list */
+.course-row-pinnable { grid-template-columns: 28px minmax(0, 1fr) 56px 44px; gap: 12px; }
+.course-row-pinnable:has(.grade-wide) { grid-template-columns: 28px minmax(0, 1fr) auto; }
+.course-row-pinned { background: var(--accent-soft); }
+.pin-btn {
+  display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0;
+  border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); cursor: pointer;
+}
+.pin-btn:hover { background: var(--surface-2); color: var(--text-primary); }
+.pin-btn.pinned { color: var(--accent-text, var(--accent)); }
+.pin-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Upcoming deadlines: course filter and CSV */
+.up-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.deadline-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.select-sm { height: 30px; max-width: 170px; font-size: 12.5px; }
+
+@media (max-width: 720px) {
+  .timer-face { font-size: 38px; }
+  .select-sm { max-width: 100%; }
+}

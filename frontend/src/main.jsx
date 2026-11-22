@@ -10,6 +10,8 @@ import { calcGPA, calcCompletedCredits, ectsOf } from './gpa.js'
 import { STATUS_LABEL, STATUS_TONE, checkTarget, progressPct, reachLine, serverFieldErrors, simulateCourse } from './goals.js'
 import { DifficultForecast, MonitoringTab, PredictedGpaWidget, SyncBar } from './Monitoring.jsx'
 import { UNKNOWN_DAY, classLocation, classTimes, findNextClass, getDayOrder, mergeBlocks, normalizeSchedule, sortSchedule } from './schedule.js'
+import { ALL_COURSES, courseKey, courseOptions, filterDeadlines, orderByPins } from './study.js'
+import { CourseNote, DeadlineTools, FocusTimerCard, PinToggle, StudyChecklistCard, usePins } from './StudyTools.jsx'
 
 /* ─── API helper ──────────────────────────────────────────────────── */
 const RENDER_BACKEND_URL = 'https://studymate-knap.onrender.com'
@@ -2052,12 +2054,18 @@ function MoodleConnectModal({ token, moodleConnected, reason, onClose, onDone })
   )
 }
 
-function ComingUpCard({ nextInfo, scheduleFailed, deadlines, onOpenSchedule, onOpenMoodle }) {
+function ComingUpCard({ nextInfo, scheduleFailed, deadlines, studentCourses = [], onOpenSchedule, onOpenMoodle }) {
   const [showAll, setShowAll] = useState(false)
+  const [courseFilter, setCourseFilter] = useState(ALL_COURSES)   // US-32: view only, records are never edited
   const c = nextInfo?.course
   const { data, err } = deadlines
   const upcoming = data?.upcoming || []
-  const visible = showAll ? upcoming : upcoming.slice(0, 3)
+  const deadlineCourse = d => (d.course ? stripTeacher(d.course) : d.type)
+  const options = courseOptions(studentCourses, upcoming, stripTeacher)
+  // A choice that vanished after a refresh (course gone from the list) falls back to all courses
+  const activeFilter = courseFilter === ALL_COURSES || options.some(o => o.value === courseFilter) ? courseFilter : ALL_COURSES
+  const filtered = filterDeadlines(upcoming, activeFilter, stripTeacher)
+  const visible = showAll ? filtered : filtered.slice(0, 3)
 
   return (
     <article className="card card-fill">
@@ -2084,7 +2092,19 @@ function ComingUpCard({ nextInfo, scheduleFailed, deadlines, onOpenSchedule, onO
       )}
 
       <div className="up-section">
-        <span className="up-label">Deadlines this week</span>
+        <div className="up-head">
+          <span className="up-label">Deadlines this week</span>
+          {data?.available && !err && (
+            <DeadlineTools
+              options={options}
+              selected={activeFilter}
+              onSelect={v => { setCourseFilter(v); setShowAll(false) }}
+              upcoming={upcoming}
+              courseLabel={deadlineCourse}
+              emptyId="deadlines-empty"
+            />
+          )}
+        </div>
         {err || (data && !data.available) ? (
           <p className="muted up-empty">
             {err || (data?.moodle_connected ? data.reason : 'Moodle is not connected.')}{' '}
@@ -2097,7 +2117,11 @@ function ComingUpCard({ nextInfo, scheduleFailed, deadlines, onOpenSchedule, onO
         ) : !data ? (
           <div className="skeleton" style={{ height: 40, marginTop: 8 }} />
         ) : !upcoming.length ? (
-          <p className="muted up-empty">Nothing due in the next 7 days.</p>
+          <p id="deadlines-empty" className="muted up-empty">Nothing due in the next 7 days.</p>
+        ) : !filtered.length ? (
+          <p className="muted up-empty">
+            {options.find(o => o.value === activeFilter)?.label || 'This course'} has no upcoming deadlines.
+          </p>
         ) : (
           <ul className="deadline-list">
             {visible.map(d => (
@@ -2105,16 +2129,16 @@ function ComingUpCard({ nextInfo, scheduleFailed, deadlines, onOpenSchedule, onO
                 <span className="deadline-dot" />
                 <div className="course-main">
                   <b>{d.title}</b>
-                  <span>{d.course ? stripTeacher(d.course) : d.type}</span>
+                  <span>{deadlineCourse(d)}</span>
                 </div>
                 <span className="deadline-when">{dueLabel(d.due_at)}</span>
               </li>
             ))}
           </ul>
         )}
-        {upcoming.length > 3 && (
+        {filtered.length > 3 && (
           <button type="button" className="link-btn up-more" onClick={() => setShowAll(v => !v)}>
-            {showAll ? 'Show less' : `Show all ${upcoming.length}`}
+            {showAll ? 'Show less' : `Show all ${filtered.length}`}
           </button>
         )}
         {data?.overdue?.length > 0 && (
@@ -2154,7 +2178,7 @@ function AttentionCard({ items, onSelect }) {
   )
 }
 
-function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token, onOpenCourses, syncVersion, deadlines, onOpenMoodle }) {
+function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token, userId, onOpenCourses, syncVersion, deadlines, onOpenMoodle }) {
   const [recommendations, setRecommendations] = useState([])
   const [semester, setSemester] = useState(null)
   const connected = !!sduStatus?.connected
@@ -2271,8 +2295,14 @@ function DashboardTab({ sduData, sduLoading, sduStatus, onConnect, setTab, token
       {connected && <PredictedGpaWidget api={api} token={token} version={syncVersion} onOpen={() => setTab('monitoring')} />}
 
       <section className="split split-even">
-        <ComingUpCard nextInfo={findNextClass(sduData.schedule || [])} scheduleFailed={!!sduData.scheduleIssue && !sduData.schedule?.length} deadlines={deadlines} onOpenSchedule={() => setTab('schedule')} onOpenMoodle={onOpenMoodle} />
+        <ComingUpCard nextInfo={findNextClass(sduData.schedule || [])} scheduleFailed={!!sduData.scheduleIssue && !sduData.schedule?.length} deadlines={deadlines}
+                      studentCourses={transcript.filter(c => Number(c.semester) === currentSemester).map(c => c.course_name).filter(Boolean)}
+                      onOpenSchedule={() => setTab('schedule')} onOpenMoodle={onOpenMoodle} />
         <AttentionCard items={attention} onSelect={setTab} />
+      </section>
+      <section className="split split-even">
+        <StudyChecklistCard userId={userId} />
+        <FocusTimerCard />
       </section>
       <WeeklySummaryCard token={token} onOpen={() => setTab('summary')} />
     </div>
@@ -2556,10 +2586,11 @@ function ForecastCard({ token }) {
   )
 }
 
-function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, token, initialSemester }) {
+function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, token, userId, initialSemester }) {
   const [semester, setSemester] = useState(initialSemester != null ? String(initialSemester) : null)
   const [view, setView] = useState('list')
   const [breakdownFor, setBreakdownFor] = useState(null)
+  const [pins, togglePinned] = usePins(userId)   // US-30
   const transcript = sduData.transcript || []
 
   const groups = useMemo(() => {
@@ -2677,18 +2708,20 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, token, initi
               <span>{g.gpa != null ? `GPA ${g.gpa.toFixed(2)} · ` : ''}{g.credits} ECTS</span>
             </header>
             <ul className="course-list">
-              {g.courses.map((c, idx) => {
+              {orderByPins(g.courses, pins).map((c, idx) => {
                 const score = c.grade_percent ?? c.grade
+                const pinned = pins.includes(courseKey(c))
                 return (
                   <li
-                    key={idx}
-                    className="course-row course-row-clickable"
+                    key={`${courseKey(c)}-${idx}`}
+                    className={`course-row course-row-pinnable course-row-clickable${pinned ? ' course-row-pinned' : ''}`}
                     role="button"
                     tabIndex={0}
                     onClick={() => setBreakdownFor(c)}
                     onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && setBreakdownFor(c)}
                     title="Show grade breakdown"
                   >
+                    <PinToggle pinned={pinned} courseName={c.course_name} onToggle={() => togglePinned(courseKey(c))} />
                     <div className="course-main">
                       <b>{courseTitle(c.course_name, c.course_code)}</b>
                       <span>
@@ -2711,7 +2744,7 @@ function TranscriptTab({ sduData, sduLoading, sduStatus, onConnect, token, initi
           </article>
         ))
       )}
-      {breakdownFor && <BreakdownModal token={token} course={breakdownFor} onClose={() => setBreakdownFor(null)} />}
+      {breakdownFor && <BreakdownModal token={token} userId={userId} course={breakdownFor} onClose={() => setBreakdownFor(null)} />}
     </div>
   )
 }
@@ -2758,7 +2791,7 @@ function WeightBar({ parts }) {
   )
 }
 
-function BreakdownModal({ token, course, onClose }) {
+function BreakdownModal({ token, userId, course, onClose }) {
   const [state, setState] = useState({ loading: true, parts: [], source: null, label: null })
 
   useEffect(() => {
@@ -2833,6 +2866,7 @@ function BreakdownModal({ token, course, onClose }) {
               </table>
             </>
           )}
+          <CourseNote key={courseKey(course)} userId={userId} course={course} />
         </div>
       </div>
     </div>
@@ -4796,11 +4830,11 @@ function Student({ token, user, logout, onUpdateUser, theme, toggleTheme }) {
         </header>
 
         <main className="content">
-          {tab === 'dashboard'  && <DashboardTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} setTab={setTab} token={token} syncVersion={syncVersion}
+          {tab === 'dashboard'  && <DashboardTab sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} setTab={setTab} token={token} userId={user?.id} syncVersion={syncVersion}
                                        deadlines={deadlines} onOpenMoodle={() => setShowMoodleConnect(true)}
                                        onOpenCourses={sem => { setGradesSemester(sem); setTab('transcript') }} />}
           {tab === 'schedule'   && <ScheduleTab  sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} onRetry={loadSduLiveData} />}
-          {tab === 'transcript' && <TranscriptTab key={gradesSemester ?? 'all'} sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} token={token} initialSemester={gradesSemester} />}
+          {tab === 'transcript' && <TranscriptTab key={gradesSemester ?? 'all'} sduData={sduData} sduLoading={sduLoading} sduStatus={sduStatus} onConnect={handleSduConnect} token={token} userId={user?.id} initialSemester={gradesSemester} />}
           {tab === 'support'    && <SupportTab token={token} defaultEmail={sduData.profile?.email || ''} page="student" />}
           {tab === 'insights'   && <InsightsTab token={token} sduStatus={sduStatus} onConnect={handleSduConnect} />}
           {tab === 'monitoring' && <MonitoringTab api={api} token={token} sduStatus={sduStatus} onConnect={handleSduConnect} onSync={handleSduSync} syncing={sduLoading} version={syncVersion} />}
