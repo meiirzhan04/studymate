@@ -145,8 +145,16 @@ def grade_features(scores: list[float], trend: Optional[float]) -> dict:
     return out
 
 
-PENDING_WEIGHT = 0.5      # a "Not submitted" hour counts as half an absence: it may still be marked absent
+PENDING_PRIOR_RATE = 0.15
+PENDING_PRIOR_HOURS = 4
 TERM_WEEKS = 15           # an SDU term is about 15 weeks: class hours / 15 = hours a week
+
+
+def pending_weight(course: dict) -> float:
+    """Estimate the share of unmarked hours that may become absences for this course."""
+    marked_hours = course["present"] + course["absent"] + course["permitted"]
+    prior_absences = PENDING_PRIOR_RATE * PENDING_PRIOR_HOURS
+    return (course["absent"] + prior_absences) / (marked_hours + PENDING_PRIOR_HOURS)
 
 
 def course_pressures(courses: list[dict]) -> list[float]:
@@ -158,7 +166,7 @@ def course_pressures(courses: list[dict]) -> list[float]:
     out = []
     for c in courses:
         limit = absence_limit(c["hours"])
-        used = c["absent"] + PENDING_WEIGHT * c["pending"]
+        used = c["absent"] + pending_weight(c) * c["pending"]
         out.append(round(min(used / limit if limit else (1.25 if used > 0 else 0.0), 1.25), 4))
     return out
 
@@ -214,7 +222,8 @@ def score(features: dict) -> dict:
             result["reasons"] = sorted([*result["reasons"], {
                 "feature": "attendance_pressure", "label": "Absence limit used", "value": used,
                 "impact": round(delta * 100, 1),
-                "text": f"You have used {used}% of the absences allowed before FX ('Not submitted' hours count as half)"}],
+                "text": f"Estimated attendance pressure is {used}% of the absences allowed before FX "
+                        "(unmarked hours are weighted by your absence rate in each course)"}],
                 key=lambda r: -r["impact"])[:3]
         if pressure >= 0.3:
             result["helping"] = [h for h in result["helping"] if h["feature"] not in ("attendance_pct", "max_absence_pct", "absent_hours")]
