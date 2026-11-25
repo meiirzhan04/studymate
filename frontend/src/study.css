@@ -47,3 +47,339 @@
   .timer-face { font-size: 38px; }
   .select-sm { max-width: 100%; }
 }
+
+/* Focus Timer V2 */
+
+.focus-timer-v2 {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 22px;
+  border-radius: 20px;
+}
+
+.focus-mode-selector {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.focus-mode-selector button {
+  padding: 12px 6px;
+  font-size: 13px;
+  border-radius: 10px;
+  box-shadow: none;
+  transition: all 0.2s ease;
+}
+
+.focus-mode-selector .btn-primary,
+.focus-presets .btn-primary {
+  background: rgba(128, 128, 128, 0.2);
+  color: inherit;
+  border-color: transparent;
+  font-weight: 600;
+}
+
+.focus-circle-wrapper {
+  display: flex;
+  justify-content: center;
+  padding: 12px 0;
+}
+
+.focus-circle {
+  position: relative;
+  width: 230px;
+  max-width: 100%;
+  aspect-ratio: 1;
+}
+
+.focus-circle svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.focus-circle-track {
+  fill: none;
+  stroke: rgba(128, 128, 128, 0.15);
+  stroke-width: 7;
+}
+
+.focus-circle-progress {
+  fill: none;
+  stroke: #818cf8;
+  stroke-width: 7;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.25s linear;
+}
+
+.focus-circle-content {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.focus-time {
+  font-size: 48px;
+  font-weight: 700;
+  letter-spacing: -1.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.focus-circle-label {
+  font-size: 13px;
+  opacity: 0.65;
+}
+
+.focus-presets {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.focus-presets button {
+  padding: 11px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  box-shadow: none;
+}
+
+.focus-custom-time {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+}
+
+.focus-custom-time .input {
+  width: 90px;
+  min-width: 0;
+  text-align: center;
+  border-radius: 10px;
+}
+
+.focus-custom-time button {
+  white-space: nowrap;
+  border-radius: 10px;
+}
+
+.focus-timer-v2 .timer-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 12px;
+  background: rgba(128, 128, 128, 0.06);
+}
+
+.focus-timer-v2 .timer-controls button:first-child {
+  flex: 1;
+  text-align: center;
+  padding: 13px;
+  border-radius: 9px;
+}
+
+.focus-timer-v2 .timer-controls button {
+  box-shadow: none;
+}
+
+.focus-auto-break {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.focus-auto-break input {
+  accent-color: #818cf8;
+  width: 15px;
+  height: 15px;
+}
+
+.focus-session-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid rgba(128, 128, 128, 0.2);
+  padding: 18px 4px 4px;
+}
+
+.focus-session-stats span {
+  font-size: 13px;
+  opacity: 0.7;
+}
+
+.focus-session-stats strong {
+  font-size: 21px;
+  font-weight: 600;
+}
+
+.focus-session-stats strong::after {
+  content: ' sessions';
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.focus-timer-v2 button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.focus-timer-v2 .timer-note {
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+@media (max-width: 480px) {
+  .focus-timer-v2 {
+    padding: 14px;
+  }
+
+  .focus-circle {
+    width: 200px;
+  }
+
+  .focus-time {
+    font-size: 40px;
+  }
+
+  .focus-mode-selector button {
+    font-size: 11px;
+  }
+}
+
+
+/* Deadline Export V2 */
+
+.deadline-export {
+  position: relative;
+}
+
+.deadline-export-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 14px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: #6942cf;
+  color: #fff;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.deadline-export-btn:hover {
+  background: #5933b9;
+}
+
+.deadline-export-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.export-chevron {
+  font-size: 15px;
+  margin-left: 2px;
+}
+
+.deadline-export-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 245px;
+  max-width: calc(100vw - 32px);
+  padding: 6px;
+  border: 1px solid var(--border, #e5e0f0);
+  border-radius: 14px;
+  background: var(--surface-1, #fff);
+  box-shadow: 0 12px 32px rgba(39, 33, 61, 0.14);
+  z-index: 100;
+  animation: export-menu-in 0.15s ease-out;
+}
+
+.deadline-export-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.deadline-export-option:hover {
+  background: var(--surface-2, #f3eeff);
+}
+
+.export-file-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.excel-icon {
+  background: #dcfce7;
+  color: #217346;
+}
+
+.csv-icon {
+  background: #ede9fe;
+  color: #6942cf;
+}
+
+.export-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.export-option-text strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.export-option-text small {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.export-divider {
+  height: 1px;
+  margin: 3px 8px;
+  background: var(--border, #e5e0f0);
+}
+
+@keyframes export-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+

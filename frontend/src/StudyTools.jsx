@@ -1,6 +1,7 @@
 
 import React, { useEffect, useId, useState } from 'react'
 import './study.css'
+import { downloadDeadlinesExcel } from './deadlineExport.js'
 import {
   ALL_COURSES, NOTE_LIMIT,
   addTask, editTask, deleteTask, deadlinesToCsv,
@@ -273,8 +274,22 @@ export function StudyChecklistCard({ userId }) {
 
 /* US-29: Study focus timer */
 
+
 export function FocusTimerCard() {
+  const [minutes, setMinutes] = useState(25)
+  const [customMinutes, setCustomMinutes] = useState('30')
+  const [mode, setMode] = useState('focus')
+  const [sessions, setSessions] = useState(0)
+  const [autoBreak, setAutoBreak] = useState(true)
+  const [message, setMessage] = useState('')
   const [timer, setTimer] = useState(() => idleTimer())
+
+  const { status } = timer
+
+  const duration =
+    mode === 'short' ? 5 :
+    mode === 'long' ? 15 :
+    minutes
 
   useEffect(() => {
     if (timer.status !== 'running') return
@@ -286,24 +301,188 @@ export function FocusTimerCard() {
     return () => clearInterval(id)
   }, [timer.status])
 
-  const { status } = timer
+  useEffect(() => {
+    if (status !== 'done') return
+
+    if (mode === 'focus') {
+      const completed = sessions + 1
+      setSessions(completed)
+      setMessage('Great job! Focus session completed.')
+
+      if (autoBreak) {
+        const nextMode =
+          completed % 4 === 0 ? 'long' : 'short'
+
+        const breakMinutes =
+          nextMode === 'long' ? 15 : 5
+
+        setMode(nextMode)
+        setTimer(idleTimer(breakMinutes * 60 * 1000))
+      }
+    } else {
+      setMessage('Break completed. Ready to focus again!')
+      setMode('focus')
+      setTimer(idleTimer(minutes * 60 * 1000))
+    }
+  }, [status])
+
+  const changeMode = nextMode => {
+    setMode(nextMode)
+    setMessage('')
+
+    const nextDuration =
+      nextMode === 'short' ? 5 :
+      nextMode === 'long' ? 15 :
+      minutes
+
+    setTimer(idleTimer(nextDuration * 60 * 1000))
+  }
+
+  const changeDuration = value => {
+    setMinutes(value)
+    setMode('focus')
+    setMessage('')
+    setTimer(idleTimer(value * 60 * 1000))
+  }
+
+  const applyCustomTime = () => {
+    const value = Number(customMinutes)
+
+    if (!Number.isInteger(value) || value < 1 || value > 180) {
+      setMessage('Enter a duration from 1 to 180 minutes.')
+      return
+    }
+
+    changeDuration(value)
+  }
+
+  const progress = Math.min(
+    100,
+    Math.max(
+      0,
+      (1 - timer.remainingMs / (duration * 60 * 1000)) * 100
+    )
+  )
+
+  const locked = status === 'running' || status === 'paused'
 
   return (
-    <article className="card card-fill study-card">
+    <article className="card card-fill study-card focus-timer-v2">
       <header className="card-head">
         <h2>Focus timer</h2>
         <span className="muted">
-          25-minute session
+          {duration}-minute session
         </span>
       </header>
 
-      <div
-        className={`timer-face timer-${status}`}
-        role="timer"
-        aria-label="Focus session time left"
-      >
-        {formatTimer(timer.remainingMs)}
+      <div className="focus-mode-selector">
+        {[
+          ['focus', 'Focus'],
+          ['short', 'Short Break'],
+          ['long', 'Long Break']
+        ].map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            className={mode === value ? 'btn-primary' : 'btn-ghost'}
+            onClick={() => changeMode(value)}
+            disabled={locked}
+          >
+            {label}
+          </button>
+        ))}
       </div>
+
+<div className="focus-circle-wrapper">
+  <div
+    className="focus-circle"
+    role="timer"
+    aria-label="Session time remaining"
+  >
+    <svg viewBox="0 0 240 240">
+      <circle
+        className="focus-circle-track"
+        cx="120"
+        cy="120"
+        r="108"
+      />
+
+      <circle
+        className="focus-circle-progress"
+        cx="120"
+        cy="120"
+        r="108"
+        pathLength="100"
+        strokeDasharray="100"
+        strokeDashoffset={progress}
+        transform="rotate(-90 120 120)"
+      />
+    </svg>
+
+    <div className="focus-circle-content">
+      <span className="focus-time">
+        {formatTimer(timer.remainingMs)}
+      </span>
+
+      <span className="focus-circle-label">
+        {status === 'paused'
+          ? 'Paused'
+          : status === 'done'
+            ? 'Completed'
+            : mode !== 'focus'
+              ? 'Time to relax'
+              : status === 'running'
+                ? 'Stay focused'
+                : 'Ready to focus'}
+      </span>
+    </div>
+  </div>
+</div>
+
+
+      {mode === 'focus' && (
+        <>
+          <div className="focus-presets">
+            {[15, 25, 45, 60].map(value => (
+              <button
+                key={value}
+                type="button"
+                className={
+                  minutes === value ? 'btn-primary' : 'btn-ghost'
+                }
+                onClick={() => changeDuration(value)}
+                disabled={locked}
+              >
+                {value} min
+              </button>
+            ))}
+          </div>
+
+          <div className="focus-custom-time">
+            <input
+              className="input"
+              type="number"
+              min="1"
+              max="180"
+              step="1"
+              value={customMinutes}
+              onChange={e => setCustomMinutes(e.target.value)}
+              placeholder="Minutes"
+              aria-label="Custom focus duration"
+              disabled={locked}
+            />
+
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={applyCustomTime}
+              disabled={locked}
+            >
+              Set time
+            </button>
+          </div>
+        </>
+      )}
 
       <div className="timer-controls">
         {status === 'running' ? (
@@ -320,9 +499,10 @@ export function FocusTimerCard() {
           <button
             type="button"
             className="btn-primary"
-            onClick={() =>
+            onClick={() => {
+              setMessage('')
               setTimer(t => startTimer(t, Date.now()))
-            }
+            }}
           >
             {status === 'paused' ? 'Resume' : 'Start'}
           </button>
@@ -331,28 +511,48 @@ export function FocusTimerCard() {
         <button
           type="button"
           className="btn-ghost"
-          onClick={() => setTimer(resetTimer())}
+          onClick={() => {
+            setTimer(resetTimer(duration * 60 * 1000))
+            setMessage('')
+          }}
           disabled={status === 'idle'}
         >
           Reset
         </button>
       </div>
 
-      <p
-        className="timer-note muted"
-        role="status"
-      >
-        {status === 'done'
-          ? 'Session complete. Take a short break, then reset for another one.'
-          : status === 'paused'
-            ? 'Paused.'
+      <label className="focus-auto-break">
+        <input
+          type="checkbox"
+          checked={autoBreak}
+          onChange={e => setAutoBreak(e.target.checked)}
+        />
+        Automatically switch to break
+      </label>
+
+      <div className="focus-session-stats">
+        <span>Completed focus sessions</span>
+        <strong>{sessions}</strong>
+      </div>
+
+      <p className="timer-note muted" role="status">
+        {message ||
+          (status === 'paused'
+            ? 'Session paused.'
             : status === 'running'
-              ? 'Stay on one thing until it reaches 00:00.'
-              : 'Start a session to focus on one thing.'}
+              ? mode === 'focus'
+                ? 'Stay focused. You can do it!'
+                : 'Relax and recharge.'
+              : status === 'done'
+                ? 'Session completed!'
+                : mode === 'focus'
+                  ? 'Choose your duration and start focusing.'
+                  : 'Take a well-deserved break.')}
       </p>
     </article>
   )
 }
+
 
 /* US-28: Personal course notes */
 
@@ -532,6 +732,7 @@ function downloadTextFile(filename, text) {
   }, 1000)
 }
 
+
 export function DeadlineTools({
   options,
   selected,
@@ -542,6 +743,35 @@ export function DeadlineTools({
 }) {
   const nothing = upcoming.length === 0
   const selectId = useId()
+
+  const [exportOpen, setExportOpen] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState('')
+
+  const exportExcel = async () => {
+    setExportOpen(false)
+    setExporting(true)
+    setExportError('')
+
+    try {
+      await downloadDeadlinesExcel(upcoming, courseLabel)
+    } catch (error) {
+      console.error('Excel export failed:', error)
+      setExportError('Could not export Excel. Please try again.')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const exportCsv = () => {
+    setExportOpen(false)
+    setExportError('')
+
+    downloadTextFile(
+      'StudyMate-Upcoming-Deadlines.csv',
+      deadlinesToCsv(upcoming, courseLabel)
+    )
+  }
 
   return (
     <div className="deadline-tools">
@@ -556,9 +786,11 @@ export function DeadlineTools({
         id={selectId}
         className="select select-sm"
         value={selected}
-        onChange={e =>
+        onChange={e => {
           onSelect(e.target.value)
-        }
+          setExportOpen(false)
+          setExportError('')
+        }}
       >
         <option value={ALL_COURSES}>
           All courses
@@ -574,30 +806,94 @@ export function DeadlineTools({
         ))}
       </select>
 
-      <button
-        type="button"
-        className="btn-ghost btn-sm"
-        disabled={nothing}
-        aria-describedby={
-          nothing ? emptyId : undefined
-        }
-        title={
-          nothing
-            ? 'There are no upcoming deadlines to download.'
-            : 'Download all upcoming deadlines as a CSV file'
-        }
-        onClick={() =>
-          downloadTextFile(
-            'upcoming-deadlines.csv',
-            deadlinesToCsv(
-              upcoming,
-              courseLabel
-            )
-          )
-        }
+      <div
+        className="deadline-export"
+        onBlur={e => {
+          if (!e.currentTarget.contains(e.relatedTarget)) {
+            setExportOpen(false)
+          }
+        }}
+        onKeyDown={e => {
+          if (e.key === 'Escape') {
+            setExportOpen(false)
+            e.currentTarget.querySelector('button')?.focus()
+          }
+        }}
       >
-        Download CSV
-      </button>
+        <button
+          type="button"
+          className="deadline-export-btn"
+          disabled={nothing || exporting}
+          aria-expanded={exportOpen}
+          aria-describedby={nothing ? emptyId : undefined}
+          onClick={() => setExportOpen(v => !v)}
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M12 3v12" />
+            <path d="m7 10 5 5 5-5" />
+            <path d="M5 16v4h14v-4" />
+          </svg>
+
+          {exporting ? 'Exporting...' : 'Export'}
+
+          <span className="export-chevron">
+            ⌄
+          </span>
+        </button>
+
+        {exportOpen && (
+          <div className="deadline-export-menu">
+            <button
+              type="button"
+              className="deadline-export-option"
+              onClick={exportExcel}
+            >
+              <span className="export-file-icon excel-icon">
+                XLSX
+              </span>
+
+              <span className="export-option-text">
+                <strong>Download Excel</strong>
+                <small>Styled report (.xlsx)</small>
+              </span>
+            </button>
+
+            <div className="export-divider" />
+
+            <button
+              type="button"
+              className="deadline-export-option"
+              onClick={exportCsv}
+            >
+              <span className="export-file-icon csv-icon">
+                CSV
+              </span>
+
+              <span className="export-option-text">
+                <strong>Download CSV</strong>
+                <small>Raw data (.csv)</small>
+              </span>
+            </button>
+          </div>
+        )}
+      </div>
+
+      {exportError && (
+        <p className="study-error" role="alert">
+          {exportError}
+        </p>
+      )}
     </div>
   )
 }
+

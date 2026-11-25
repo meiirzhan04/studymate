@@ -2099,7 +2099,7 @@ function ComingUpCard({ nextInfo, scheduleFailed, deadlines, studentCourses = []
               options={options}
               selected={activeFilter}
               onSelect={v => { setCourseFilter(v); setShowAll(false) }}
-              upcoming={upcoming}
+              upcoming={filtered}
               courseLabel={deadlineCourse}
               emptyId="deadlines-empty"
             />

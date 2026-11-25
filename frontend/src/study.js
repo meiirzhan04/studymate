@@ -216,7 +216,13 @@ export function deadlinesToCsv(deadlines, courseLabel = d => d.course || '') {
 
 export const ALL_COURSES = 'all'
 
-const normalizeCourseName = name => String(name ?? '').toLowerCase().replace(/\s+/g, ' ').trim()
+const normalizeCourseName = name =>
+  String(name ?? '')
+    .trim()
+    .replace(/^[a-z]{2,6}\s*\d{3,5}\s*[-–:]?\s+/i, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
 
 /**
  * Choices for the course filter: the student's own courses plus any course that appears on a
